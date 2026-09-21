@@ -12,7 +12,7 @@
  * regulated-data rule forbids altering. This is a diagnostic view, not a source of record.
  */
 
-import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
+import { ChevronDownIcon } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 
 import type {
@@ -207,11 +207,11 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
             fully measured
           </Badge>
         )}
-        <span className="ml-auto text-xs text-slate-500 group-open:hidden">
-          <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
-        </span>
-        <span className="ml-auto hidden text-xs text-slate-500 group-open:inline">
-          <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
+        <span className="ml-auto text-xs text-slate-500">
+          <ChevronDownIcon
+            aria-hidden
+            className="size-4 shrink-0 transition-transform duration-300 group-open:rotate-180"
+          />
         </span>
       </summary>
 

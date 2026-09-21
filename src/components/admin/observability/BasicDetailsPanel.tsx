@@ -1,6 +1,5 @@
 'use client';
 
-import { ChevronDownIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { WorkflowRunTrace } from '~/lib/observability/prompt-insights';
@@ -8,6 +7,7 @@ import { RunPayloadView } from '~/lib/observability/run-payload';
 import { formatSimilarityValue } from '~/lib/tests/format';
 import { cn } from '~/lib/utils';
 import { formatEasternTimestamp } from '~/lib/utils/time';
+import AnimatedChevron from '../animated/AnimatedChevron';
 import { RunAttributionBadge } from './RunAttributionBadge';
 import { Field } from './RunPayloadSummary';
 
@@ -44,7 +44,7 @@ const BasicDetailsPanel = ({
         <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
           Basic details
         </h3>
-        <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
+        <AnimatedChevron isOpen={isDetailsOpen} />
       </div>
       <div className={cn('mt-4', isDetailsOpen ? 'block' : 'hidden')}>
         <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">

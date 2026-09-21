@@ -10,7 +10,6 @@
 
 import {
   ChevronDown,
-  ChevronRight,
   CircleCheck,
   CircleDashed,
   CircleX,
@@ -46,7 +45,11 @@ import type { TimelineEvent, TimelineEventStatus } from '~/types/observability';
  * `declinedWithoutModelCall` are mutually exclusive, since the decline gate is itself a
  * `workflow_steps` row).
  */
-function EmptyStateBanners({ emptyState }: { emptyState: RunEmptyState | undefined }) {
+function EmptyStateBanners({
+  emptyState,
+}: {
+  emptyState: RunEmptyState | undefined;
+}) {
   if (!emptyState) {
     return null;
   }
@@ -116,11 +119,14 @@ function EventIcon({ event }: { event: TimelineEvent }) {
   const className = 'size-4';
   switch (event.kind) {
     case 'lifecycle':
-      if (event.phase === 'workflow_failed') return <CircleX className={className} />;
-      if (event.phase === 'workflow_completed') return <CircleCheck className={className} />;
+      if (event.phase === 'workflow_failed')
+        return <CircleX className={className} />;
+      if (event.phase === 'workflow_completed')
+        return <CircleCheck className={className} />;
       return <Flag className={className} />;
     case 'step':
-      if (event.status === 'not_reached') return <CircleDashed className={className} />;
+      if (event.status === 'not_reached')
+        return <CircleDashed className={className} />;
       if (event.status === 'running') return <Loader className={className} />;
       return <Layers className={className} />;
     case 'tool_call':
@@ -156,7 +162,9 @@ function formatConfidence(value: number | null): string {
 }
 
 /** B0-349 — reads `detail.input.draftAnswer` off a validator step's timeline detail, or null. */
-function getStepInputDraftAnswer(detail: Record<string, unknown>): string | null {
+function getStepInputDraftAnswer(
+  detail: Record<string, unknown>,
+): string | null {
   const input = detail.input;
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const value = (input as Record<string, unknown>).draftAnswer;
@@ -212,11 +220,10 @@ function TimelineEventRow({
               className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left hover:bg-slate-50/80"
               type="button"
             >
-              {open ? (
-                <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-slate-400" aria-hidden />
-              ) : (
-                <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-slate-400" aria-hidden />
-              )}
+              <ChevronDown
+                className={`mt-0.5 size-3.5 shrink-0 text-slate-400 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+                aria-hidden
+              />
 
               <span className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -232,11 +239,17 @@ function TimelineEventRow({
                   >
                     {event.label}
                   </span>
-                  <Badge className="rounded-full text-[0.62rem]" variant="secondary">
+                  <Badge
+                    className="rounded-full text-[0.62rem]"
+                    variant="secondary"
+                  >
                     {KIND_LABELS[event.kind]}
                   </Badge>
                   {typeof event.durationMs === 'number' ? (
-                    <Badge className="rounded-full tabular-nums text-[0.62rem]" variant="outline">
+                    <Badge
+                      className="rounded-full tabular-nums text-[0.62rem]"
+                      variant="outline"
+                    >
                       {formatDurationMs(event.durationMs)}
                     </Badge>
                   ) : null}
@@ -249,7 +262,10 @@ function TimelineEventRow({
                     </Badge>
                   ) : null}
                   {isFailed ? (
-                    <Badge className="rounded-full text-[0.62rem]" variant="destructive">
+                    <Badge
+                      className="rounded-full text-[0.62rem]"
+                      variant="destructive"
+                    >
                       failed
                     </Badge>
                   ) : null}
@@ -271,8 +287,12 @@ function TimelineEventRow({
                       reconstructed, previews not captured
                     </Badge>
                   ) : null}
-                  {event.kind === 'confidence_gate' && event.requiresHumanReview ? (
-                    <Badge className="rounded-full text-[0.62rem]" variant="outline">
+                  {event.kind === 'confidence_gate' &&
+                  event.requiresHumanReview ? (
+                    <Badge
+                      className="rounded-full text-[0.62rem]"
+                      variant="outline"
+                    >
                       human review
                     </Badge>
                   ) : null}
@@ -289,7 +309,9 @@ function TimelineEventRow({
                         cap {event.cap}
                       </span>
                     ) : null}
-                    <span className="font-mono text-slate-400">{event.gate}</span>
+                    <span className="font-mono text-slate-400">
+                      {event.gate}
+                    </span>
                   </span>
                 ) : null}
 
@@ -329,7 +351,10 @@ function TimelineEventRow({
                     Failure detail (tool_failed audit row)
                   </p>
                   {event.errorMessage ? (
-                    <TraceJsonBlock label="Error message" value={event.errorMessage} />
+                    <TraceJsonBlock
+                      label="Error message"
+                      value={event.errorMessage}
+                    />
                   ) : null}
                   {event.auditArgumentsPreview ? (
                     <TraceJsonBlock
@@ -354,7 +379,9 @@ function TimelineEventRow({
                       </dd>
                     </div>
                     <div className="flex gap-2">
-                      <dt className="text-muted-foreground">Confidence before → after</dt>
+                      <dt className="text-muted-foreground">
+                        Confidence before → after
+                      </dt>
                       <dd className="font-mono tabular-nums">
                         {formatConfidence(event.confidenceBefore)} →{' '}
                         {formatConfidence(event.confidenceAfter)}
@@ -367,14 +394,19 @@ function TimelineEventRow({
                       </dd>
                     </div>
                     <div className="flex gap-2">
-                      <dt className="text-muted-foreground">Requires human review</dt>
-                      <dd className="font-mono">{String(event.requiresHumanReview)}</dd>
+                      <dt className="text-muted-foreground">
+                        Requires human review
+                      </dt>
+                      <dd className="font-mono">
+                        {String(event.requiresHumanReview)}
+                      </dd>
                     </div>
                   </dl>
                   {event.inferred ? (
                     <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-900">
-                      Inferred, no direct log entry — this gate writes no audit row, so
-                      the event is reconstructed from the workflow&apos;s persisted output.
+                      Inferred, no direct log entry — this gate writes no audit
+                      row, so the event is reconstructed from the
+                      workflow&apos;s persisted output.
                     </p>
                   ) : null}
                   {event.issues.length > 0 ? (
@@ -382,7 +414,10 @@ function TimelineEventRow({
                       <p className="font-medium text-slate-900">Issues</p>
                       <ul className="mt-1 list-disc space-y-0.5 pl-4">
                         {event.issues.map((issue) => (
-                          <li className="break-words" key={`${event.id}-${issue}`}>
+                          <li
+                            className="break-words"
+                            key={`${event.id}-${issue}`}
+                          >
                             {issue}
                           </li>
                         ))}
@@ -401,7 +436,10 @@ function TimelineEventRow({
                   {event.issues.length > 0 ? (
                     <ul className="list-disc space-y-0.5 pl-4">
                       {event.issues.map((issue) => (
-                        <li className="break-words" key={`${event.id}-${issue}`}>
+                        <li
+                          className="break-words"
+                          key={`${event.id}-${issue}`}
+                        >
                           {issue}
                         </li>
                       ))}
@@ -422,18 +460,24 @@ function TimelineEventRow({
                   </div>
                   <div className="flex gap-2">
                     <dt className="text-muted-foreground">Step id</dt>
-                    <dd className="font-mono break-all">{event.stepId ?? '—'}</dd>
+                    <dd className="font-mono break-all">
+                      {event.stepId ?? '—'}
+                    </dd>
                   </div>
                   <div className="flex gap-2">
                     <dt className="text-muted-foreground">Started</dt>
                     <dd className="font-mono">
-                      {event.startedAt ? formatEasternTime(event.startedAt) : '—'}
+                      {event.startedAt
+                        ? formatEasternTime(event.startedAt)
+                        : '—'}
                     </dd>
                   </div>
                   <div className="flex gap-2">
                     <dt className="text-muted-foreground">Completed</dt>
                     <dd className="font-mono">
-                      {event.completedAt ? formatEasternTime(event.completedAt) : '—'}
+                      {event.completedAt
+                        ? formatEasternTime(event.completedAt)
+                        : '—'}
                     </dd>
                   </div>
                 </dl>
@@ -498,7 +542,9 @@ export function RunTraceTimeline({
   promptVersion?: string | null;
   promptBundleVersion?: string | null;
 }) {
-  const [openIds, setOpenIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const [openIds, setOpenIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
 
   if (events.length === 0) {
     return (
@@ -533,20 +579,16 @@ export function RunTraceTimeline({
         </p>
         <div className="flex gap-2">
           <Button
-            onClick={() => setOpenIds(new Set(events.map((event) => event.id)))}
+            onClick={() =>
+              events.length === openIds.size
+                ? setOpenIds(new Set<string>())
+                : setOpenIds(new Set(events.map((event) => event.id)))
+            }
             size="sm"
             type="button"
             variant="outline"
           >
-            Expand all
-          </Button>
-          <Button
-            onClick={() => setOpenIds(new Set<string>())}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            Collapse all
+            {events.length !== openIds.size ? 'Expand' : 'Collapse'} all
           </Button>
         </div>
       </div>
