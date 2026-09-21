@@ -19,6 +19,7 @@ type Episode = {
   itemId: string;
   rowIndex: number;
   question: string;
+  passed: boolean;
   metrics: Record<string, { scored: boolean; value?: number; reason?: string }>;
 };
 
@@ -261,8 +262,16 @@ export function RagEvaluationPanel({ runId, eligible, initialEvaluation }: Props
               <h3 className="text-sm font-semibold text-slate-900">Retrieval misses at 5</h3>
               <ul className="mt-3 space-y-2">
                 {misses.map((episode) => (
-                  <li className="text-sm" key={episode.episodeId}>
-                    <a className="text-sky-700 underline-offset-2 hover:underline" href={`#run-item-result-${episode.episodeId}`}>
+                  <li className="flex items-start gap-2 text-sm" key={episode.episodeId}>
+                    <Badge
+                      className={episode.passed
+                        ? 'shrink-0 border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                        : 'shrink-0'}
+                      variant={episode.passed ? 'outline' : 'destructive'}
+                    >
+                      {episode.passed ? 'Test passed' : 'Test failed'}
+                    </Badge>
+                    <a className="min-w-0 text-sky-700 underline-offset-2 hover:underline" href={`#run-item-result-${episode.episodeId}`}>
                       Row {episode.rowIndex}: {episode.question}
                     </a>
                   </li>
