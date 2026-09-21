@@ -5,7 +5,6 @@ import { HarnessVerdictBand } from '~/components/admin/observability/HarnessVerd
 import { PromptHistoryStrip } from '~/components/admin/observability/PromptHistoryStrip';
 import { RunInsightsProvider } from '~/components/admin/observability/run-insights-context';
 import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
-import { RunAttributionBadge } from '~/components/admin/observability/RunAttributionBadge';
 import { RunIntegrityPanel } from '~/components/admin/observability/RunIntegrityPanel';
 import { RunPayloadSummary } from '~/components/admin/observability/RunPayloadSummary';
 import { RunPromptInsightsPanel } from '~/components/admin/observability/RunPromptInsightsPanel';
@@ -32,11 +31,7 @@ import {
   extractPromptBundleVersion,
   extractPromptVersion,
 } from '~/lib/tests/response-payload';
-import {
-  formatDurationSeconds,
-  formatEasternTimestamp,
-  formatShortDate,
-} from '~/lib/utils/time';
+import { formatDurationSeconds, formatShortDate } from '~/lib/utils/time';
 import { shortHash } from '~/lib/workflows/product-support/prompt-version';
 
 export const metadata = {
@@ -277,56 +272,7 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   ) : null}
                 </div>
 
-                <dl className="mt-6 grid gap-3 text-sm sm:grid-cols-4">
-                  <div className="flex flex-col gap-0.5">
-                    {/* B0-338 — who asked for this run. */}
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">
-                      Asked by
-                    </dt>
-                    <dd className="text-sm">
-                      <RunAttributionBadge
-                        attribution={trace?.attribution ?? { kind: 'unknown' }}
-                      />
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-0.5">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">
-                      Created
-                    </dt>
-                    <dd className="font-mono text-xs text-slate-800">
-                      {formatEasternTimestamp(run.created_at)}
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-0.5">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">
-                      Updated
-                    </dt>
-                    <dd className="font-mono text-xs text-slate-800">
-                      {formatEasternTimestamp(run.updated_at)}
-                    </dd>
-                  </div>
-                  <div className="flex flex-col gap-0.5">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">
-                      Conversation
-                    </dt>
-                    <dd className="break-all font-mono text-xs">
-                      {run.conversation_id ? (
-                        <Link
-                          href={`/admin/bex?conversationId=${encodeURIComponent(run.conversation_id)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 hover:underline"
-                        >
-                          {run.conversation_id}
-                        </Link>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </dd>
-                  </div>
-                </dl>
-
-                <RunPayloadSummary payload={payload} />
+                <RunPayloadSummary payload={payload} run={run} trace={trace} />
 
                 <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">

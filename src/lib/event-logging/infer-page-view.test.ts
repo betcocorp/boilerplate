@@ -278,10 +278,7 @@ describe('inferPageViewFromPath — unmapped fallback', () => {
       '/admin/tools/product-cross-reference',
       'analytics.page.view.tools.product_cross_reference',
     ],
-    [
-      '/admin/tools/cross-reference/aliases',
-      'analytics.page.view.tools.cross_reference.aliases',
-    ],
+    ['/admin/tools/aliases', 'analytics.page.view.tools.aliases'],
     [
       '/admin/tools/cross-reference/lookup',
       'analytics.page.view.tools.cross_reference.lookup',
