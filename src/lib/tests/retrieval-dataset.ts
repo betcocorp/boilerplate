@@ -101,8 +101,8 @@ export type RetrievalEvalRecord = {
  */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Supabase caps `.in(...)` lists in practice well before this; 500 keeps the URL short. */
-const CHUNK_FETCH_BATCH = 500;
+/** Match the other batched lookups: bound URL-encoded UUID filters to avoid URI-too-long errors. */
+const CHUNK_FETCH_BATCH = 150;
 
 type ChunkTextRow = {
   id: string;
@@ -204,8 +204,7 @@ export function summarizeCoverage(contexts: ResolvedContext[]): RetrievalCoverag
 /**
  * Builds the eval records for a run's result items.
  *
- * One round trip for every distinct chunk across the whole run, not one per item — a 100-item run
- * referencing ~20 chunks each is 2 batched queries, not 100.
+ * Deduplicates chunk ids across the whole run and fetches them in bounded batches, not per item.
  */
 export async function buildRetrievalEvalRecords(
   resultItems: TestResultItemRecord[],

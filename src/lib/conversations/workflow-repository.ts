@@ -127,16 +127,23 @@ export async function listWorkflowRunsByIds(runIds: string[]): Promise<WorkflowR
   }
 
   const supabase = getSupabaseServiceRoleClient();
-  const { data, error } = await supabase
-    .from('workflow_runs')
-    .select()
-    .in('id', runIds);
+  const ids = [...new Set(runIds)];
+  const rows: WorkflowRunRow[] = [];
+  // Match the step-output lookups: keep URL-encoded .in() filters bounded.
+  const chunkSize = 150;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const { data, error } = await supabase
+      .from('workflow_runs')
+      .select()
+      .in('id', ids.slice(i, i + chunkSize));
 
-  if (error) {
-    throw new Error(error.message);
+    if (error) {
+      throw new Error(error.message);
+    }
+    rows.push(...(data ?? []));
   }
 
-  return data ?? [];
+  return rows;
 }
 
 export async function insertReviewTask(input: {
