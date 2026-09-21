@@ -14,6 +14,10 @@ import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessag
 import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import {
+  RagEvaluationPanel,
+  type RagEvaluationPanelData,
+} from '~/components/admin/tests/RagEvaluationPanel';
+import {
   RunComparisonPanel,
   type RunComparisonPanelData,
 } from '~/components/admin/tests/RunComparisonPanel';
@@ -96,6 +100,7 @@ import {
   computeRoutingComparisonReport,
   type RoutingComparisonReportInput,
 } from '~/lib/tests/routing-comparison';
+import { getRagEvaluation } from '~/lib/tests/rag-evaluation/persistence';
 import { parseTestRunConfig } from '~/lib/tests/run-config';
 import { computeRunRoutingHealth } from '~/lib/tests/run-health';
 import { computeRunProviderHealth } from '~/lib/tests/run-provider-health';
@@ -170,12 +175,13 @@ export default async function AdminTestRunDetailsPage({
     notFound();
   }
 
-  const [allResultItems, testItems, completedFromRows, runComparison] =
+  const [allResultItems, testItems, completedFromRows, runComparison, ragEvaluation] =
     await Promise.all([
       listAllResultItemsByResultId(result.id),
       getTestItemsByTestId(test.id),
       countResultItemsByResultId(result.id),
       getRunComparisonByResultId(result.id),
+      getRagEvaluation(result.id),
     ]);
   /**
    * B0-315 — hydrates `RunComparisonPanel` from the persisted B0-312 row. `null` when no comparison
@@ -198,6 +204,23 @@ export default async function AdminTestRunDetailsPage({
           ? (runComparison.fixes as unknown as RunComparisonPanelData['fixes'])
           : [],
         errorMessage: runComparison.error_message,
+      }
+    : null;
+  const ragEvaluationEligible =
+    isCompletedRunStatus(result.status) &&
+    result.run_mode === 'full' &&
+    testItems.some((item) =>
+      (item.expected_sources ?? []).some((source) => source.trim()),
+    );
+  const ragEvaluationForPanel: RagEvaluationPanelData | null = ragEvaluation
+    ? {
+        status: ragEvaluation.status,
+        error: ragEvaluation.error_message,
+        completedAt: ragEvaluation.completed_at,
+        coverage: ragEvaluation.snapshot?.coverage ?? null,
+        labelling: ragEvaluation.snapshot?.labelling ?? null,
+        aggregates: ragEvaluation.snapshot?.aggregates ?? [],
+        episodes: ragEvaluation.snapshot?.episodes ?? [],
       }
     : null;
   const resultItems = allResultItems;
@@ -747,6 +770,13 @@ export default async function AdminTestRunDetailsPage({
           similarityBuckets={similarityBuckets}
           similarityStatsData={similarityStatsData}
           similarityTrendData={similarityTrendData}
+        />
+
+        <RagEvaluationPanel
+          eligible={ragEvaluationEligible}
+          initialEvaluation={ragEvaluationForPanel}
+          key={`${result.id}:${ragEvaluation?.status ?? 'none'}:${ragEvaluation?.completed_at ?? ''}`}
+          runId={result.id}
         />
 
         <RunToolRoutingPanel report={toolRoutingReport} testId={test.id} />

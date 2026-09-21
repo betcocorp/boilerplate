@@ -1,7 +1,7 @@
 /**
  * Phase 3 of the RAG evaluation process — rank quality and entity recall.
  *
- * This file is the contract every other module in `evals/rag/` codes against. It is deliberately
+ * This file is the contract every module in this RAG evaluation package codes against. It is deliberately
  * the only place shared shapes are declared, so the metric modules can be written and tested
  * independently of each other and of the database.
  *
