@@ -1,3 +1,11 @@
+# [6.11.0](https://github.com/betcocorp/bex2.0/compare/v6.10.0...v6.11.0) (2026-09-21)
+
+
+### Features
+
+* **B0-1058:** add Aliases card to /admin/tools ([048ff5a](https://github.com/betcocorp/bex2.0/commit/048ff5aae7b26a75aa86543be593f60cb243b0c1))
+* **B0-1058:** promote alias review to standalone /admin/tools/aliases page ([fbcc2f2](https://github.com/betcocorp/bex2.0/commit/fbcc2f25ca351cd6b9b334df8cf88f972e548ed4))
+
 # [6.10.0](https://github.com/betcocorp/bex2.0/compare/v6.9.0...v6.10.0) (2026-09-18)
 
 
