@@ -1,3 +1,56 @@
+# [6.10.0](https://github.com/betcocorp/bex2.0/compare/v6.9.0...v6.10.0) (2026-09-18)
+
+
+### Bug Fixes
+
+* **B0-1055:** dedupe cross-reference recommendation rows and prevent future duplicates ([f877313](https://github.com/betcocorp/bex2.0/commit/f877313ebb5ceb03c3ac546f9e0fa27bd162420a))
+* **B0-1056:** guard non-competitor/self-reference identities, link trace to observability directly ([a669dd2](https://github.com/betcocorp/bex2.0/commit/a669dd2c4aeb2eeb09b902a278e38fe58e66b3c9))
+* **B0-1057:** catch imperative/generic non-product text and unbranded Betco lines ([45ec86b](https://github.com/betcocorp/bex2.0/commit/45ec86bd03795b57305e642f7382c83ef1b14df3))
+
+
+### Features
+
+* **B0-1055:** add per-row evidence trace page to recommendation queue ([f584f1d](https://github.com/betcocorp/bex2.0/commit/f584f1dfff21ca37c4518630811aa13472a85ace))
+* **B0-1055:** ground competitor brand identification in web search evidence ([e4bbf99](https://github.com/betcocorp/bex2.0/commit/e4bbf99283c2f03aad74f38f5e824ccc2ccf24b1))
+
+# [6.9.0](https://github.com/betcocorp/bex2.0/compare/v6.8.0...v6.9.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **B0-1045:** reseed manual product_alias rows lost by the B0-878 truncation ([3a27b0a](https://github.com/betcocorp/bex2.0/commit/3a27b0adb03b75f565534528efa708a63312b8cc))
+* **B0-1047:** split oversized markdown tables into row-group chunks ([47225b1](https://github.com/betcocorp/bex2.0/commit/47225b123ee0129b1ecf8e2180eed5bb7864d510))
+* **B0-1049:** stop sync_sds_chunks from corrupting heading with page-spanning boilerplate ([d9f4857](https://github.com/betcocorp/bex2.0/commit/d9f4857a842f6f368e64de26b619350d2f5061eb))
+* **B0-1052:** scope hazard guardrail exclusion to bullet sub-items with header context ([ffdaa23](https://github.com/betcocorp/bex2.0/commit/ffdaa23eccc86c1b3cf1dcd442f9377dc52edeb9))
+* **B0-1053:** add VCT approved-products catalog chunk to close retrieval gap ([a4b3f9f](https://github.com/betcocorp/bex2.0/commit/a4b3f9fa2ae62302e7d525e29c3952c9c45e9141)), closes [#27](https://github.com/betcocorp/bex2.0/issues/27) [#1](https://github.com/betcocorp/bex2.0/issues/1)
+
+
+### Features
+
+* **B0-1048:** exclude index/TOC tables from retrieval, capture aliases instead ([6d1dc23](https://github.com/betcocorp/bex2.0/commit/6d1dc23b3f9b4b4a0351e957f8f325a6d3bdb33a))
+* **B0-1054:** truncate Asked-by and Prompt columns in observability runs table ([e1fbf0f](https://github.com/betcocorp/bex2.0/commit/e1fbf0f5ffe13db28655b23b14cb984bb07ffc39))
+
+# [6.8.0](https://github.com/betcocorp/bex2.0/compare/v6.7.0...v6.8.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **B0-1028:** dedupe test_result_items and stop passed_items/failed_items from drifting ([1bd953b](https://github.com/betcocorp/bex2.0/commit/1bd953b27c7c3966f88e0bec1ae26b404c0620ff))
+* **B0-1031:** require get_floor_asset for floor procedure and benchmark questions ([3977133](https://github.com/betcocorp/bex2.0/commit/39771337f1e0f95244b059954f1b2d1c937e571f))
+* **B0-1032:** rank substrate-specific floor knowledge docs above generic ones ([716e94f](https://github.com/betcocorp/bex2.0/commit/716e94f426eebb403b935a78c6b38b40e7840fb6))
+* **B0-1033:** restore the "dries top-down" rationale on floor recoat-timing answers ([f00646c](https://github.com/betcocorp/bex2.0/commit/f00646ca2e09bc0b8a1dd3640ef5cd45daeacbd8))
+* **B0-1036:** require the three-part recoat-timing check on wood/sport floors ([28e2f1f](https://github.com/betcocorp/bex2.0/commit/28e2f1fba8da477ba5de5c7ccb2e0299f2282ef9))
+* **B0-1037:** require measuring gym temperature and humidity with instruments ([73ab242](https://github.com/betcocorp/bex2.0/commit/73ab242d525909bb57050810756c2d66908cb268))
+* **B0-1038:** add the water-vs-solvent decision framework to the wood/sport prompt ([1140079](https://github.com/betcocorp/bex2.0/commit/11400797e0b0f0818e7296015a439e3efea39ad0))
+* **B0-1039:** sequence scuff removal least-aggressive-first on wood gym floors ([53cc3a8](https://github.com/betcocorp/bex2.0/commit/53cc3a8e8c4b8ffa12bed51c93195098d2ecb2ae))
+* **B0-1040:** diagnose before recoating on wood floor peeling and slipperiness ([934ea15](https://github.com/betcocorp/bex2.0/commit/934ea1529061ae6bbdfc95264593aafd47dc5582))
+* **B0-1041:** promote the applicator-switch caution to a required answer-shape line ([f3b955b](https://github.com/betcocorp/bex2.0/commit/f3b955b1e022a420cf2fa5f745f441002a6143a6))
+
+
+### Features
+
+* **scripts:** add local Supabase dump, restore, and bootstrap ([71e9dae](https://github.com/betcocorp/bex2.0/commit/71e9dae0f40ad0f02430a4ab72377dd4eadf2f45))
+
 # [6.7.0](https://github.com/betcocorp/bex2.0/compare/v6.6.1...v6.7.0) (2026-09-16)
 
 

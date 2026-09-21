@@ -4,6 +4,7 @@ import { isBexModelTag } from '~/lib/constants/models';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import { hasDistinctiveToken } from '~/lib/recommendations/competitor-self-reference';
 import { getStringSetting } from '~/lib/settings/settings-service';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
@@ -199,4 +200,37 @@ export function isCompetitorIdentityUnresolved(
   competitor: Pick<ExtractedCompetitor, 'brand' | 'resolved'>,
 ): boolean {
   return !competitor.brand && !competitor.resolved;
+}
+
+/**
+ * B0-1056 — the one call site with no extraction step to check `isCompetitorIdentityUnresolved`
+ * against: `product-tools.ts`'s `recommend_cross_reference` case takes `competitorProduct`
+ * straight from the model's own tool-call arguments, with nothing to stop the model — under
+ * pressure from a specialist prompt that expects it to always attempt a competitor lookup — from
+ * passing the raw, non-competitor user message as the "product" (e.g. "Why does the grout stay
+ * dirty even after we mop it?"). A real product name is short and declarative; these observed
+ * failures are long, interrogative, or first-person. Deliberately conservative (false positives
+ * cost nothing but a decline; false negatives cost a garbage row in the review queue), so this
+ * only rejects the unambiguous shapes: a literal question mark, or an opening word/phrase no
+ * product name would ever start with.
+ */
+const IMPLAUSIBLE_PRODUCT_OPENERS =
+  /^(which|what|why|when|where|who|how|is|are|can|could|would|should|do|does|did|i need|i have|i found|our|we|a customer|a customer's|just|tell|give|show|name|list|recommend)\b/i;
+
+/** A product name this short-and-declarative check would reject as too long to be a product name. */
+const IMPLAUSIBLE_PRODUCT_MAX_LENGTH = 80;
+
+/**
+ * B0-1057 — a name built entirely from category/facility words ("floor finish", "healthcare
+ * cleaner") identifies nothing, exactly the shape `hasDistinctiveToken`
+ * (`competitor-self-reference.ts`) already exists to catch for the chat-workflow self-reference
+ * check. Reused here rather than a second, drifting word list.
+ */
+export function isImplausibleCompetitorProductText(product: string): boolean {
+  const trimmed = product.trim();
+  if (!trimmed) return true;
+  if (trimmed.includes('?')) return true;
+  if (trimmed.length > IMPLAUSIBLE_PRODUCT_MAX_LENGTH) return true;
+  if (IMPLAUSIBLE_PRODUCT_OPENERS.test(trimmed)) return true;
+  return !hasDistinctiveToken(trimmed.toLowerCase());
 }

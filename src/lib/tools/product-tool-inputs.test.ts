@@ -418,6 +418,25 @@ describe('get_dispenser_asset / get_floor_asset input contract (B0-529)', () => 
     );
   });
 
+  /**
+   * B0-1032 — the structured arguments must reach retrieval as a ranking preference, not just get
+   * flattened into the query string: the composed query carries the same static boilerplate on every
+   * call, so it cannot tell retrieval which substrate was asked for.
+   */
+  it('get_floor_asset passes surface + procedure on as a substrate ranking preference', async () => {
+    await executeProductTool('get_floor_asset', {
+      surfaceType: 'VCT',
+      procedure: 'top scrub and stripping frequency',
+      maxResults: 3,
+    });
+
+    expect(retrieveKnowledgeAssets).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        substrate: { surfaceType: 'VCT', topic: 'top scrub and stripping frequency' },
+      }),
+    );
+  });
+
   it('both tools reject a call with no anchoring field at all', async () => {
     expect(getDispenserAssetInputSchema.safeParse({}).success).toBe(false);
     expect(getFloorAssetInputSchema.safeParse({}).success).toBe(false);

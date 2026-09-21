@@ -54,7 +54,8 @@ import {
   isFactToolEnforcementEnabled,
   requireFactToolForDraft,
 } from '~/lib/workflows/product-support/fact-tool-enforcement';
-import { requireFloorReopenTool } from '~/lib/workflows/product-support/floor-reopen-backstop';
+import { requireFloorProcedureTool } from '~/lib/workflows/product-support/floor-procedure-backstop';
+import { applyFloorRecoatRationaleBackstop } from '~/lib/workflows/product-support/floor-recoat-rationale-backstop';
 import { applyDilutionDwellBackstop } from '~/lib/workflows/product-support/dilution-dwell-backstop';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
@@ -4055,9 +4056,13 @@ export async function runProductSupportWorkflow(input: {
     // B0-976 — on the floor routes a reopening / walk-on question is checked FIRST: it is what the
     // user asked, and the draft that withholds the schedule asserts no fact category for B0-948 to
     // catch. Same flag, same one-forced-call-per-turn contract, same gate record.
+    // B0-1031 — that check is now the first entry of a TABLE of floor question types with a
+    // documented knowledge-corpus answer (stripper dwell, stripping failure, finish appearance
+    // problem, maintenance cadence, dry-between-coats); `requireFloorProcedureTool` consults the
+    // reopen check unchanged, then the table. Same contract, same gate.
     const factToolRequirementCheck = factToolEnforcementEnabled
       ? (check: { draftAnswer: string; toolNames: string[] }) =>
-          requireFloorReopenTool({
+          requireFloorProcedureTool({
             ...check,
             userMessage: input.userMessage,
             effectivePromptId,
@@ -5287,6 +5292,34 @@ export async function runProductSupportWorkflow(input: {
       preRevisionDraftAnswer = maybeDiscloseAliasFuzzyMatch(preRevisionDraftAnswer, toolOutputLog, {
         userMessage: input.userMessage,
       });
+    }
+
+    /**
+     * B0-1033 — deterministic "finish dries top-down" rationale on a floor-route recoat-timing
+     * answer. Placed here for the same two reasons as the disclosure above: `draftAnswer` is fully
+     * settled, and the appended sentence is itself swept through the regulated-claim guardrail
+     * below (it states no dilution, contact time, dry time or hazard, so it must never trip it —
+     * see `floor-recoat-rationale-backstop.test.ts`). A no-op unless this turn's question was a
+     * recoat-timing ask, the draft answered it with a timing figure, and the WHY was missing.
+     */
+    const recoatRationale = applyFloorRecoatRationaleBackstop({
+      userMessage: input.userMessage,
+      effectivePromptId,
+      draftAnswer,
+    });
+    if (recoatRationale.applied) {
+      draftAnswer = recoatRationale.answer;
+      // B0-391 — last writer that actually changed the text wins.
+      answerProvenance = 'floor_recoat_rationale_appended';
+    }
+    // B0-923 — the pre-revision fallback draft gets the identical deterministic treatment, so a
+    // restore below still ships the rationale.
+    if (preRevisionDraftAnswer !== null) {
+      preRevisionDraftAnswer = applyFloorRecoatRationaleBackstop({
+        userMessage: input.userMessage,
+        effectivePromptId,
+        draftAnswer: preRevisionDraftAnswer,
+      }).answer;
     }
 
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the

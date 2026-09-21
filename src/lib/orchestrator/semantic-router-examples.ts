@@ -37,8 +37,15 @@ import { SME_AGENT_IDS, type SmeAgentId } from '~/lib/agents/agent-registry';
  * flat `floor` SME id). `floor_stg` utterances are newly authored (the old bucket had no stone/
  * tile/grout content); the rest are the old `floor` utterances reassigned to the substrate they
  * actually name.
+ *
+ * B0-1034 — bumped v3 -> v4: every `floor_vct` utterance was procedure- or diagnosis-shaped
+ * ("how do I…", "why is…"), while `recommendations` owned the entire product-SELECTION shape
+ * ("what should I use for…"). That left the corpus with nothing teaching it that a selection ask
+ * naming a resilient substrate belongs to `floor_vct`, which is the shape the VCT golden item
+ * misrouted on. Two selection-shaped utterances added, both naming the substrate explicitly so
+ * they stay discriminative against the (substrate-free) `recommendations` bucket.
  */
-export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v3';
+export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v4';
 
 /**
  * Route ownership boundaries, mirroring the LLM classifier's routing rules in
@@ -112,6 +119,8 @@ export const SEMANTIC_ROUTER_EXAMPLES: Readonly<Record<SmeAgentId, readonly stri
     'Does a brand new VCT installation need to be sealed before we apply finish?',
     'What is the top-scrub procedure between full strip-and-refinish cycles on VCT?',
     'How do we remove black heel marks from a VCT hallway without stripping the whole floor?',
+    'What stripper and finish should we use on the VCT in our school cafeteria?',
+    'Which products do we need for a full strip and refinish on a terrazzo lobby floor?',
   ],
   floor_wood_sport: [
     'Which Basic Coatings system should we use to refinish a gymnasium wood floor?',

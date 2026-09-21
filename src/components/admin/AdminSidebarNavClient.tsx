@@ -159,6 +159,11 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
           {
+            label: 'Aliases',
+            href: '/admin/tools/aliases',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+          },
+          {
             label: 'Web Search',
             href: '/admin/tools/web-search',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,

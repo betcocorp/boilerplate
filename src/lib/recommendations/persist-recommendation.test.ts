@@ -56,6 +56,34 @@ describe('mapResultToRecommendationInput (B0-89)', () => {
     expect(mapped.declineReason).toBe('Not confident enough — contact a rep.');
     expect(mapped.candidates).toEqual([]);
   });
+
+  describe('B0-1055: resolvedBrand corrects the persisted competitor_brand', () => {
+    it('prefers result.resolvedBrand over input.competitorBrand when the upfront guess was wrong', () => {
+      const noBrandInput = { competitorProduct: 'BNC-15', competitorBrand: 'Stearns' };
+      const corrected: RecommendCrossReferenceResult = { ...answered, resolvedBrand: 'Spartan Chemical' };
+      const mapped = mapResultToRecommendationInput(noBrandInput, corrected, { traceId: 't-3', createdBy: 'system' });
+      expect(mapped.competitorBrand).toBe('Spartan Chemical');
+      expect((mapped.normalizedInput as { brand: string | null }).brand).toBe('Spartan Chemical');
+    });
+
+    it('prefers result.resolvedBrand over a missing input.competitorBrand', () => {
+      const noBrandInput = { competitorProduct: 'BNC-15' };
+      const corrected: RecommendCrossReferenceResult = { ...answered, resolvedBrand: 'Spartan Chemical' };
+      const mapped = mapResultToRecommendationInput(noBrandInput, corrected, { traceId: 't-4', createdBy: 'system' });
+      expect(mapped.competitorBrand).toBe('Spartan Chemical');
+    });
+
+    it('falls back to input.competitorBrand when resolvedBrand is null (no grounded manufacturer)', () => {
+      const noCorrection: RecommendCrossReferenceResult = { ...answered, resolvedBrand: null };
+      const mapped = mapResultToRecommendationInput(input, noCorrection, { traceId: 't-5', createdBy: 'system' });
+      expect(mapped.competitorBrand).toBe('Spartan'); // unchanged from input.competitorBrand
+    });
+
+    it('falls back to input.competitorBrand when resolvedBrand is absent entirely (older/other result shapes)', () => {
+      const mapped = mapResultToRecommendationInput(input, answered, { traceId: 't-6', createdBy: 'system' });
+      expect(mapped.competitorBrand).toBe('Spartan');
+    });
+  });
 });
 
 describe('persistRecommendation is best-effort (B0-89)', () => {

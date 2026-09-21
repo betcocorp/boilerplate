@@ -56,6 +56,7 @@ function spec(overrides: Partial<EnrichedCompetitorSpec> = {}): EnrichedCompetit
     primaryUse: 'surface disinfection',
     formFactor: null,
     keyClaims: ['kills 99.9% of germs'],
+    manufacturer: null,
     provenance: {
       chemistryClass: null,
       epaRegistration: null,
@@ -65,6 +66,7 @@ function spec(overrides: Partial<EnrichedCompetitorSpec> = {}): EnrichedCompetit
       primaryUse: null,
       formFactor: null,
       keyClaims: null,
+      manufacturer: null,
     },
     ...overrides,
   };

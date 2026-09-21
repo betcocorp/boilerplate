@@ -7,15 +7,19 @@ import { FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialis
 import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-wood-sport-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
+import { APP_VERSION } from '~/lib/app-version';
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
-import { newCorrelationId } from '~/lib/observability/correlation-id';
+import { createConversation } from '~/lib/conversations/conversation-repository';
+import { jsonContent } from '~/lib/conversations/message-repository';
+import { insertWorkflowRun, updateWorkflowRun } from '~/lib/conversations/workflow-repository';
+import { PROMPT_BUNDLE_VERSION } from '~/lib/workflows/product-support/prompt-version';
 import type { ProductSupportOutcome } from '~/lib/orchestrator/orchestrator-schemas';
-import { XREF_DECLINE_COPY, resolveXrefThreshold } from '~/lib/recommendations/confidence-scoring';
 import {
   extractCompetitorProduct,
   isCompetitorIdentityUnresolved,
 } from '~/lib/recommendations/extract-competitor-product';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
+import { buildUnresolvedCompetitorDecline } from '~/lib/recommendations/recommend-cross-reference';
 import { buildWebFallbackAnswer } from '~/lib/recommendations/web-fallback-answer';
 
 import type {
@@ -23,30 +27,6 @@ import type {
   SmeAgentInvokeBody,
   SmeAgentRunResult,
 } from './types';
-
-/**
- * B0-779 — the decline used when the query names no resolvable competitor brand/product at all
- * (`extractCompetitorProduct` came back with neither). Returned WITHOUT ever calling
- * `runCrossReferenceRecommendation` — there is no competitor identity to look up, and calling the
- * engine on the raw query text is exactly what fabricated "Comparable Betco product" matches in
- * PRO-045/PRO-036. Never persisted: an attempt that never ran isn't a recommendation outcome.
- */
-async function unresolvedCompetitorDecline(): Promise<
-  Awaited<ReturnType<typeof runCrossReferenceRecommendation>>
-> {
-  return {
-    source: 'web',
-    answered: false,
-    status: 'declined',
-    overallConfidence: 0,
-    // B0-795: the threshold now comes from the settings table, so resolving it is async.
-    thresholdUsed: await resolveXrefThreshold(),
-    candidates: [],
-    evidence: { source: 'web', reason: 'competitor_identity_unresolved' },
-    declineReason: XREF_DECLINE_COPY,
-    recommendationId: null,
-  };
-}
 
 /**
  * B0-520/521/522/523 — agents wired to the real `runProductSupportWorkflow` (via
@@ -380,17 +360,33 @@ async function runRealSmeAgentAnswer(
  * per this agent's `sessionContextGuide`) when the caller supplied them; otherwise falls back to
  * `extractCompetitorProduct` on the raw query text.
  *
- * This path creates no conversation/workflow_run row (there is no chat turn), so `conversationId`
- * and `workflowRunId` are synthetic UUIDs and `latestOpenaiResponseId` is a synthetic
- * `cross-reference:<traceId>` marker — the same "no real OpenAI response id" idea the AI SDK
- * generation runtime uses (`ai_sdk:<runId>`) for its own non-Responses-API path.
+ * B0-1056 — this path used to create no conversation/workflow_run row at all (there is no chat
+ * turn to anchor one to), so `traceId` was a bare correlation id with nothing in `workflow_runs`
+ * for it to match — every recommendation this agent persisted had a trace the admin review queue
+ * could never link to. It now creates a minimal real `agent_conversations` + `workflow_runs` row
+ * up front (same `source: 'test_run'`/system-owner convention `runRealSmeAgentAnswer` above uses
+ * for every other `/api/v1/agents/*` caller) and updates the run to its final status afterwards,
+ * WITHOUT routing through the full chat loop — that would defeat the point of this agent being a
+ * direct engine call. `latestOpenaiResponseId` stays a synthetic `cross-reference:<traceId>`
+ * marker (there is still no real OpenAI response id), but `traceId`/`workflowRunId` now both equal
+ * the real `workflow_runs.id`, so `/admin/observability/[runId]` has something to show.
  */
 async function runCrossReferenceSmeAgentAnswer(
   meta: AgentMeta,
   query: string,
   context: Record<string, unknown> | null,
 ): Promise<SmeAgentRunResult> {
-  const traceId = newCorrelationId();
+  const conversation = await createConversation({ user_id: null, source: 'test_run' });
+  const run = await insertWorkflowRun({
+    conversation_id: conversation.id,
+    workflow_name: 'cross-reference-recommendation',
+    status: 'running',
+    source: 'orchestrator_api',
+    app_version: APP_VERSION,
+    prompt_bundle_version: PROMPT_BUNDLE_VERSION,
+    user_input: jsonContent({ message: query, context }),
+  });
+  const traceId = run.id;
 
   const contextProductRaw = context?.competitorProduct;
   const contextBrandRaw = context?.competitorBrand;
@@ -425,7 +421,7 @@ async function runCrossReferenceSmeAgentAnswer(
    * PRO-045/PRO-036 shape that fabricated a "Comparable Betco product" match.
    */
   const result = identityUnresolved
-    ? await unresolvedCompetitorDecline()
+    ? await buildUnresolvedCompetitorDecline()
     : await runCrossReferenceRecommendation(
         { competitorProduct: resolvedProduct, competitorBrand: resolvedBrand },
         { traceId },
@@ -435,10 +431,21 @@ async function runCrossReferenceSmeAgentAnswer(
     [resolvedBrand, resolvedProduct].filter(Boolean).join(' ').trim() || resolvedProduct;
   const { answerText } = buildWebFallbackAnswer({ result, competitorLabel });
 
+  await updateWorkflowRun(run.id, {
+    status: 'completed',
+    confidence: result.overallConfidence,
+    final_output: {
+      answerText,
+      status: result.status,
+      answered: result.answered,
+      recommendationId: result.recommendationId,
+    },
+  });
+
   const answer: ProductSupportOutcome = {
     answerText,
-    conversationId: newCorrelationId(),
-    workflowRunId: newCorrelationId(),
+    conversationId: conversation.id,
+    workflowRunId: run.id,
     latestOpenaiResponseId: `cross-reference:${traceId}`,
     traceId,
     sources: [],

@@ -31,6 +31,12 @@ export const enrichedCompetitorSpecSchema = competitorSpecSchema.extend({
   primaryUse: z.string().nullable(),
   formFactor: z.string().nullable(),
   keyClaims: z.array(z.string()),
+  /**
+   * B0-1055 — the actual brand/manufacturer of the competitor product, as stated in the grounded
+   * web content. LLM-sourced only (no deterministic extractor for this field); used to correct the
+   * upfront, pre-web-search brand guess made before this runs (see `recommend-cross-reference.ts`).
+   */
+  manufacturer: z.string().nullable(),
   provenance: z.object({
     chemistryClass: specProvenanceSchema,
     epaRegistration: specProvenanceSchema,
@@ -40,6 +46,7 @@ export const enrichedCompetitorSpecSchema = competitorSpecSchema.extend({
     primaryUse: specProvenanceSchema,
     formFactor: specProvenanceSchema,
     keyClaims: specProvenanceSchema,
+    manufacturer: specProvenanceSchema,
   }),
 });
 export type EnrichedCompetitorSpec = z.infer<typeof enrichedCompetitorSpecSchema>;
@@ -54,6 +61,7 @@ export const llmCompetitorSpecFillSchema = z.object({
   primaryUse: z.string().nullable(),
   formFactor: z.string().nullable(),
   keyClaims: z.array(z.string()),
+  manufacturer: z.string().nullable(),
   sourceUrl: z.string().nullable(),
 });
 export type LlmCompetitorSpecFill = z.infer<typeof llmCompetitorSpecFillSchema>;
@@ -67,6 +75,7 @@ const EMPTY_LLM_FILL: LlmCompetitorSpecFill = {
   primaryUse: null,
   formFactor: null,
   keyClaims: [],
+  manufacturer: null,
   sourceUrl: null,
 };
 
@@ -91,6 +100,7 @@ never guess, infer, or fabricate. Rules:
 - primaryUse: one short phrase for its main use, else null.
 - formFactor: e.g. "RTU liquid", "concentrate", "aerosol", "wipes", else null.
 - keyClaims: up to 5 short verbatim efficacy/marketing claims found in the content (e.g. "kills 99.9% of germs"); empty array if none.
+- manufacturer: the actual brand/manufacturer name of this product as stated in the content (e.g. "Spartan Chemical", "Diversey"), else null. Never infer from the product name alone — only from an explicit statement in the content.
 - sourceUrl: the single most authoritative source URL among the provided sources for these facts, else null.`;
 
 /** Pure merge: heuristic wins for base fields; LLM fills the rest. Records per-field provenance. */
@@ -124,6 +134,7 @@ export function mergeCompetitorSpec(
     primaryUse: llm.primaryUse,
     formFactor: llm.formFactor,
     keyClaims: llm.keyClaims,
+    manufacturer: llm.manufacturer,
     provenance: {
       chemistryClass: chemistryClass.prov,
       epaRegistration: epaRegistration.prov,
@@ -133,6 +144,7 @@ export function mergeCompetitorSpec(
       primaryUse: llmProv(llm.primaryUse),
       formFactor: llmProv(llm.formFactor),
       keyClaims: llm.keyClaims.length > 0 ? { source: 'llm', sourceUrl: llm.sourceUrl } : null,
+      manufacturer: llmProv(llm.manufacturer),
     },
   });
 }
@@ -149,6 +161,7 @@ export const ENRICH_JSON_SCHEMA = {
     primaryUse: { type: ['string', 'null'] },
     formFactor: { type: ['string', 'null'] },
     keyClaims: { type: 'array', items: { type: 'string' } },
+    manufacturer: { type: ['string', 'null'] },
     sourceUrl: { type: ['string', 'null'] },
   },
   required: [
@@ -160,6 +173,7 @@ export const ENRICH_JSON_SCHEMA = {
     'primaryUse',
     'formFactor',
     'keyClaims',
+    'manufacturer',
     'sourceUrl',
   ],
 } as const;

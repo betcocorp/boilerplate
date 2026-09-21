@@ -48,6 +48,7 @@ import {
   getStringSetting,
 } from '~/lib/settings/settings-service';
 import {
+  applyFloorSurfaceRoutingOverride,
   classifyUserIntent,
   computeIntentClassifierCacheKey,
   DEFAULT_BEX_ROUTER_MODEL_TAG,
@@ -771,5 +772,160 @@ describe('classifyUserIntent — B0-908 provider-neutral call (default deps)', (
 
     expect(resolveModel).toHaveBeenCalledWith('preview');
     expect(structuredCall().model).toBe('claude-opus-5');
+  });
+});
+
+/**
+ * B0-1034 — the VCT product-selection misroute. In golden run 844f8eb3 row 17 ("What stripping and
+ * finish products should I use for my VCT floor?") the LLM router returned `recommendations` at
+ * confidence 0.85 while extracting `surfaceType: "vct"`, and that verdict was the routing decision
+ * (`keyword_route` was `product`, `semantic_route` was `ambiguous`), so the turn ran the
+ * recommendations specialist prompt instead of floor_vct's.
+ *
+ * B0-977 added `applyFloorSurfaceRoutingOverride` as the deterministic safety net on top of the
+ * prompt rule, but shipped it with no test. These cases pin BOTH halves of its contract — it fires
+ * for a substrate-named `recommendations` verdict, and it touches nothing else — so a later prompt
+ * or classifier refactor cannot quietly drop the guardrail (see the AGENTS.md note on guardrails
+ * removed twice as "verified equivalent").
+ */
+describe('applyFloorSurfaceRoutingOverride — B0-1034 / B0-977 substrate override', () => {
+  it('re-routes the golden-item verdict: `recommendations` + a VCT surface → floor_vct, with a reason', () => {
+    const out = applyFloorSurfaceRoutingOverride({
+      intent: 'recommendations',
+      surfaceType: 'vct',
+    });
+
+    expect(out.intent).toBe('floor_vct');
+    expect(out.routingOverrideReason).toContain('floor_surface_override');
+    expect(out.routingOverrideReason).toContain('floor_vct');
+  });
+
+  it.each([
+    ['VCT floor', 'floor_vct'],
+    ['terrazzo', 'floor_vct'],
+    ['gym floor', 'floor_wood_sport'],
+    ['concrete', 'floor_concrete'],
+    ['grout', 'floor_stg'],
+  ] as const)('sends a `recommendations` verdict for %j to %s', (surfaceType, expected) => {
+    expect(applyFloorSurfaceRoutingOverride({ intent: 'recommendations', surfaceType }).intent).toBe(
+      expected,
+    );
+  });
+
+  it.each(['product', 'bathroom', 'dilution', 'cross_reference', 'floor_vct', 'ambiguous'] as const)(
+    'leaves a non-`recommendations` verdict (%s) untouched even with a floor surface',
+    (intent) => {
+      const out = applyFloorSurfaceRoutingOverride({ intent, surfaceType: 'VCT floor' });
+
+      expect(out.intent).toBe(intent);
+      expect(out.routingOverrideReason).toBeNull();
+    },
+  );
+
+  it.each([null, undefined, '', 'stainless steel', 'carpet'])(
+    'leaves `recommendations` alone when surfaceType (%j) is absent or not a floor substrate',
+    (surfaceType) => {
+      const out = applyFloorSurfaceRoutingOverride({ intent: 'recommendations', surfaceType });
+
+      expect(out.intent).toBe('recommendations');
+      expect(out.routingOverrideReason).toBeNull();
+    },
+  );
+});
+
+describe('classifyUserIntent — B0-1034 VCT product-selection asks never land on `recommendations`', () => {
+  /** Exactly what the model emitted for golden row 17: `recommendations` @ 0.85 with the substrate extracted. */
+  const misroutedVerdict = (surfaceType: string, taskDescription: string) => ({
+    intent: 'recommendations' as const,
+    confidence: 0.85,
+    entities: {
+      betcoProduct: null,
+      competitorBrand: null,
+      competitorProduct: null,
+      surfaceType,
+      taskDescription,
+      brandFamily: null,
+      setting: null,
+      productCategory: 'floor stripper',
+      carriedProduct: null,
+    },
+    suggestedTool: 'search_product_docs' as const,
+  });
+
+  it.each([
+    // The failing golden item itself, verbatim.
+    [
+      'What stripping and finish products should I use for my VCT floor?',
+      'vct',
+      'choose stripper and finish for a VCT floor',
+    ],
+    // Paraphrases of the same shape — "which of our products for <named substrate>".
+    [
+      'Which stripper and floor finish should we buy for our VCT hallways?',
+      'VCT floor',
+      'select stripper and finish for VCT hallways',
+    ],
+    [
+      'What products do you recommend for stripping and refinishing a terrazzo lobby?',
+      'terrazzo',
+      'strip and refinish a terrazzo lobby',
+    ],
+    [
+      'We need to strip and recoat vinyl composition tile — what should we use?',
+      'vinyl composition tile',
+      'strip and recoat vinyl composition tile',
+    ],
+  ])('routes %j to floor_vct', async (message, surfaceType, taskDescription) => {
+    const runLlm = vi.fn().mockResolvedValue({
+      parsed: misroutedVerdict(surfaceType, taskDescription),
+      usage: USAGE,
+    });
+
+    const out = await classifyUserIntent(message, [], { runLlm, now: () => Date.now() });
+
+    expect(out.intent).toBe('floor_vct');
+    expect(out.source).toBe('llm');
+    // The model call succeeded — an override is not a degradation, so `fallbackReason` stays null.
+    expect(out.fallbackReason).toBeNull();
+    expect(out.routingOverrideReason).toContain('floor_vct');
+    // The override re-routes only; it must not rewrite the model's own confidence or entities.
+    expect(out.confidence).toBe(0.85);
+    expect(out.entities.surfaceType).toBe(surfaceType);
+  });
+
+  it('still routes a genuine substrate-free job ask to `recommendations` (no regression)', async () => {
+    const runLlm = vi.fn().mockResolvedValue({
+      parsed: {
+        ...misroutedVerdict('', 'degrease a commercial kitchen floor'),
+        entities: {
+          ...misroutedVerdict('', 'degrease a commercial kitchen floor').entities,
+          surfaceType: null,
+          productCategory: null,
+        },
+      },
+      usage: USAGE,
+    });
+
+    const out = await classifyUserIntent(
+      'What should I use to get grease off a kitchen floor?',
+      [],
+      { runLlm, now: () => Date.now() },
+    );
+
+    expect(out.intent).toBe('recommendations');
+    expect(out.routingOverrideReason).toBeNull();
+  });
+
+  it('keeps the schema valid after an override', async () => {
+    const runLlm = vi
+      .fn()
+      .mockResolvedValue({ parsed: misroutedVerdict('vct', 'strip a VCT floor'), usage: USAGE });
+
+    const out = await classifyUserIntent('what should I use on my VCT floor', [], {
+      runLlm,
+      now: () => Date.now(),
+    });
+
+    expect(intentClassificationSchema.parse(out).intent).toBe('floor_vct');
   });
 });

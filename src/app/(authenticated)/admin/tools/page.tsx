@@ -1,4 +1,4 @@
-import { ArrowRight, Boxes, GitCompareArrows, Globe, Search } from 'lucide-react';
+import { ArrowRight, Boxes, GitCompareArrows, Globe, Search, Tags } from 'lucide-react';
 import Link from 'next/link';
 
 import {
@@ -37,6 +37,13 @@ const tools = [
       'Test competitor → Betco lookups against legacy tables, browse the 1:1 mappings, and review web-grounded recommendations before promotion—the pipeline behind lookup_cross_reference and recommend_cross_reference.',
     href: '/admin/tools/cross-reference',
     icon: GitCompareArrows,
+  },
+  {
+    title: 'Aliases',
+    description:
+      'Review, edit, approve, or reject unverified rag.product_alias rows before they can anchor product resolution.',
+    href: '/admin/tools/aliases',
+    icon: Tags,
   },
   {
     title: 'Web search',

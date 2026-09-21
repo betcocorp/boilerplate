@@ -26,6 +26,17 @@ vi.mock('~/lib/recommendations/persist-recommendation', () => ({
     runCrossReferenceRecommendationMock(...args),
 }));
 
+// B0-1056 — runCrossReferenceSmeAgentAnswer now creates a real conversation + workflow_runs row
+// so its recommendations' traceId links to a real /admin/observability/[runId] trace; these tests
+// exercise the identity guard, not persistence, so the DB-touching repositories are stubbed.
+vi.mock('~/lib/conversations/conversation-repository', () => ({
+  createConversation: vi.fn().mockResolvedValue({ id: 'conversation-1' }),
+}));
+vi.mock('~/lib/conversations/workflow-repository', () => ({
+  insertWorkflowRun: vi.fn().mockResolvedValue({ id: 'run-1' }),
+  updateWorkflowRun: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { runSmeAgent } from '~/lib/agents/sme/run-sme-agent';
 
 function engineResult(overrides: Record<string, unknown> = {}) {

@@ -37,6 +37,7 @@ const EMPTY: LlmCompetitorSpecFill = {
   primaryUse: null,
   formFactor: null,
   keyClaims: [],
+  manufacturer: null,
   sourceUrl: null,
 };
 
@@ -75,6 +76,7 @@ describe('enrichCompetitorSpec (B0-86)', () => {
         productCategory: 'disinfectant',
         primaryUse: 'surface disinfection',
         keyClaims: ['kills 99.9% of germs'],
+        manufacturer: 'Spartan Chemical',
         sourceUrl: 'https://epa.example/reg',
       }),
     );
@@ -84,6 +86,9 @@ describe('enrichCompetitorSpec (B0-86)', () => {
     expect(spec.provenance.productCategory).toEqual({ source: 'llm', sourceUrl: 'https://epa.example/reg' });
     expect(spec.keyClaims).toEqual(['kills 99.9% of germs']);
     expect(spec.provenance.keyClaims).toEqual({ source: 'llm', sourceUrl: 'https://epa.example/reg' });
+    // B0-1055 — manufacturer is LLM-only (no heuristic extractor), so it always carries llm provenance.
+    expect(spec.manufacturer).toBe('Spartan Chemical');
+    expect(spec.provenance.manufacturer).toEqual({ source: 'llm', sourceUrl: 'https://epa.example/reg' });
   });
 
   it('conflict resolution: the deterministic value wins over a conflicting LLM value', async () => {
@@ -102,6 +107,8 @@ describe('enrichCompetitorSpec (B0-86)', () => {
     expect(spec.provenance.formFactor).toBeNull();
     expect(spec.dilutionOzPerGal).toBeNull();
     expect(spec.provenance.dilutionOzPerGal).toBeNull();
+    expect(spec.manufacturer).toBeNull();
+    expect(spec.provenance.manufacturer).toBeNull();
   });
 });
 
@@ -170,6 +177,7 @@ describe('enrichCompetitorSpec — default runLlm (B0-908)', () => {
       'primaryUse',
       'formFactor',
       'keyClaims',
+      'manufacturer',
       'sourceUrl',
     ]);
     expect(request.schema.additionalProperties).toBe(false);

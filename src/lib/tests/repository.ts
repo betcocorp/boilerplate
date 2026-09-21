@@ -682,7 +682,13 @@ export async function insertTestResultItems(items: NewTestResultItemRecord[]) {
 
   for (let i = 0; i < stamped.length; i += 500) {
     const slice = stamped.slice(i, i + 500);
-    const result = await supabase.from('test_result_items').insert(slice).select('*');
+    // B0-1028 — upsert keyed on the unique (test_result_id, test_item_id) constraint: a plain
+    // insert either silently duplicates a row (pre-constraint) or throws a constraint-violation
+    // error (post-constraint) on any retried/duplicate write; upsert makes a repeat write idempotent.
+    const result = await supabase
+      .from('test_result_items')
+      .upsert(slice, { onConflict: 'test_result_id,test_item_id' })
+      .select('*');
     const data = assertNoError(result);
     inserted.push(...((data || []) as TestResultItemRecord[]));
   }

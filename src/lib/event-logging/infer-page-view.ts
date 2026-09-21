@@ -233,13 +233,10 @@ export function inferPageViewFromPath(pathname: string): PageViewInference | nul
         meta: baseMeta(path),
       };
     }
+    if (parts.length === 3 && parts[2] === 'aliases') {
+      return { event: 'analytics.page.view.tools.aliases', meta: baseMeta(path) };
+    }
     if (parts.length === 4 && parts[2] === 'cross-reference') {
-      if (parts[3] === 'aliases') {
-        return {
-          event: 'analytics.page.view.tools.cross_reference.aliases',
-          meta: baseMeta(path),
-        };
-      }
       if (parts[3] === 'lookup') {
         return {
           event: 'analytics.page.view.tools.cross_reference.lookup',

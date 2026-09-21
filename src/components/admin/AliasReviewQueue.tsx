@@ -11,7 +11,7 @@ import {
 } from '~/components/ui/card';
 import type { ProductAliasReviewRow } from '~/lib/rag/product-alias-review-schemas';
 
-const ROUTE = '/admin/tools/cross-reference/aliases';
+const ROUTE = '/admin/tools/aliases';
 const PAGE_LINK_WINDOW = 5;
 
 function buildHref(page: number) {
