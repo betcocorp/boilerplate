@@ -2,11 +2,11 @@
  * B0-749 — Mission Control (`/admin`) golden-set report-score trend panel, placed between
  * `HealthBar` and `KpiRow`.
  *
- * Async server component. One aggregate score per EST day, across ALL golden datasets'
- * completed runs (`tests.is_golden = true`), from `~/lib/tests/golden-report-score-trend`. This
- * is DELIBERATELY separate from `/admin/tests/reports`'s `ReportScoreTrendChart` (per-run,
- * per-dataset, all datasets) — this panel is golden-only and day-bucketed, and must not be
- * confused with it or reused in its place.
+ * Async server component. One aggregate score per EST day, across every ACTIVE golden dataset's
+ * completed runs (`tests.is_golden = true AND is_archived = false`), from
+ * `~/lib/tests/golden-report-score-trend`. This is DELIBERATELY separate from
+ * `/admin/tests/reports`'s `ReportScoreTrendChart` (per-run, per-dataset, all datasets) — this
+ * panel is golden-only and day-bucketed, and must not be confused with it or reused in its place.
  */
 
 import { toGoldenSetVersionQuery, type HealthPanelProps } from '~/lib/bex-health/search-params';
@@ -20,8 +20,8 @@ import { GoldenReportScoreTrendChart } from './GoldenReportScoreTrendChart';
  * `HEALTH_BAR_SOURCES`/`KPI_ROW_SOURCES` and the rest of `~/components/admin/dashboard/*`.
  */
 export const REPORT_SCORE_TREND_SOURCES = [
-  'Score: test_results.report_state.overall.avg (persisted once report generation completes), scoped to golden-set membership (tests.is_golden) and each day\'s completed full-mode runs',
-  'One point per EST day of test_results.created_at, averaged across every golden dataset\'s runs that day; days with no scored golden run are empty slots, not zero',
+  'Score: test_results.report_state.overall.avg (persisted once report generation completes), scoped to active golden-set membership (tests.is_golden AND NOT is_archived) and each day\'s completed full-mode runs',
+  'One point per EST day of test_results.created_at, averaged across every active golden dataset\'s runs that day; days with no scored golden run are empty slots, not zero',
   'Day-over-day % change is vs the immediately preceding calendar day\'s aggregate score',
 ];
 
@@ -56,8 +56,8 @@ export async function ReportScoreTrendPanel({ window, version }: HealthPanelProp
             Golden report score per day
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            One point per EST day — the aggregate report score across all golden test sets,
-            0-100.
+            One point per EST day — the aggregate report score across all active golden test
+            sets, 0-100.
           </p>
         </div>
       </div>

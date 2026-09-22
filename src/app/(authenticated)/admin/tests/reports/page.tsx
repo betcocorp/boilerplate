@@ -22,6 +22,7 @@ import {
   type ReportRunByOption,
 } from '~/components/admin/tests/ReportRunByFilter';
 import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrendChart';
+import { GoldenReportScoreTrendChart } from '~/components/admin/dashboard/GoldenReportScoreTrendChart';
 import { Button } from '~/components/ui/button';
 import { Separator } from '~/components/ui/separator';
 import {
@@ -34,6 +35,7 @@ import {
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { buildReportFailTrend } from '~/lib/tests/report-fail-trend';
+import { getGoldenReportScoreTrendForWindow } from '~/lib/tests/golden-report-score-trend';
 import { buildReportMetricTrend } from '~/lib/tests/report-metric-trend';
 import type { ReportScoreChange } from '~/lib/tests/report-trend';
 import {
@@ -303,6 +305,21 @@ export default async function AdminTestReportsPage({
   const elapsedTrend = buildReportMetricTrend(reports, 'averageElapsedMs');
   const failTrend = buildReportFailTrend(reports);
 
+  // Last 30 UTC days, independent of the dataset/runBy/model filters above — this is the one
+  // golden-only, cross-dataset aggregate on the page, matching `ReportScoreTrendPanel` on
+  // Mission Control (`~/lib/tests/golden-report-score-trend.ts`).
+  const goldenTrendTo = new Date();
+  const goldenTrendFrom = new Date(goldenTrendTo.getTime() - 29 * 24 * 60 * 60 * 1000);
+  const goldenTrend = await getGoldenReportScoreTrendForWindow({
+    window: {
+      from: goldenTrendFrom.toISOString(),
+      to: goldenTrendTo.toISOString(),
+    },
+  });
+  const goldenScoredDayCount = goldenTrend.points.filter(
+    (point) => point.score !== null,
+  ).length;
+
   return (
     <div className="flex flex-1 bg-slate-50">
       <AdminTestsActionToast error={error} success={success} />
@@ -520,6 +537,29 @@ export default async function AdminTestReportsPage({
               </TableBody>
             </table>
           </div>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Golden test sets — average score per day
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            One point per UTC day, averaging{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-[11px]">
+              report_state.overall.avg
+            </code>{' '}
+            across every active golden test set&rsquo;s completed runs that
+            day, over the last 30 days. Days with no scored golden run are
+            empty slots, not a zero score.
+          </p>
+          <div className="mt-5">
+            <GoldenReportScoreTrendChart points={goldenTrend.points} />
+          </div>
+          <p className="mt-3 text-xs tabular-nums text-slate-500">
+            {goldenScoredDayCount > 0
+              ? `${goldenScoredDayCount} of ${goldenTrend.points.length} days in this window have a scored golden report.`
+              : 'No scored golden reports in the last 30 days.'}
+          </p>
         </section>
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">

@@ -2,9 +2,10 @@
 
 /**
  * B0-749 — client half of the golden-set report-score trend panel: one line, one point per EST
- * day, y-axis fixed 0-100. Days with no scored golden run are explicit gaps — `connectNulls={false}`
- * breaks the line rather than dropping to 0, and a shaded `ReferenceArea` band marks the day
- * (same convention as `TokensPerDayChart`), so "no data" reads differently from "score was 0".
+ * day, y-axis fixed 0-100. Days with no scored golden run have no plotted point (never a 0), but
+ * the line still connects across them (`connectNulls`) so a run of gap days doesn't fragment the
+ * trend into disconnected segments — a shaded `ReferenceArea` band marks each such day (same
+ * convention as `TokensPerDayChart`) so "no data" is still visible, just not a broken line.
  */
 
 import { CartesianGrid, Line, LineChart, ReferenceArea, XAxis, YAxis } from 'recharts';
@@ -127,9 +128,13 @@ export function GoldenReportScoreTrendChart({ points }: { points: GoldenReportSc
         <ChartTooltip content={<GoldenReportScoreTooltip />} />
         <Line
           activeDot={{ r: 5 }}
-          connectNulls={false}
+          connectNulls
           dataKey="score"
           dot={{ r: 3 }}
+          // Recharts' path-draw-in animation stalls after the first sub-path when connectNulls
+          // has to bridge an actual gap in the data — the fix is to skip the animation, not the
+          // connect.
+          isAnimationActive={false}
           stroke="var(--color-score)"
           strokeWidth={2}
           type="monotone"
