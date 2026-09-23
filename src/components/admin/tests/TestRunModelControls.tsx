@@ -19,7 +19,6 @@ import {
   type BexChatAgentMode,
 } from '~/lib/agents/agent-registry';
 import supportedModels, {
-  MODEL_DESCRIPTIONS,
   type BexModelTag,
   type SupportedModel,
 } from '~/lib/constants/models';
@@ -28,7 +27,11 @@ import { ROUTING_TEST_ROUTER_LABELS } from '~/lib/routing-test/constants';
 import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
 
 /** Router options this form's `routerType` select offers — mirrors the `/admin/routing-test` tool. */
-const ROUTER_TYPE_OPTIONS: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
+const ROUTER_TYPE_OPTIONS: readonly RouterTypeOverride[] = [
+  'keyword',
+  'semantic',
+  'llm',
+];
 
 /**
  * B0-601 — model selector + validator toggle for the "Run dataset" form.
@@ -62,7 +65,10 @@ export function TestRunModelControls() {
           onValueChange={(v) => setModelTag(v as BexModelTag)}
           value={modelTag}
         >
-          <SelectTrigger aria-label="Chat model for this run" className="h-9 w-44">
+          <SelectTrigger
+            aria-label="Chat model for this run"
+            className="h-9 w-44"
+          >
             <SelectValue />
           </SelectTrigger>
           {/* B0-905 — grouped by vendor: the list carries both OpenAI and Anthropic tags since
@@ -102,7 +108,10 @@ export function TestRunModelControls() {
           onValueChange={(v) => setAgentMode(v as BexChatAgentMode)}
           value={agentMode}
         >
-          <SelectTrigger aria-label="Agent mode for this run" className="h-9 w-48">
+          <SelectTrigger
+            aria-label="Agent mode for this run"
+            className="h-9 w-48"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -127,10 +136,6 @@ export function TestRunModelControls() {
           Validator pass
         </label>
       </div>
-
-      <p className="max-w-md text-xs leading-snug text-muted-foreground">
-        {MODEL_DESCRIPTIONS[modelTag]}
-      </p>
     </div>
   );
 }
