@@ -6,6 +6,7 @@ import {
   assembleChunkIndexSetBody,
   assembleNeighborChunkBodies,
   chunkWindowKey,
+  fetchProductLineWebUrls,
   NEIGHBOR_CHUNK_RADIUS,
 } from '~/lib/retrieval/document-assembly';
 
@@ -280,5 +281,126 @@ describe('assembleChunkIndexSetBody (B0-874)', () => {
     await expect(
       assembleChunkIndexSetBody({ documentId: 'doc-1', chunkIndexes: [1] }),
     ).rejects.toThrow(/boom/);
+  });
+});
+
+/**
+ * Mocks the two parallel `.schema('rag').from(<table>).select().in()` chains
+ * `fetchProductLineWebUrls` issues: `product_line_web_url` (the derived URLs) and
+ * `product_line_web_url_check` (B0-1077 verification state).
+ */
+function mockWebUrlQueries(input: {
+  urls?: { rows: Array<{ product_line_key: string; web_url: string }>; error?: { message: string } | null };
+  checks?: { rows: Array<{ product_line_key: string; status: string }>; error?: { message: string } | null };
+}) {
+  const urls = input.urls ?? { rows: [] };
+  const checks = input.checks ?? { rows: [] };
+  const inSpies: Record<string, ReturnType<typeof vi.fn>> = {
+    product_line_web_url: vi.fn(),
+    product_line_web_url_check: vi.fn(),
+  };
+
+  vi.mocked(getSupabaseServiceRoleClient).mockReturnValue({
+    schema: () => ({
+      from: (table: 'product_line_web_url' | 'product_line_web_url_check') => ({
+        select: () => ({
+          in: (_col: string, values: string[]) => {
+            inSpies[table](values);
+            const source = table === 'product_line_web_url' ? urls : checks;
+            return Promise.resolve({
+              data: source.error ? null : source.rows,
+              error: source.error ?? null,
+            });
+          },
+        }),
+      }),
+    }),
+  } as unknown as ReturnType<typeof getSupabaseServiceRoleClient>);
+
+  return inSpies;
+}
+
+/**
+ * B0-1075/B0-1077 — derived betco.com product-page URL lookup (`rag.product_line_web_url`,
+ * B0-1074), withholding on a confirmed-broken `rag.product_line_web_url_check` row (B0-1077).
+ */
+describe('fetchProductLineWebUrls (B0-1075/B0-1077)', () => {
+  it('returns an empty map without querying when given no keys', async () => {
+    const result = await fetchProductLineWebUrls([]);
+    expect(result.size).toBe(0);
+    expect(getSupabaseServiceRoleClient).not.toHaveBeenCalled();
+  });
+
+  it('normalises keys to uppercase for the query and the returned map', async () => {
+    const spies = mockWebUrlQueries({
+      urls: {
+        rows: [
+          { product_line_key: 'ABC-123', web_url: 'https://www.betco.com/ProductsDetail?productID=ABC-123' },
+        ],
+      },
+    });
+
+    const result = await fetchProductLineWebUrls(['abc-123', 'ABC-123']);
+
+    expect(spies.product_line_web_url).toHaveBeenCalledWith(['ABC-123']);
+    expect(result.get('ABC-123')).toBe('https://www.betco.com/ProductsDetail?productID=ABC-123');
+    expect(result.size).toBe(1);
+  });
+
+  it('omits keys with no matching row (line has no web-visible item)', async () => {
+    mockWebUrlQueries({});
+    const result = await fetchProductLineWebUrls(['9145']);
+    expect(result.has('9145')).toBe(false);
+  });
+
+  it('degrades to an empty map on a Supabase error reading the view, rather than throwing', async () => {
+    mockWebUrlQueries({ urls: { rows: [], error: { message: 'boom' } } });
+    const result = await fetchProductLineWebUrls(['311']);
+    expect(result.size).toBe(0);
+  });
+
+  it('surfaces a URL with no check row yet (never verified is not the same as broken)', async () => {
+    mockWebUrlQueries({
+      urls: { rows: [{ product_line_key: '311', web_url: 'https://www.betco.com/ProductsDetail?productID=X' }] },
+      checks: { rows: [] },
+    });
+    const result = await fetchProductLineWebUrls(['311']);
+    expect(result.get('311')).toBe('https://www.betco.com/ProductsDetail?productID=X');
+  });
+
+  it('surfaces a URL whose latest check is ok', async () => {
+    mockWebUrlQueries({
+      urls: { rows: [{ product_line_key: '311', web_url: 'https://www.betco.com/ProductsDetail?productID=X' }] },
+      checks: { rows: [{ product_line_key: '311', status: 'ok' }] },
+    });
+    const result = await fetchProductLineWebUrls(['311']);
+    expect(result.get('311')).toBe('https://www.betco.com/ProductsDetail?productID=X');
+  });
+
+  it('withholds a URL whose latest check is soft_404', async () => {
+    mockWebUrlQueries({
+      urls: { rows: [{ product_line_key: 'H619', web_url: 'https://www.betco.com/ProductsDetail?productID=X' }] },
+      checks: { rows: [{ product_line_key: 'H619', status: 'soft_404' }] },
+    });
+    const result = await fetchProductLineWebUrls(['H619']);
+    expect(result.has('H619')).toBe(false);
+  });
+
+  it('withholds a URL whose latest check is error', async () => {
+    mockWebUrlQueries({
+      urls: { rows: [{ product_line_key: '999', web_url: 'https://www.betco.com/ProductsDetail?productID=X' }] },
+      checks: { rows: [{ product_line_key: '999', status: 'error' }] },
+    });
+    const result = await fetchProductLineWebUrls(['999']);
+    expect(result.has('999')).toBe(false);
+  });
+
+  it('degrades to surfacing the URL when the check-table read itself errors', async () => {
+    mockWebUrlQueries({
+      urls: { rows: [{ product_line_key: '311', web_url: 'https://www.betco.com/ProductsDetail?productID=X' }] },
+      checks: { rows: [], error: { message: 'boom' } },
+    });
+    const result = await fetchProductLineWebUrls(['311']);
+    expect(result.get('311')).toBe('https://www.betco.com/ProductsDetail?productID=X');
   });
 });

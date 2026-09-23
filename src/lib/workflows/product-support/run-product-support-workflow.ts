@@ -1422,6 +1422,7 @@ export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]):
           documentKind?: string;
           s3Key?: string | null;
           sourceUri?: string | null;
+          url?: string | null;
         }>;
       };
       for (const s of payload.sources ?? []) {
@@ -1447,6 +1448,10 @@ export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]):
           // citation object so label/SDS-derived directions/hazards/first-aid answers carry it.
           s3Key: s.s3Key ?? undefined,
           sourceUri: s.sourceUri ?? undefined,
+          // B0-1075: derived betco.com product-page URL. `kind` is deliberately left unset (not
+          // 'external') -- this source is still internal/corpus-backed, just with an extra public
+          // link; the Sources panel (B0-1076) renders it as a secondary affordance, not a web result.
+          url: typeof s.url === 'string' && s.url.trim() ? s.url : undefined,
           // B0-293: which corpus the source came from, so the Bex Sources panel can label it.
           ...(documentKind ? { documentKind } : {}),
         });

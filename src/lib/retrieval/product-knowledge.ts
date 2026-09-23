@@ -11,6 +11,7 @@ import {
   assembleNeighborChunkBodies,
   chunkWindowKey,
   fetchDocumentSourceRefs,
+  fetchProductLineWebUrls,
   type AssembledDocumentBody,
   type DocumentSourceRef,
 } from '~/lib/retrieval/document-assembly';
@@ -101,6 +102,12 @@ export type CuratedSource = {
   /** B0-257: source-document provenance for citing label/SDS PDFs by their raw S3 location. */
   s3Key: string | null;
   sourceUri: string | null;
+  /**
+   * B0-1075: derived betco.com product-page URL (`rag.product_line_web_url`, B0-1074) for this
+   * source's own `productLineKey`. Null whenever `productLineKey` is null or the line has no
+   * web-visible item -- never inferred from a query's resolved line (B0-700 anchoring rule).
+   */
+  productPageUrl: string | null;
 };
 
 export type ProductKnowledgeRetrievalSummary = {
@@ -409,6 +416,7 @@ function buildCuratedSource(
   match: RagSearchMatch,
   body: AssembledDocumentBody | undefined,
   sourceRef: DocumentSourceRef | undefined,
+  webUrl: string | undefined,
 ): CuratedSource {
   const fallbackBody = match.chunk_text;
   const documentBody = body && body.body.length > 0 ? body.body : fallbackBody;
@@ -431,6 +439,8 @@ function buildCuratedSource(
     productKey: match.product_key,
     s3Key: sourceRef?.s3Key ?? null,
     sourceUri: sourceRef?.sourceUri ?? null,
+    // B0-1075: only ever keyed off this source's OWN productLineKey -- never null here.
+    productPageUrl: match.product_line_key ? (webUrl ?? null) : null,
   };
 }
 
@@ -535,9 +545,17 @@ async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<Curate
     documentId: match.document_id,
     chunkIndex: match.chunk_index,
   }));
-  const [bodies, sourceRefs] = await Promise.all([
+  const productLineKeys = [
+    ...new Set(
+      selected
+        .map((match) => match.product_line_key)
+        .filter((key): key is string => Boolean(key)),
+    ),
+  ];
+  const [bodies, sourceRefs, webUrls] = await Promise.all([
     assembleNeighborChunkBodies(windowRequests),
     fetchDocumentSourceRefs(documentIds),
+    fetchProductLineWebUrls(productLineKeys),
   ]);
 
   return selected.map((match) =>
@@ -545,6 +563,7 @@ async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<Curate
       match,
       bodies.get(chunkWindowKey({ documentId: match.document_id, chunkIndex: match.chunk_index })),
       sourceRefs.get(match.document_id),
+      match.product_line_key ? webUrls.get(match.product_line_key.toUpperCase()) : undefined,
     ),
   );
 }

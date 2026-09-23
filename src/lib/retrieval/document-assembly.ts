@@ -100,6 +100,89 @@ export async function fetchDocumentSourceRefs(
   return result;
 }
 
+/** Typed escape hatch shared by both queries below -- see the comment at the first call site. */
+type LooseSelectInClient = {
+  select(cols: string): {
+    in(
+      col: string,
+      values: string[],
+    ): Promise<{
+      data: Array<Record<string, unknown>> | null;
+      error: { message: string } | null;
+    }>;
+  };
+};
+
+/**
+ * B0-1075/B0-1077: fetch derived betco.com product-page URLs for a set of product line keys
+ * (`rag.product_line_web_url`, B0-1074), withholding any URL whose latest B0-1077 link check
+ * (`rag.product_line_web_url_check`) came back `soft_404` or `error`. Keys are normalised to
+ * uppercase before both the query and the map's keys, matching how `rag.entity.product_line_key`
+ * and the view itself store them. Degrades to an empty map on error so citation enrichment never
+ * blocks retrieval.
+ *
+ * Judgment call (B0-1077): a product line with NO check row yet (never verified) is still
+ * surfaced -- withholding every URL until the first weekly checker run would silently hide the
+ * entire feature between the view landing and the first cron tick. Only a URL actively CONFIRMED
+ * broken is withheld.
+ */
+export async function fetchProductLineWebUrls(
+  productLineKeys: string[],
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  const uniqueKeys = Array.from(
+    new Set(productLineKeys.filter(Boolean).map((key) => key.toUpperCase())),
+  );
+  if (uniqueKeys.length === 0) {
+    return result;
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  // B0-1074/B0-1077: neither `rag.product_line_web_url` nor `rag.product_line_web_url_check` is
+  // yet in the generated Supabase types (the local `types:supabase:rag` CLI is unauthenticated in
+  // this environment -- see `pnpm run types:supabase:rag`); typed the same way other
+  // pre-regen/ad-hoc `rag` queries are in this codebase (e.g. `~/lib/rag/corpus-config-actions.ts`)
+  // until a real regen lands.
+  const rag = supabase.schema('rag') as unknown as {
+    from(table: string): LooseSelectInClient;
+  };
+
+  const [urlsResponse, checksResponse] = await Promise.all([
+    rag.from('product_line_web_url').select('product_line_key, web_url').in(
+      'product_line_key',
+      uniqueKeys,
+    ),
+    rag.from('product_line_web_url_check').select('product_line_key, status').in(
+      'product_line_key',
+      uniqueKeys,
+    ),
+  ]);
+
+  if (urlsResponse.error || !urlsResponse.data) {
+    return result;
+  }
+
+  // Absence in this map means "never checked" -- treated as surfaceable, per the judgment call
+  // documented above. Only an explicit non-'ok' status withholds the URL.
+  const statusByKey = new Map<string, string>();
+  if (!checksResponse.error && checksResponse.data) {
+    for (const row of checksResponse.data as Array<{ product_line_key: string; status: string }>) {
+      statusByKey.set(row.product_line_key.toUpperCase(), row.status);
+    }
+  }
+
+  for (const row of urlsResponse.data as Array<{ product_line_key: string; web_url: string }>) {
+    const key = row.product_line_key.toUpperCase();
+    const status = statusByKey.get(key);
+    if (status === 'soft_404' || status === 'error') {
+      continue;
+    }
+    result.set(key, row.web_url);
+  }
+
+  return result;
+}
+
 /** Stitches one document's already-ordered chunk rows into a capped `AssembledDocumentBody`. */
 function stitchChunkRows(
   documentId: string,

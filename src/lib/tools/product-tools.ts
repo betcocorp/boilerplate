@@ -275,6 +275,9 @@ function sourcePayload(
     // (directions, hazards, first aid, dilution) can cite the exact source document.
     s3Key: s.s3Key,
     sourceUri: s.sourceUri,
+    // B0-1075: derived betco.com product-page URL (rag.product_line_web_url, B0-1074); matches
+    // sourceRefSchema's `url` field name so it survives persistence unchanged.
+    url: s.productPageUrl ?? undefined,
     freshness: null as null,
   }));
 
@@ -300,6 +303,8 @@ function sourcePayload(
       productKey: null,
       s3Key: null,
       sourceUri: null,
+      // B0-1075: never a betco.com page for the synthetic structured-facts source.
+      url: undefined,
       freshness: null as null,
     });
   }
