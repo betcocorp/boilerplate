@@ -123,16 +123,18 @@ export async function runBexChatTurn(input: {
   /** B0-681 — see `RouterTypeOverride`. Only the test-run workbench passes this. */
   routerTypeOverride?: RouterTypeOverride;
   /**
-   * Who owns the conversation this turn creates, if any. Chat routes resolve
-   * `resolveConversationOwnerUserId()` and pass `{ kind: 'user', userId }` when it resolves, or omit
-   * `owner` entirely when it doesn't (falls back to the DB default: user_id null, source 'chat').
+   * Who owns the conversation this turn creates, if any. Chat routes pass `{ kind: 'user', userId,
+   * actedByUserId }` from `resolveConversationStamp()` — B0-1084: `userId` is the act-as-aware actor
+   * and `actedByUserId` the true session user when acting-as (else null).
    * The test runner (B0-450) always passes `{ kind: 'system' }` so eval-harness conversations are
    * explicitly source='test_run', never attributed to whoever kicked off the run.
    *
    * Only consulted when no `conversationId` is supplied — continuing turns never re-stamp an
    * existing conversation.
    */
-  owner?: { kind: 'user'; userId: string } | { kind: 'system' };
+  owner?:
+    | { kind: 'user'; userId: string; actedByUserId?: string | null }
+    | { kind: 'system' };
   /**
    * B0-645 — the source test's `tests.name`, stamped onto the conversation at creation for
    * `owner: { kind: 'system' }` turns so the admin sidebar can show which test produced it instead
@@ -154,7 +156,7 @@ export async function runBexChatTurn(input: {
   if (!conversation) {
     conversation = await createConversation(
       input.owner?.kind === 'user'
-        ? { user_id: input.owner.userId }
+        ? { user_id: input.owner.userId, acted_by_user_id: input.owner.actedByUserId ?? null }
         : input.owner?.kind === 'system'
           ? { user_id: null, source: 'test_run', test_name: input.testName ?? null }
           : undefined,

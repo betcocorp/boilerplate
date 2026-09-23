@@ -11,16 +11,13 @@ import { getPermissionsForUser } from '~/lib/permissions/repository';
  * `~/lib/conversations/conversation-owner.ts`'s `resolveConversationOwnerUserId`, which resolves the
  * true authenticated owner (ignoring act-as).
  *
- * Ownership STAMPING on newly created conversation rows still always uses that true owner
- * exclusively, never this actor — that is unchanged, and remains the guard against an RLS leak (see
- * that function's JSDoc). What changed (B0-841): conversation ACCESS checks (read/continue/delete on
- * an *existing* conversation) now allow a match against either this act-as-aware actor's `userId` OR
- * the true session owner — specifically so an admin who created a conversation while acting-as a
- * non-admin user (which stamps that conversation with the admin's true id) can still read/continue/
- * delete it in the same or a later act-as session, where `userId` here resolves to the acted-as user
- * and would otherwise never match. See `actorMayAccessConversation` in
- * `~/app/api/bex/conversations/[id]/route.ts` and the `allowed` check in
- * `~/app/api/bex/chat/stream/route.ts`.
+ * Ownership STAMPING (B0-1084): a newly created conversation is owned by THIS actor, so acting-as a
+ * user makes the conversation that user's own; the true session owner is recorded separately in
+ * `agent_conversations.acted_by_user_id` (see `resolveConversationStamp`). Conversation ACCESS
+ * checks (B0-841) still also accept a match against the true session owner, for conversations
+ * created while acting-as before B0-1084 (stamped with the admin's own id). See
+ * `actorMayAccessConversation` in `~/app/api/bex/conversations/[id]/route.ts` and the `allowed`
+ * check in `~/app/api/bex/chat/stream/route.ts`.
  */
 export type BexActor =
   | { kind: 'user'; userId: string; canViewAll: boolean }

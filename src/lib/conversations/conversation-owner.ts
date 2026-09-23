@@ -9,29 +9,23 @@ import { getUser } from '~/lib/permissions/repository';
  * `~/lib/api/bex-actor.ts`'s `getBexActor`, which resolves the act-as-aware effective actor used
  * for authorization/scoping.
  *
- * **Stamping** (unchanged): `agent_conversations.user_id` is destined to become the key for
- * per-user RLS. If an admin acting-as another user created a conversation and it were attributed to
- * the acted-as user, that user would later gain read access (via RLS) to a transcript they never
- * wrote — and since the admin's own permissions may have surfaced content the acted-as user cannot
- * see, that would be a leak, not a cosmetic mislabel, and it is unfixable after the fact (nothing on
- * the row records who really typed it). So ownership on newly created rows always resolves from the
- * real NextAuth session, never the act-as/"selected-user" cookie — this function is never called
- * with the actor in mind for stamping, and that stays true-owner-only.
+ * **Stamping** (B0-1084 — reverses the B0-449 rule): a conversation created while an admin is
+ * "Acting as" another user is now owned by the acted-as user (`user_id = actor.userId`), so it
+ * behaves as that user's own conversation — it shows in their sidebar and stays sendable. The true
+ * session user this function returns is recorded in `agent_conversations.acted_by_user_id` instead,
+ * which preserves the audit trail B0-449 was protecting (who really typed it). See
+ * `resolveConversationStamp` below.
  *
- * **Access checks** (B0-841): the true owner this function returns is now ALSO consulted, in
- * addition to the act-as-aware actor, when deciding whether a request may read/continue/delete an
- * *existing* conversation (see `actorMayAccessConversation` in
- * `~/app/api/bex/conversations/[id]/route.ts` and the `allowed` check in
- * `~/app/api/bex/chat/stream/route.ts`). Without this, a conversation created while acting-as — always
- * stamped with the true admin's id per the rule above — could never be matched by that same admin's
- * later act-as-aware `actor.userId` (the acted-as user), locking them out of a conversation they just
- * created. The two uses (stamping vs. access) are related but not identical: stamping never looks at
- * the actor at all; access checks accept a match against *either* identity.
+ * **Access checks** (B0-841): the true owner is ALSO consulted, alongside the act-as-aware actor,
+ * when deciding whether a request may read/continue/delete an *existing* conversation (see
+ * `actorMayAccessConversation` in `~/app/api/bex/conversations/[id]/route.ts` and the `allowed`
+ * check in `~/app/api/bex/chat/stream/route.ts`). Since B0-1084 this only matters for rows created
+ * while acting-as before that ticket, which were stamped with the admin's own id.
  *
  * Never throws, never blocks a turn: any failure (no session, no matching `app_user` row, a
- * repository error) resolves to `null`, which stamping callers treat as "leave user_id unset" (DB
- * default: `user_id` null, `source` 'chat') and access-check callers treat as "this fallback does not
- * apply" (falls through to the actor-based checks).
+ * repository error) resolves to `null`, which stamping treats as "not acting-as" (no
+ * `acted_by_user_id`) and access-check callers treat as "this fallback does not apply" (falls
+ * through to the actor-based checks).
  */
 export async function resolveConversationOwnerUserId(): Promise<string | null> {
   try {
@@ -59,4 +53,20 @@ export async function resolveConversationOwnerUserId(): Promise<string | null> {
     });
     return null;
   }
+}
+
+/**
+ * B0-1084 — ownership fields for a conversation a signed-in user creates: always owned by the
+ * act-as-aware actor, with `actedByUserId` set to the true session user only when they differ
+ * (i.e. an admin acting as someone else). `null` when not acting-as or the true owner is unresolved.
+ */
+export function resolveConversationStamp(
+  actorUserId: string,
+  trueOwnerUserId: string | null,
+): { userId: string; actedByUserId: string | null } {
+  return {
+    userId: actorUserId,
+    actedByUserId:
+      trueOwnerUserId !== null && trueOwnerUserId !== actorUserId ? trueOwnerUserId : null,
+  };
 }

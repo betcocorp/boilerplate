@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       agent_conversations: {
         Row: {
+          acted_by_user_id: string | null
           created_at: string
           id: string
           latest_model: string | null
@@ -30,6 +31,7 @@ export type Database = {
           workspace_id: string | null
         }
         Insert: {
+          acted_by_user_id?: string | null
           created_at?: string
           id?: string
           latest_model?: string | null
@@ -44,6 +46,7 @@ export type Database = {
           workspace_id?: string | null
         }
         Update: {
+          acted_by_user_id?: string | null
           created_at?: string
           id?: string
           latest_model?: string | null
