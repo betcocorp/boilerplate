@@ -57,6 +57,7 @@ import {
 import { requireFloorProcedureTool } from '~/lib/workflows/product-support/floor-procedure-backstop';
 import { applyFloorRecoatRationaleBackstop } from '~/lib/workflows/product-support/floor-recoat-rationale-backstop';
 import { applyDilutionDwellBackstop } from '~/lib/workflows/product-support/dilution-dwell-backstop';
+import { applyProductPageUrlCitationBackstop } from '~/lib/workflows/product-support/product-page-url-citation-backstop';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   hasDecisiveCrossReferenceSignal,
@@ -6210,6 +6211,21 @@ export async function runProductSupportWorkflow(input: {
         { userMessage: input.userMessage },
         wfCtx,
       );
+    }
+
+    /**
+     * B0-1075 follow-up — deterministic text-level patch, applied last (after the dilution dwell
+     * backstop above), attaching the derived betco.com product-page URL next to its `[doc:uuid]`
+     * citation in the model's own text. The model was never told a cited source can carry a `url`
+     * (see `product-page-url-citation-backstop.ts`), so it never surfaced one on its own — verified
+     * live 2026-09-23. Never invents a URL; only attaches one already present on a `sources` entry.
+     */
+    const productPageUrlCitationResult = applyProductPageUrlCitationBackstop({
+      draftAnswer: finalText,
+      sources,
+    });
+    if (productPageUrlCitationResult.applied) {
+      finalText = productPageUrlCitationResult.answer;
     }
 
     // B0-493 — run-level retrieval configuration rollup, computed from the FINAL resolved trace
