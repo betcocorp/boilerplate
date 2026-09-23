@@ -213,7 +213,12 @@ function AssistantDetails({
               </p>
               <ul className="space-y-2">
                 {meta.sources.slice(0, 6).map((s) => {
-                  const isExternal = s.kind === 'external' || !!s.url;
+                  // B0-1076 — `kind` alone decides external-vs-internal now. Internal sources
+                  // (product_line_profile/SDS/etc.) can ALSO carry a `url` since B0-1075 (the
+                  // derived betco.com product-page link) — that must not turn them into a web
+                  // result and hide their corpus badge / inspect buttons; see the secondary
+                  // "View on betco.com" link below instead.
+                  const isExternal = s.kind === 'external';
                   // Synthetic sources (e.g. structured "Verified Product Facts") have no
                   // rag.document row to inspect — the facts are the snippet itself, so
                   // show it in full and skip the DB-backed inspect buttons.
@@ -224,7 +229,10 @@ function AssistantDetails({
                   return (
                     <li
                       className="wrap-break-word rounded-md border border-border/60 bg-muted/30 p-2"
-                      key={`${messageId}-${s.url ?? s.documentId}-${s.chunkId ?? 'chunk'}`}
+                      // B0-1076 — keyed on documentId+chunkId, not `url`: an internal source can
+                      // now carry a url (B0-1075), and two chunks of the same document would
+                      // otherwise collide on that url.
+                      key={`${messageId}-${s.documentId}-${s.chunkId ?? 'chunk'}`}
                     >
                       <div className="flex flex-wrap items-center gap-1.5">
                         {isExternal && s.url ? (
@@ -270,6 +278,20 @@ function AssistantDetails({
                           >
                             {(s.similarity * 100).toFixed(0)}%
                           </Badge>
+                        ) : null}
+                        {!isExternal && s.url ? (
+                          // B0-1076 — the derived betco.com product-page link (B0-1075) on an
+                          // otherwise-internal source: a secondary affordance alongside the
+                          // corpus badge/inspect controls above, not a replacement for them.
+                          <a
+                            className="flex items-center gap-1 text-[0.62rem] font-medium text-muted-foreground hover:text-foreground hover:underline"
+                            href={s.url}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            View on betco.com
+                            <ExternalLink className="size-3 shrink-0 opacity-60" />
+                          </a>
                         ) : null}
                       </div>
                       {s.snippet ? (
