@@ -47,7 +47,7 @@ export function CreateOrUploadTestDatasetDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" size="sm">
-          Create or upload dataset
+          Create new test
         </Button>
       </DialogTrigger>
       <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-2xl">
@@ -112,11 +112,15 @@ export function CreateOrUploadTestDatasetDialog({
                 type="file"
               />
               <p className="text-xs text-slate-500">
-                A <code className="rounded bg-slate-100 px-1 py-0.5">.csv</code> imports one prompt
-                per row. A <code className="rounded bg-slate-100 px-1 py-0.5">.json</code> multi-turn
-                scenario set (B0-537) imports one ordered conversation per scenario — see the{' '}
-                <code className="rounded bg-slate-100 px-1 py-0.5">multi_turn_json</code> column
-                reference below for the scenario shape.
+                A <code className="rounded bg-slate-100 px-1 py-0.5">.csv</code>{' '}
+                imports one prompt per row. A{' '}
+                <code className="rounded bg-slate-100 px-1 py-0.5">.json</code>{' '}
+                multi-turn scenario set (B0-537) imports one ordered
+                conversation per scenario — see the{' '}
+                <code className="rounded bg-slate-100 px-1 py-0.5">
+                  multi_turn_json
+                </code>{' '}
+                column reference below for the scenario shape.
               </p>
             </div>
 

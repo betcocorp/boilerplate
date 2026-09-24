@@ -30,6 +30,7 @@ vi.mock('~/lib/retrieval/document-assembly', () => ({
   chunkWindowKey: (r: { documentId: string; chunkIndex: number }) =>
     `${r.documentId}:${r.chunkIndex}`,
   fetchDocumentSourceRefs: vi.fn(),
+  fetchProductLineWebUrls: vi.fn(),
 }));
 vi.mock('~/lib/rag/entity-context', () => ({
   fetchEntityContexts: vi.fn(),
@@ -45,6 +46,7 @@ import { fetchEntityContexts } from '~/lib/rag/entity-context';
 import {
   assembleNeighborChunkBodies,
   fetchDocumentSourceRefs,
+  fetchProductLineWebUrls,
 } from '~/lib/retrieval/document-assembly';
 import { fetchProductLineFacts } from '~/lib/retrieval/product-facts';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -155,6 +157,7 @@ beforeEach(() => {
       ),
   );
   vi.mocked(fetchDocumentSourceRefs).mockResolvedValue(new Map());
+  vi.mocked(fetchProductLineWebUrls).mockResolvedValue(new Map());
   vi.mocked(fetchEntityContexts).mockResolvedValue(new Map());
   vi.mocked(fetchProductLineFacts).mockResolvedValue(new Map());
 });

@@ -1,16 +1,16 @@
-import type { Metadata } from 'next';
 import { TrashIcon, TrendingDown, TrendingUp } from 'lucide-react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { Badge } from '~/components/ui/badge';
 import { ModelProviderBadge } from '~/components/admin/ModelProviderBadge';
+import { Badge } from '~/components/ui/badge';
 
 import { AddTestItemDialog } from '~/components/admin/tests/AddTestItemDialog';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
-import { RunConfigBadges } from '~/components/admin/tests/RuntimeConfigBadge';
 import { RunSearchEvalDialog } from '~/components/admin/tests/RunSearchEvalDialog';
+import { RunConfigBadges } from '~/components/admin/tests/RuntimeConfigBadge';
 import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
 import {
@@ -20,7 +20,6 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { isBexModelTag } from '~/lib/constants/models';
 import {
   GENERATION_RUNTIME_SHORT_LABELS,
@@ -30,16 +29,15 @@ import {
 } from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import {
+  resolveGoldenSetItemOrigins,
+  type GoldenSetItemOrigin,
+} from '~/lib/tests/golden-set';
+import {
   buildPromptAggregations,
   extractItemMaxSimilarity,
 } from '~/lib/tests/prompt-aggregations';
 import { loadDocumentTitlesByIds } from '~/lib/tests/report/expected-sources-repository';
 import { parseReportState } from '~/lib/tests/report/schemas';
-import {
-  resolveGoldenSetItemOrigins,
-  type GoldenSetItemOrigin,
-} from '~/lib/tests/golden-set';
-import { parseTestRunConfig } from '~/lib/tests/run-config';
 import {
   getGlobalTestItemSuggestionRows,
   getLegacyProductLineSuggestionMeta,
@@ -57,6 +55,7 @@ import {
   extractSearchRunMaxSimilarity,
   summarizePromptBundleVersions,
 } from '~/lib/tests/response-payload';
+import { parseTestRunConfig } from '~/lib/tests/run-config';
 import {
   buildSuggestionListsFromTestItems,
   distinctNonEmptyStrings,
@@ -70,6 +69,7 @@ import {
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 import { TestRunModelControls } from '~/components/admin/tests/TestRunModelControls';
+import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
   deleteSearchRunAction,
   deleteTestRunAction,
@@ -145,7 +145,11 @@ function formatElapsedDelta(absoluteDelta: number) {
 
 /** Reads `run_options.modelTag` off a run row without trusting the generated `Json` type. */
 function extractRunModelTag(runOptions: unknown): string | null {
-  if (!runOptions || typeof runOptions !== 'object' || Array.isArray(runOptions)) {
+  if (
+    !runOptions ||
+    typeof runOptions !== 'object' ||
+    Array.isArray(runOptions)
+  ) {
     return null;
   }
   const tag = (runOptions as Record<string, unknown>).modelTag;
@@ -174,7 +178,8 @@ async function RunModelLabel({
     // run can only have been the AI SDK loop). Null for an OpenAI run predating the field: its loop
     // followed a settings value from the time, which is not recoverable.
     const generationRuntime =
-      extractGenerationRuntimeFromSummary(summary) ?? certainGenerationRuntimeForModel(persisted);
+      extractGenerationRuntimeFromSummary(summary) ??
+      certainGenerationRuntimeForModel(persisted);
     return (
       <span className="inline-flex items-center gap-1.5">
         <span title="Model this run actually executed on">{persisted}</span>
@@ -214,9 +219,7 @@ async function RunModelLabel({
 
   // `resolveModel` throws on unknown tags that need an env override, so never hand it one.
   if (!isBexModelTag(tag)) {
-    return (
-      <span title={`Unrecognised model tag: ${tag}`}>{tag}</span>
-    );
+    return <span title={`Unrecognised model tag: ${tag}`}>{tag}</span>;
   }
 
   const resolved = await resolveModel(tag);
@@ -281,14 +284,19 @@ export default async function AdminTestDetailsPage({
   ]);
   const trendRuns = [...results].reverse();
   /** One IN-query for every result item across every recent run feeds the Recent runs metrics and the per-prompt aggregation. */
-  const [allRecentResultItems, searchRunItems, goldenOrigins] = await Promise.all([
-    listAllResultItemsByResultIds(trendRuns.map((run) => run.id)),
-    listAllResultItemsByResultIds(searchResults.map((run) => run.id)),
-    // B0-750 — which of this test's prompts belong to a golden set (lineage or verbatim prompt).
-    resolveGoldenSetItemOrigins(
-      items.map((item) => ({ id: item.id, prompt: item.prompt, metadata: item.metadata })),
-    ),
-  ]);
+  const [allRecentResultItems, searchRunItems, goldenOrigins] =
+    await Promise.all([
+      listAllResultItemsByResultIds(trendRuns.map((run) => run.id)),
+      listAllResultItemsByResultIds(searchResults.map((run) => run.id)),
+      // B0-750 — which of this test's prompts belong to a golden set (lineage or verbatim prompt).
+      resolveGoldenSetItemOrigins(
+        items.map((item) => ({
+          id: item.id,
+          prompt: item.prompt,
+          metadata: item.metadata,
+        })),
+      ),
+    ]);
   const goldenOriginsByItemId: Record<string, GoldenSetItemOrigin> =
     Object.fromEntries(goldenOrigins);
   // B0-933 — one batched lookup for every `expected_sources` id on the page.
@@ -445,50 +453,60 @@ export default async function AdminTestDetailsPage({
       <AdminTestsActionToast error={error} success={success} />
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-                Test dataset details
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
-                {test.name}
-              </h1>
-              <p className="mt-3 text-sm text-slate-600">
-                File: {test.source_file_name} ({test.row_count} prompts)
-                {test.intended_agent ? (
-                  <>
-                    <span className="mx-1 text-slate-400">·</span>
-                    Intended agent:{' '}
-                    {V1_AGENT_REGISTRY.find((a) => a.id === test.intended_agent)
-                      ?.label ?? test.intended_agent}
-                  </>
-                ) : null}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <AddTestItemDialog
-                canonicalProductLabels={legacyProductLines.labelByKey}
-                returnPath={`/admin/tests/${test.id}`}
-                suggestionLists={suggestionLists}
-                testId={test.id}
-              />
-              <Button asChild size="sm" variant="outline">
-                <Link href="/admin/tests">Back to tests</Link>
-              </Button>
-              <RunSearchEvalDialog testId={test.id} />
-              <form action={runTestAction} className="flex items-center gap-2">
-                <input
-                  name="returnPath"
-                  type="hidden"
-                  value={`/admin/tests/${test.id}`}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-4 w-full">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+                  Test details
+                </p>
+                <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+                  {test.name}
+                </h1>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/admin/tests">Back</Link>
+                </Button>
+                <AddTestItemDialog
+                  canonicalProductLabels={legacyProductLines.labelByKey}
+                  returnPath={`/admin/tests/${test.id}`}
+                  suggestionLists={suggestionLists}
+                  testId={test.id}
                 />
-                <input name="testId" type="hidden" value={test.id} />
-                <TestRunModelControls />
+                <RunSearchEvalDialog testId={test.id} />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mt-4">
+              <form
+                action={runTestAction}
+                className="flex items-center gap-2 justify-between"
+              >
+                <div>
+                  <input
+                    name="returnPath"
+                    type="hidden"
+                    value={`/admin/tests/${test.id}`}
+                  />
+                  <input name="testId" type="hidden" value={test.id} />
+                  <TestRunModelControls />
+                </div>
                 <Button size="sm" type="submit">
                   Run dataset
                 </Button>
               </form>
             </div>
+
+            <p className="text-sm text-slate-600">
+              File: {test.source_file_name} ({test.row_count} prompts)
+              {test.intended_agent ? (
+                <>
+                  <span className="mx-1 text-slate-400">·</span>
+                  Intended agent:{' '}
+                  {V1_AGENT_REGISTRY.find((a) => a.id === test.intended_agent)
+                    ?.label ?? test.intended_agent}
+                </>
+              ) : null}
+            </p>
           </div>
         </section>
 
@@ -541,7 +559,8 @@ export default async function AdminTestDetailsPage({
                     // (already loaded above for the prompt-bundle/score columns) rather than the
                     // cached `test_results.failed_items` counter, which can drift from the real
                     // per-item `passed` values (e.g. after a retry deletes and re-inserts rows).
-                    const runResultItems = resultItemsByRunId.get(result.id) ?? [];
+                    const runResultItems =
+                      resultItemsByRunId.get(result.id) ?? [];
                     const passedItems =
                       runResultItems.length > 0
                         ? runResultItems.filter((item) => item.passed).length
@@ -664,7 +683,9 @@ export default async function AdminTestDetailsPage({
                             */}
                             <span className="flex flex-wrap items-center gap-1">
                               <RunConfigBadges
-                                runConfig={parseTestRunConfig(result.run_options)}
+                                runConfig={parseTestRunConfig(
+                                  result.run_options,
+                                )}
                                 showModel={false}
                               />
                             </span>

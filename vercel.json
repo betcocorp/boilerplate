@@ -24,6 +24,10 @@
     {
       "path": "/api/v1/observability/sweep-stalled-test-runs",
       "schedule": "7,22,37,52 * * * *"
+    },
+    {
+      "path": "/api/v1/observability/verify-product-line-web-urls",
+      "schedule": "0 6 * * 1"
     }
   ]
 }

@@ -69,6 +69,43 @@ export const retrievedDocumentChunkRefSchema = z.object({
 export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRefSchema>;
 
 /**
+ * One retrieval tool call's own result list, ordered, un-deduped, and attributed to the call that
+ * produced it.
+ *
+ * Exists because `retrieved_document_chunks` (below) is a UNION across every tool call in the turn,
+ * deduped into a Map — which is the right shape for "what did retrieval surface this turn" and the
+ * wrong shape for every rank-sensitive measurement. The union destroys three things at write time,
+ * none of them recoverable afterwards (`toolOutputLog` is not persisted, and `toolTrace` caps
+ * `outputPreview` at 4000 chars, routinely mid-`sources[]`):
+ *
+ *   1. which call each chunk came from — several `search_product_docs` calls collapse into one array
+ *   2. position within that call
+ *   3. cross-call duplicates — a chunk at rank 1 of one call and rank 12 of another becomes one entry
+ *
+ * `chunks[]` is ordered as the tool emitted it, which is COSINE order (`selectCuratedMatches` sorts
+ * on `similarity`). The reranked order is carried per-chunk as `rerank_rank`, never by position.
+ */
+export const retrievalCallRecordSchema = z.object({
+  tool_name: z.string(),
+  call_id: z.string().nullable(),
+  /** `RagSearchResult.retrieval_strategy` for this call, when the trace recorded one. */
+  retrieval_strategy: z.string().nullable(),
+  chunks: z.array(
+    z.object({
+      document_id: z.string(),
+      chunk_id: z.string().nullable(),
+      /** Pre-rerank cosine/hybrid score. */
+      similarity: z.number().nullable(),
+      /** Cross-encoder score and 0-based reranked position; null when the reranker did not run. */
+      rerank_score: z.number().nullable(),
+      rerank_rank: z.number().nullable(),
+    }),
+  ),
+});
+
+export type RetrievalCallRecord = z.infer<typeof retrievalCallRecordSchema>;
+
+/**
  * B0-388 — where the answer text the user actually saw came from. The workflow can replace or
  * recompose the model's draft on several paths, and without this the observability panel cannot
  * tell "the model wrote this" from "a deterministic branch wrote this".
@@ -605,6 +642,13 @@ export const productSupportFinalOutputSchema = z.object({
     .optional(),
   /** Union of all chunks retrieved via semantic search in this turn (matches `document_chunk.id` / `document_id`). */
   retrieved_document_chunks: z.array(retrievedDocumentChunkRefSchema).optional(),
+  /**
+   * Per-tool-call retrieval, ordered and un-deduped — the rank-preserving companion to
+   * `retrieved_document_chunks`. See {@link retrievalCallRecordSchema} for why the union alone
+   * cannot support a rank-sensitive metric. Optional: absent on every payload written before this
+   * landed, and on turns that ran no retrieval tool.
+   */
+  retrieval_calls: z.array(retrievalCallRecordSchema).optional(),
   confidence: z.number().min(0).max(1).optional(),
   workflowRunId: z.string().uuid(),
   latestOpenaiResponseId: z.string(),

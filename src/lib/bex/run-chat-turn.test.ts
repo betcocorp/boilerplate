@@ -88,7 +88,23 @@ describe('runBexChatTurn — conversation ownership (B0-449/450)', () => {
       owner: { kind: 'user', userId: 'user-1' },
     });
 
-    expect(createConversation).toHaveBeenCalledWith({ user_id: 'user-1' });
+    expect(createConversation).toHaveBeenCalledWith({ user_id: 'user-1', acted_by_user_id: null });
+  });
+
+  it("B0-1084 — owner.actedByUserId is stamped as acted_by_user_id", async () => {
+    vi.mocked(createConversation).mockResolvedValue(baseConversation({ user_id: 'acted-as-1' }));
+
+    await runBexChatTurn({
+      conversationId: null,
+      message: 'hello',
+      source: 'bex_chat',
+      owner: { kind: 'user', userId: 'acted-as-1', actedByUserId: 'admin-true-1' },
+    });
+
+    expect(createConversation).toHaveBeenCalledWith({
+      user_id: 'acted-as-1',
+      acted_by_user_id: 'admin-true-1',
+    });
   });
 
   it("owner: {kind:'system'} creates the conversation with user_id null and source test_run", async () => {

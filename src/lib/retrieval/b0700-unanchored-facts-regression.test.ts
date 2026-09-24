@@ -25,6 +25,7 @@ vi.mock('~/lib/retrieval/document-assembly', () => ({
   chunkWindowKey: (r: { documentId: string; chunkIndex: number }) =>
     `${r.documentId}:${r.chunkIndex}`,
   fetchDocumentSourceRefs: vi.fn(),
+  fetchProductLineWebUrls: vi.fn(),
 }));
 vi.mock('~/lib/rag/entity-context', () => ({
   fetchEntityContexts: vi.fn(async () => new Map()),
@@ -54,6 +55,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import {
   assembleNeighborChunkBodies,
   fetchDocumentSourceRefs,
+  fetchProductLineWebUrls,
 } from '~/lib/retrieval/document-assembly';
 
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
@@ -135,6 +137,7 @@ beforeEach(() => {
       ),
   );
   vi.mocked(fetchDocumentSourceRefs).mockResolvedValue(new Map());
+  vi.mocked(fetchProductLineWebUrls).mockResolvedValue(new Map());
   // Argument-aware: only returns facts for entity ids actually requested, mirroring the real
   // `fetchProductLineFacts` — a static mock would mask exactly the bug this file guards against
   // (facts leaking would look identical to facts correctly filtered to an empty request).

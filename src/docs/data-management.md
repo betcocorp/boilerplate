@@ -281,6 +281,11 @@ The following do not belong in `rag`:
 - UI-only temporary state
 - Anything that other legacy systems depend on directly
 
+`rag.product_line_web_url` (B0-1074) is one concrete example of a derived, read-only view over
+`legacy`: it computes betco.com product-page URLs from `legacy.products."OnWeb"` and
+`legacy.prod_line` at query time and is never written to directly — see
+`rag-data-relationships.md`'s "Product page URL derivation" section for the full join/predicate.
+
 ## Recommended Usage Rules
 
 - Never write RAG-specific fields back into `legacy`.

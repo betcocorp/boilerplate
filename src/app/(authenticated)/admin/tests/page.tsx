@@ -6,6 +6,7 @@ import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsAction
 import { CreateOrUploadTestDatasetDialog } from '~/components/admin/tests/CreateOrUploadTestDatasetDialog';
 import { GoldenSetMetricsCards } from '~/components/admin/tests/GoldenSetMetricsCards';
 import { OnlyGoldenToggle } from '~/components/admin/tests/OnlyGoldenToggle';
+import { PromptSearchDialog } from '~/components/admin/tests/PromptSearchDialog';
 import { RunGoldenTestsDialog } from '~/components/admin/tests/RunGoldenTestsDialog';
 import { Button } from '~/components/ui/button';
 import {
@@ -92,8 +93,9 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
               </h1>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <PromptSearchDialog />
               <Button asChild variant="outline">
-                <Link href="/admin/tests/reports">View reports</Link>
+                <Link href="/admin/tests/reports">Reports</Link>
               </Button>
               <RunGoldenTestsDialog returnPath="/admin/tests" />
               <CreateOrUploadTestDatasetDialog returnPath="/admin/tests" />

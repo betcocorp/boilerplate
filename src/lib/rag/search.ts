@@ -99,6 +99,18 @@ export type RagSearchMatch = {
   source_pk: string;
   document_kind: string;
   similarity: number;
+  /**
+   * Cohere cross-encoder relevance for this chunk under THIS query, and its 0-based position in
+   * the reranked candidate pool. Both null when the reranker did not run (unprovisioned, disabled,
+   * or the call failed and fell back to cosine order).
+   *
+   * Recorded because the rerank ordering is otherwise unrecoverable: it survives this function only
+   * as array position, and `selectCuratedMatches` immediately re-sorts by `similarity` (cosine).
+   * `similarity` is the PRE-rerank score and can never stand in for this — measuring rerank quality
+   * against it measures the stage the reranker was meant to improve on.
+   */
+  rerank_score?: number | null;
+  rerank_rank?: number | null;
 };
 
 export type RagSearchResult = {
@@ -1207,9 +1219,16 @@ export async function searchProductChunks(
 
     if (reranked && reranked.length > 0) {
       const scoreMap = new Map(reranked.map((r) => [r.chunk_id, r.relevance_score]));
-      rankedMatches = [...kindFilteredMatches].sort(
-        (a, b) => (scoreMap.get(b.chunk_id) ?? 0) - (scoreMap.get(a.chunk_id) ?? 0),
-      );
+      rankedMatches = [...kindFilteredMatches]
+        .sort((a, b) => (scoreMap.get(b.chunk_id) ?? 0) - (scoreMap.get(a.chunk_id) ?? 0))
+        // Stamp the ordering onto the rows themselves. Position alone does not survive: the very
+        // next consumer (`selectCuratedMatches`) re-sorts the survivors by cosine `similarity`, so
+        // without this the cross-encoder's ranking is gone by the time anything persists it.
+        .map((match, index) => ({
+          ...match,
+          rerank_score: scoreMap.get(match.chunk_id) ?? null,
+          rerank_rank: index,
+        }));
     }
   }
 

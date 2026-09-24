@@ -16,7 +16,8 @@ vi.mock('~/lib/api/bex-actor', () => ({
   getBexActor: vi.fn(),
 }));
 
-vi.mock('~/lib/conversations/conversation-owner', () => ({
+vi.mock('~/lib/conversations/conversation-owner', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/lib/conversations/conversation-owner')>()),
   resolveConversationOwnerUserId: vi.fn(),
 }));
 
@@ -277,6 +278,37 @@ describe('POST /api/bex/chat/stream', () => {
     expect(resolveConversationOwnerUserId).not.toHaveBeenCalled();
     expect(runBexChatTurn).toHaveBeenCalledWith(
       expect.objectContaining({ owner: undefined }),
+    );
+  });
+
+  it('B0-1084 — stamps a fresh act-as conversation to the acted-as user, recording the true admin', async () => {
+    vi.mocked(hasBexSession).mockResolvedValue(true);
+    vi.mocked(getBexActor).mockResolvedValue({
+      kind: 'user',
+      userId: 'acted-as-1',
+      canViewAll: false,
+    });
+    vi.mocked(resolveConversationOwnerUserId).mockResolvedValue('admin-true-1');
+    vi.mocked(runBexChatTurn).mockResolvedValue({
+      traceId: 'trace-test-1',
+      conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+      answerText: 'ok',
+      workflowRunId: 'f9dc4fb8-a4ce-4b81-8ce8-f4f7f9f16dea',
+      latestOpenaiResponseId: 'resp_123',
+      routingDecision: 'orchestrator',
+      timingBreakdown: { toolRounds: 1, cacheSource: null, searchMs: null },
+      confidence: 0.92,
+      sources: [],
+    } as never);
+
+    const response = await POST(makeRequest({ message: 'Hello' }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(runBexChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: { kind: 'user', userId: 'acted-as-1', actedByUserId: 'admin-true-1' },
+      }),
     );
   });
 

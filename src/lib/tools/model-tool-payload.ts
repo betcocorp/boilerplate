@@ -252,6 +252,8 @@ function buildModelSource(
     // B0-257 — citation provenance; the model needs these to cite the exact label/SDS.
     s3Key: source.s3Key,
     sourceUri: source.sourceUri,
+    // B0-1075 — derived betco.com product-page URL, forwarded as-is (already a plain string/undefined).
+    url: source.url,
   };
 }
 

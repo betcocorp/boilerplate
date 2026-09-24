@@ -1,7 +1,10 @@
 import { getServerSession } from 'next-auth';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveConversationOwnerUserId } from '~/lib/conversations/conversation-owner';
+import {
+  resolveConversationOwnerUserId,
+  resolveConversationStamp,
+} from '~/lib/conversations/conversation-owner';
 import { getUser } from '~/lib/permissions/repository';
 
 vi.mock('next-auth', () => ({
@@ -71,5 +74,28 @@ describe('resolveConversationOwnerUserId', () => {
     const result = await resolveConversationOwnerUserId();
 
     expect(result).toBeNull();
+  });
+});
+
+describe('resolveConversationStamp (B0-1084)', () => {
+  it('owns by the acted-as actor and records the true admin when acting-as', () => {
+    expect(resolveConversationStamp('acted-as-1', 'admin-true-1')).toEqual({
+      userId: 'acted-as-1',
+      actedByUserId: 'admin-true-1',
+    });
+  });
+
+  it('leaves actedByUserId null when not acting-as', () => {
+    expect(resolveConversationStamp('user-1', 'user-1')).toEqual({
+      userId: 'user-1',
+      actedByUserId: null,
+    });
+  });
+
+  it('leaves actedByUserId null when the true owner is unresolved', () => {
+    expect(resolveConversationStamp('user-1', null)).toEqual({
+      userId: 'user-1',
+      actedByUserId: null,
+    });
   });
 });

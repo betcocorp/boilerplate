@@ -21,10 +21,10 @@ type RouteParams = { params: Promise<{ id: string }> };
 
 /**
  * True when `actor` may read/manage `ownerUserId` (a conversation's `user_id`): owner, view-all,
- * service, or — B0-841 — the true (act-as-blind) session owner. A conversation created while
- * acting-as is always stamped with the true admin's id (see `resolveConversationOwnerUserId`), so
- * without this fallback the same admin's later act-as-aware `actor.userId` (the acted-as user) can
- * never match `ownerUserId` and the admin gets locked out of a conversation they just created.
+ * service, or — B0-841 — the true (act-as-blind) session owner. Conversations created while
+ * acting-as before B0-1084 were stamped with the true admin's id, so without this fallback the same
+ * admin's act-as-aware `actor.userId` (the acted-as user) could never match `ownerUserId`. Since
+ * B0-1084 new act-as conversations are owned by the acted-as user, so this is a legacy fallback.
  */
 function actorMayAccessConversation(
   actor: Exclude<BexActor, null>,
@@ -73,8 +73,8 @@ export async function GET(request: Request, ctx: RouteParams) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    // B0-841 — a conversation created via act-as is stamped with the true session owner (never
-    // the acted-as actor), so the access check must also allow that true owner through.
+    // B0-841 — conversations created via act-as before B0-1084 carry the true session owner's id,
+    // so the access check must also allow that true owner through.
     const trueOwnerUserId =
       actor.kind === 'user' ? await resolveConversationOwnerUserId() : null;
 
@@ -167,8 +167,8 @@ export async function DELETE(request: Request, ctx: RouteParams) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    // B0-841 — a conversation created via act-as is stamped with the true session owner (never
-    // the acted-as actor), so the access check must also allow that true owner through.
+    // B0-841 — conversations created via act-as before B0-1084 carry the true session owner's id,
+    // so the access check must also allow that true owner through.
     const trueOwnerUserId =
       actor.kind === 'user' ? await resolveConversationOwnerUserId() : null;
 

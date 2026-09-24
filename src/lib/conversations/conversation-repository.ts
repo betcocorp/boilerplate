@@ -8,7 +8,7 @@ export async function createConversation(
   input: Partial<
     Pick<
       TablesInsert<'agent_conversations'>,
-      'title' | 'workspace_id' | 'user_id' | 'source' | 'test_name'
+      'title' | 'workspace_id' | 'user_id' | 'source' | 'test_name' | 'acted_by_user_id'
     >
   > = {},
 ): Promise<AgentConversationRow> {
@@ -19,6 +19,7 @@ export async function createConversation(
       title: input.title ?? 'New conversation',
       workspace_id: input.workspace_id ?? null,
       user_id: input.user_id ?? null,
+      ...(input.acted_by_user_id ? { acted_by_user_id: input.acted_by_user_id } : {}),
       ...(input.source !== undefined ? { source: input.source } : {}),
       ...(input.test_name !== undefined ? { test_name: input.test_name } : {}),
     })

@@ -19,7 +19,8 @@ vi.mock('~/lib/api/bex-actor', () => ({
   getBexActor: vi.fn(),
 }));
 
-vi.mock('~/lib/conversations/conversation-owner', () => ({
+vi.mock('~/lib/conversations/conversation-owner', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/lib/conversations/conversation-owner')>()),
   resolveConversationOwnerUserId: vi.fn(),
 }));
 
@@ -256,10 +257,35 @@ describe('/api/bex/conversations', () => {
       const response = await POST(makeRequest('POST'));
 
       expect(response.status).toBe(200);
-      expect(createConversation).toHaveBeenCalledWith({ user_id: 'user-1' });
+      expect(createConversation).toHaveBeenCalledWith({
+        user_id: 'user-1',
+        acted_by_user_id: null,
+      });
     });
 
-    it('creates without an owner override when ownership cannot be resolved', async () => {
+    it('B0-1084 — stamps the acted-as user as owner and records the true admin as acted_by', async () => {
+      vi.mocked(getBexActor).mockResolvedValue({
+        kind: 'user',
+        userId: 'acted-as-1',
+        canViewAll: false,
+      });
+      vi.mocked(resolveConversationOwnerUserId).mockResolvedValue('admin-true-1');
+      vi.mocked(createConversation).mockResolvedValue({
+        id: 'conv-1',
+        title: 'New conversation',
+        updated_at: '2026-08-11T00:00:00.000Z',
+      } as never);
+
+      const response = await POST(makeRequest('POST'));
+
+      expect(response.status).toBe(200);
+      expect(createConversation).toHaveBeenCalledWith({
+        user_id: 'acted-as-1',
+        acted_by_user_id: 'admin-true-1',
+      });
+    });
+
+    it('stamps the actor with no acted_by when the true owner cannot be resolved', async () => {
       vi.mocked(getBexActor).mockResolvedValue({
         kind: 'user',
         userId: 'user-1',
@@ -275,7 +301,10 @@ describe('/api/bex/conversations', () => {
       const response = await POST(makeRequest('POST'));
 
       expect(response.status).toBe(200);
-      expect(createConversation).toHaveBeenCalledWith(undefined);
+      expect(createConversation).toHaveBeenCalledWith({
+        user_id: 'user-1',
+        acted_by_user_id: null,
+      });
     });
 
     it('does not resolve an owner for a service bearer', async () => {

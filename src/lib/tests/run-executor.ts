@@ -36,6 +36,8 @@ import {
   type ProviderFaultKind,
 } from './provider-fault';
 import { scheduleReportGeneration } from './report/schedule-report-generation';
+import { evaluateAndPersistRagRun } from './rag-evaluation/evaluate-run';
+import { scheduleRagEvaluation } from './rag-evaluation/schedule-rag-evaluation';
 import { parseTestRunConfig } from './run-config';
 import { runSingleTestItem } from './runner';
 import { canScheduleRunContinuation } from './schedule-run-continuation';
@@ -668,6 +670,22 @@ export async function executeTestRun(
 
   await updateTestRecord(testResult.test_id, {
     status: 'ready',
+  });
+
+  // Retrieval scoring is deterministic and best-effort. It runs after the answer run is already
+  // terminal, so a persistence or coverage failure can never rewrite the run's pass/fail status.
+  after(async () => {
+    try {
+      const scheduled = await scheduleRagEvaluation(testResult.id);
+      // Local development commonly has no CRON_SECRET; score directly rather than leaving the
+      // dashboard in a permanent pending state. Production uses the fresh API invocation above.
+      if (!scheduled.scheduled) await evaluateAndPersistRagRun(testResult.id);
+    } catch (error) {
+      logWarn('test_run_rag_evaluation_auto_error', {
+        testResultId: testResult.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   });
 
   // B0-517 — auto-populate `test_results.insights` on every terminal chat run so the

@@ -46,6 +46,48 @@ const DOCUMENT_COLUMNS =
   'id,title,document_kind,language_code,is_current,lifecycle_status';
 
 /**
+ * `rag.document.id` is a uuid column, so a non-uuid reaching an id filter makes Postgres throw for
+ * the whole query rather than simply not matching. Every id is screened with this before it is used
+ * (same shape as `UUID_PATTERN` in `~/lib/tests/retrieval-dataset.ts`).
+ */
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function ragClient() {
+  return getSupabaseServiceRoleClient().schema('rag');
+}
+
+type RagClient = ReturnType<typeof ragClient>;
+
+/** Fetch documents by id, in the caller's order. Unknown ids are simply absent. */
+async function fetchDocumentsByIds(
+  rag: RagClient,
+  ids: string[],
+): Promise<DocumentRow[]> {
+  const screened = ids.filter((id) => UUID_PATTERN.test(id));
+  if (screened.length === 0) {
+    return [];
+  }
+
+  const { data, error } = await rag
+    .from('document')
+    .select(DOCUMENT_COLUMNS)
+    .in('id', screened)
+    .limit(MAX_IDS);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const byId = new Map(
+    ((data ?? []) as DocumentRow[]).map((row) => [row.id, row]),
+  );
+  return screened
+    .map((id) => byId.get(id))
+    .filter((row): row is DocumentRow => row !== undefined);
+}
+
+/**
  * PostgREST parses `or=(…)` as a comma-separated list of parenthesised filters, so a comma,
  * parenthesis, quote or backslash in the typed text would change the filter rather than be
  * searched for. They are stripped instead of escaped — this is a search box, not stored data.
@@ -93,7 +135,9 @@ function toResponseRow(row: DocumentRow) {
  * Search matches `rag.document.title`, `rag.document.document_key` and the joined
  * `rag.entity` product identifiers (title / sku / product_key / product_line_key), and is bounded
  * at every hop: each underlying query carries a LIMIT and the merged result is capped at
- * `RESULT_LIMIT`. Live documents always rank ahead of superseded or non-active ones.
+ * `RESULT_LIMIT`. Live documents always rank ahead of superseded or non-active ones. A `q` that is
+ * itself a uuid is resolved by `rag.document.id` instead — Betco titles are filename-style SDS /
+ * label keys, so pasting the id from the document page URL is the workable labelling path.
  *
  * Auth is the Bex UI pattern — the NextAuth session (`hasBexSession`) plus the same sidebar-tests
  * permission gate the rest of `/admin/tests` uses. This is a browser surface only; machine callers
@@ -128,33 +172,24 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const rag = getSupabaseServiceRoleClient().schema('rag');
+  const rag = ragClient();
 
   try {
     if (parsed.data.ids) {
-      const ids = parsed.data.ids;
-      const { data, error } = await rag
-        .from('document')
-        .select(DOCUMENT_COLUMNS)
-        .in('id', ids)
-        .limit(MAX_IDS);
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      const rows = (data ?? []) as DocumentRow[];
-      const byId = new Map(rows.map((row) => [row.id, row]));
       // Preserve the caller's order so badges render in the order they were stored.
-      const documents = ids
-        .map((id) => byId.get(id))
-        .filter((row): row is DocumentRow => row !== undefined)
-        .map(toResponseRow);
-
-      return NextResponse.json({ documents });
+      const rows = await fetchDocumentsByIds(rag, parsed.data.ids);
+      return NextResponse.json({ documents: rows.map(toResponseRow) });
     }
 
     const term = parsed.data.q ?? '';
+
+    // Labellers copy the uuid straight out of the `/admin/products/rag/documents/[id]` URL, and
+    // that is exactly what `expected_sources` stores — resolve it by id instead of by title.
+    if (UUID_PATTERN.test(term)) {
+      const rows = await fetchDocumentsByIds(rag, [term]);
+      return NextResponse.json({ documents: rows.map(toResponseRow) });
+    }
+
     const pattern = likePattern(term);
     if (!pattern) {
       return NextResponse.json({ documents: [] });

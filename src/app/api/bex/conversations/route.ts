@@ -4,7 +4,10 @@ import { z } from 'zod';
 import { getBexActor } from '~/lib/api/bex-actor';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { resolveConversationOwnerAttribution } from '~/lib/conversations/conversation-owner-view';
-import { resolveConversationOwnerUserId } from '~/lib/conversations/conversation-owner';
+import {
+  resolveConversationOwnerUserId,
+  resolveConversationStamp,
+} from '~/lib/conversations/conversation-owner';
 import {
   createConversation,
   listAllConversations,
@@ -106,15 +109,20 @@ export async function POST(request: Request) {
   }
 
   try {
-    // B0-449 — ownership stamping always uses the true authenticated owner (ignoring act-as), never
-    // the scoping actor above. A missing match (no session-email/app_user row) falls back to the DB
-    // default (user_id null, source 'chat') exactly as before.
+    // B0-1084 — owned by the act-as-aware actor, so a conversation created while acting-as is that
+    // user's own; the true session user is recorded as `acted_by_user_id` when they differ.
     let row;
     if (actor.kind === 'service') {
       row = await createConversation();
     } else {
-      const ownerUserId = await resolveConversationOwnerUserId();
-      row = await createConversation(ownerUserId ? { user_id: ownerUserId } : undefined);
+      const stamp = resolveConversationStamp(
+        actor.userId,
+        await resolveConversationOwnerUserId(),
+      );
+      row = await createConversation({
+        user_id: stamp.userId,
+        acted_by_user_id: stamp.actedByUserId,
+      });
     }
     return NextResponse.json({
       ok: true,

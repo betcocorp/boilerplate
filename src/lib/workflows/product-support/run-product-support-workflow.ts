@@ -57,6 +57,7 @@ import {
 import { requireFloorProcedureTool } from '~/lib/workflows/product-support/floor-procedure-backstop';
 import { applyFloorRecoatRationaleBackstop } from '~/lib/workflows/product-support/floor-recoat-rationale-backstop';
 import { applyDilutionDwellBackstop } from '~/lib/workflows/product-support/dilution-dwell-backstop';
+import { applyProductPageUrlCitationBackstop } from '~/lib/workflows/product-support/product-page-url-citation-backstop';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   hasDecisiveCrossReferenceSignal,
@@ -197,6 +198,7 @@ import {
   type GateRecord,
   type PromptRecord,
   type ProductSupportFinalOutput,
+  type RetrievalCallRecord,
   type RetrievalConfigSummary,
   type RetrievedDocumentChunkRef,
   type ValidatorMode,
@@ -1422,6 +1424,7 @@ export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]):
           documentKind?: string;
           s3Key?: string | null;
           sourceUri?: string | null;
+          url?: string | null;
         }>;
       };
       for (const s of payload.sources ?? []) {
@@ -1447,6 +1450,10 @@ export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]):
           // citation object so label/SDS-derived directions/hazards/first-aid answers carry it.
           s3Key: s.s3Key ?? undefined,
           sourceUri: s.sourceUri ?? undefined,
+          // B0-1075: derived betco.com product-page URL. `kind` is deliberately left unset (not
+          // 'external') -- this source is still internal/corpus-backed, just with an extra public
+          // link; the Sources panel (B0-1076) renders it as a secondary affordance, not a web result.
+          url: typeof s.url === 'string' && s.url.trim() ? s.url : undefined,
           // B0-293: which corpus the source came from, so the Bex Sources panel can label it.
           ...(documentKind ? { documentKind } : {}),
         });
@@ -1514,6 +1521,70 @@ export function collectRetrievedDocumentChunksFromToolOutputs(
   }
 
   return [...map.values()];
+}
+
+/**
+ * The same tool outputs as `collectRetrievedDocumentChunksFromToolOutputs`, kept per call and in
+ * order instead of unioned into a deduped Map.
+ *
+ * Deliberately NOT a replacement for that function — both are written. The union answers "what did
+ * this turn retrieve" (and is what `/admin/observability`, `prompt-insights`, and
+ * `extractRetrievedDocumentChunks` read); this answers "what did each call return, in what order,
+ * and what did the cross-encoder think" — which the union cannot, and which cannot be reconstructed
+ * later from anything that gets persisted.
+ *
+ * Like the union, this is the forensic record: failed calls are skipped (they have no sources), but
+ * speculative and otherwise-unendorsed hits are kept (B0-635). A retrieval-quality metric that
+ * silently dropped the speculative call would be measuring a pipeline nobody runs.
+ */
+export function collectRetrievalCallsFromToolOutputs(
+  toolOutputs: RuntimeToolOutput[],
+): RetrievalCallRecord[] {
+  const calls: RetrievalCallRecord[] = [];
+
+  for (const entry of toolOutputs) {
+    if (!entry.ok) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(entry.output) as {
+        sources?: Array<{
+          documentId?: string;
+          chunkId?: string;
+          similarity?: number;
+          rerankScore?: number | null;
+          rerankRank?: number | null;
+        }>;
+      };
+
+      const chunks = (payload.sources ?? [])
+        .filter((s) => Boolean(s.documentId))
+        .map((s) => ({
+          document_id: s.documentId as string,
+          chunk_id: typeof s.chunkId === 'string' && s.chunkId.trim() ? s.chunkId.trim() : null,
+          similarity: typeof s.similarity === 'number' ? s.similarity : null,
+          rerank_score: typeof s.rerankScore === 'number' ? s.rerankScore : null,
+          rerank_rank: typeof s.rerankRank === 'number' ? s.rerankRank : null,
+        }));
+
+      // A call that returned no sources is not a retrieval call — recording it would pad the
+      // denominator of every per-call metric with rows that never had anything to rank.
+      if (chunks.length === 0) {
+        continue;
+      }
+
+      calls.push({
+        tool_name: entry.toolName,
+        call_id: entry.trace?.callId ?? null,
+        retrieval_strategy: entry.trace?.retrieval?.retrievalStrategy ?? null,
+        chunks,
+      });
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return calls;
 }
 
 /**
@@ -3256,6 +3327,10 @@ export async function runProductSupportWorkflow(input: {
       answerText: finalText,
       sources: [],
       retrieved_document_chunks: [],
+      // The early-decline gate short-circuits before any tool runs, so there is nothing to record.
+      // Empty, not absent: "this turn ran no retrieval" is a fact worth stating, and distinguishes
+      // a decline from a payload written before this field existed.
+      retrieval_calls: [],
       confidence: validation.confidence,
       workflowRunId: run.id,
       latestOpenaiResponseId: declineResponseId,
@@ -4605,6 +4680,7 @@ export async function runProductSupportWorkflow(input: {
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
     const retrieved_document_chunks =
       collectRetrievedDocumentChunksFromToolOutputs(toolOutputLog);
+    const retrieval_calls = collectRetrievalCallsFromToolOutputs(toolOutputLog);
     const sourceMeta = collectSourceMetaFromToolOutputs(toolOutputLog);
     /**
      * B0-885 — re-fetch the full (unwindowed) document body per distinct real source so both the
@@ -6207,6 +6283,21 @@ export async function runProductSupportWorkflow(input: {
       );
     }
 
+    /**
+     * B0-1075 follow-up — deterministic text-level patch, applied last (after the dilution dwell
+     * backstop above), attaching the derived betco.com product-page URL next to its `[doc:uuid]`
+     * citation in the model's own text. The model was never told a cited source can carry a `url`
+     * (see `product-page-url-citation-backstop.ts`), so it never surfaced one on its own — verified
+     * live 2026-09-23. Never invents a URL; only attaches one already present on a `sources` entry.
+     */
+    const productPageUrlCitationResult = applyProductPageUrlCitationBackstop({
+      draftAnswer: finalText,
+      sources,
+    });
+    if (productPageUrlCitationResult.applied) {
+      finalText = productPageUrlCitationResult.answer;
+    }
+
     // B0-493 — run-level retrieval configuration rollup, computed from the FINAL resolved trace
     // (every forced/injected search call included), not just the model's own calls.
     const retrievalConfig = extractRetrievalConfigFromToolTrace(resolvedToolTrace);
@@ -6220,6 +6311,7 @@ export async function runProductSupportWorkflow(input: {
       answerText: finalText,
       sources,
       retrieved_document_chunks,
+      retrieval_calls,
       confidence: validation.confidence,
       workflowRunId: run.id,
       latestOpenaiResponseId: finalResponseId,

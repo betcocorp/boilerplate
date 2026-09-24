@@ -177,8 +177,9 @@ async function listGoldenReportScoreRuns(
 }
 
 /**
- * THE reader for the health page's golden report-score-over-time panel: one aggregate score per
- * UTC day across ALL golden datasets' completed runs in the explicit inclusive window
+ * THE reader for the golden report-score-over-time panels (Mission Control and
+ * `/admin/tests/reports`): one aggregate score per UTC day across every ACTIVE golden dataset's
+ * (`listGoldenTests({ includeArchived: false })`) completed runs in the explicit inclusive window
  * (the page's `?from=`/`?to=` selection) plus day-over-day % change, narrowed to one version
  * bucket (`filterGoldenReportRunsByVersion` semantics; `undefined` = any version). Mirrors
  * `getGoldenSetTrendForWindow`'s shape so the health page composes both trends the same way.
@@ -190,7 +191,7 @@ export async function getGoldenReportScoreTrendForWindow(options: {
   const { window } = options;
   const days = enumerateGoldenReportScoreDays(utcDayOf(window.from), utcDayOf(window.to));
 
-  const tests = await listGoldenTests();
+  const tests = await listGoldenTests({ includeArchived: false });
   const testIds = tests.map((test) => test.id);
   if (testIds.length === 0) {
     return {

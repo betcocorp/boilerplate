@@ -21,6 +21,7 @@ vi.mock('~/lib/retrieval/document-assembly', () => ({
   assembleNeighborChunkBodies: vi.fn(),
   chunkWindowKey: (r: { documentId: string; chunkIndex: number }) => `${r.documentId}:${r.chunkIndex}`,
   fetchDocumentSourceRefs: vi.fn(),
+  fetchProductLineWebUrls: vi.fn(),
 }));
 vi.mock('~/lib/rag/entity-context', () => ({
   fetchEntityContexts: vi.fn(),
@@ -36,6 +37,7 @@ import { fetchEntityContexts } from '~/lib/rag/entity-context';
 import {
   assembleNeighborChunkBodies,
   fetchDocumentSourceRefs,
+  fetchProductLineWebUrls,
 } from '~/lib/retrieval/document-assembly';
 import { fetchProductLineFacts } from '~/lib/retrieval/product-facts';
 import { suppressNearDuplicateMatches } from '~/lib/retrieval/near-duplicate-suppression';
@@ -236,6 +238,7 @@ beforeEach(() => {
     },
   );
   vi.mocked(fetchDocumentSourceRefs).mockResolvedValue(new Map());
+  vi.mocked(fetchProductLineWebUrls).mockResolvedValue(new Map());
   vi.mocked(fetchEntityContexts).mockResolvedValue(new Map());
   vi.mocked(fetchProductLineFacts).mockResolvedValue(new Map());
 });
@@ -555,6 +558,93 @@ describe('B0-438 — only the winning pass is hydrated', () => {
       { documentId: 'doc-b2', chunkIndex: 0 },
       { documentId: 'doc-b1', chunkIndex: 0 },
     ]);
+  });
+});
+
+/**
+ * B0-1075 — derived betco.com product-page URL (`rag.product_line_web_url`, B0-1074) attached to
+ * `CuratedSource.productPageUrl`, keyed strictly off each source's OWN `productLineKey` (B0-700
+ * anchoring rule: never inferred from the query's resolved line).
+ */
+describe('B0-1075 — productPageUrl wiring', () => {
+  // Three anchored matches (matching the "anchored pass wins" scenario above) so the pass clears
+  // `minimumAnchoredEvidence` and wins outright -- a single-match anchored pass would instead
+  // trigger the broad-fallback path and hydrate the (unrelated) broad matches.
+  const anchoredMatches = [
+    match({ chunk_id: 'a1', similarity: 0.9, document_kind: 'label' }),
+    match({ chunk_id: 'a2', similarity: 0.8, document_kind: 'sds', section_type: 'hazard' }),
+    match({ chunk_id: 'a3', similarity: 0.7, document_kind: 'product_line_profile' }),
+  ];
+
+  it('match with a web URL: source carries productPageUrl', async () => {
+    stubSearches({
+      broad: { matches: LOCKING_BROAD_MATCHES, similaritySearchMs: 10 },
+      anchored: { matches: anchoredMatches, similaritySearchMs: 20 },
+    });
+    vi.mocked(fetchProductLineWebUrls).mockResolvedValue(
+      new Map([[LINE, 'https://www.betco.com/ProductsDetail?productID=ABC']]),
+    );
+
+    const result = await ragQueryForProductKnowledgeWithMeta({ query: 'triforce contact time' });
+
+    // All three anchored matches share LINE -- the lookup is keyed by distinct product_line_key.
+    expect(vi.mocked(fetchProductLineWebUrls)).toHaveBeenCalledWith([LINE]);
+    expect(result.sources.length).toBe(3);
+    expect(result.sources.every((s) => s.productLineKey === LINE)).toBe(true);
+    expect(result.sources.every((s) => s.productPageUrl === 'https://www.betco.com/ProductsDetail?productID=ABC')).toBe(
+      true,
+    );
+  });
+
+  it('match without a web URL (line has no web-visible item): productPageUrl is null', async () => {
+    stubSearches({
+      broad: { matches: LOCKING_BROAD_MATCHES, similaritySearchMs: 10 },
+      anchored: { matches: anchoredMatches, similaritySearchMs: 20 },
+    });
+    vi.mocked(fetchProductLineWebUrls).mockResolvedValue(new Map());
+
+    const result = await ragQueryForProductKnowledgeWithMeta({ query: 'triforce contact time' });
+
+    expect(result.sources.length).toBe(3);
+    expect(result.sources.every((s) => s.productPageUrl === null)).toBe(true);
+  });
+
+  it('null productLineKey: never gets a URL and is excluded from the lookup keys', async () => {
+    const withNullLine = [
+      anchoredMatches[0],
+      anchoredMatches[1],
+      match({ chunk_id: 'a3', similarity: 0.7, document_kind: 'knowledge', product_line_key: null }),
+    ];
+    stubSearches({
+      broad: { matches: LOCKING_BROAD_MATCHES, similaritySearchMs: 10 },
+      anchored: { matches: withNullLine, similaritySearchMs: 20 },
+    });
+    vi.mocked(fetchProductLineWebUrls).mockResolvedValue(
+      new Map([[LINE, 'https://www.betco.com/ProductsDetail?productID=ABC']]),
+    );
+
+    const result = await ragQueryForProductKnowledgeWithMeta({ query: 'triforce contact time' });
+
+    // The lookup is never asked about a null key.
+    expect(vi.mocked(fetchProductLineWebUrls)).toHaveBeenCalledWith([LINE]);
+    const nullLineSource = result.sources.find((s) => s.productLineKey === null);
+    expect(nullLineSource).toBeDefined();
+    expect(nullLineSource?.productPageUrl).toBeNull();
+  });
+
+  it('lookup failure degrades to no URLs rather than failing retrieval', async () => {
+    stubSearches({
+      broad: { matches: LOCKING_BROAD_MATCHES, similaritySearchMs: 10 },
+      anchored: { matches: anchoredMatches, similaritySearchMs: 20 },
+    });
+    // fetchProductLineWebUrls degrades internally on a Supabase error (see document-assembly.test.ts)
+    // -- from this module's perspective that surfaces as an empty map, never a rejection.
+    vi.mocked(fetchProductLineWebUrls).mockResolvedValue(new Map());
+
+    const result = await ragQueryForProductKnowledgeWithMeta({ query: 'triforce contact time' });
+
+    expect(result.sources.length).toBe(3);
+    expect(result.sources.every((s) => s.productPageUrl === null)).toBe(true);
   });
 });
 
