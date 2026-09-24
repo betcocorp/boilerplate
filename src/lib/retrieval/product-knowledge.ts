@@ -95,6 +95,15 @@ export type CuratedSource = {
   // byte-identical to it) with no downstream reader — `snippet` already covers the short-preview
   // use case. Removed rather than trimmed to keep exactly one canonical grounding field.
   similarity: number;
+  /**
+   * The cross-encoder's verdict on this chunk for this query (`RagSearchMatch.rerank_score` /
+   * `rerank_rank`), carried through because `selectCuratedMatches` re-sorts by `similarity` and
+   * would otherwise erase the reranked order before anything persists it. Null when the reranker
+   * did not run, and on synthetic sources (verified facts, lab reports) that never went through
+   * retrieval at all.
+   */
+  rerankScore: number | null;
+  rerankRank: number | null;
   documentKind: string;
   entityId: string | null;
   productLineKey: string | null;
@@ -433,6 +442,8 @@ function buildCuratedSource(
     documentBodyTokenEstimate: body?.estimatedTokens ?? null,
     documentBodyChunkIds: body?.chunkIds ?? (fallbackBody ? [match.chunk_id] : []),
     similarity: match.similarity,
+    rerankScore: match.rerank_score ?? null,
+    rerankRank: match.rerank_rank ?? null,
     documentKind: match.document_kind,
     entityId: match.entity_id,
     productLineKey: match.product_line_key,

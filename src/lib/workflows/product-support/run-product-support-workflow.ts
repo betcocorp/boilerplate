@@ -198,6 +198,7 @@ import {
   type GateRecord,
   type PromptRecord,
   type ProductSupportFinalOutput,
+  type RetrievalCallRecord,
   type RetrievalConfigSummary,
   type RetrievedDocumentChunkRef,
   type ValidatorMode,
@@ -1520,6 +1521,70 @@ export function collectRetrievedDocumentChunksFromToolOutputs(
   }
 
   return [...map.values()];
+}
+
+/**
+ * The same tool outputs as `collectRetrievedDocumentChunksFromToolOutputs`, kept per call and in
+ * order instead of unioned into a deduped Map.
+ *
+ * Deliberately NOT a replacement for that function — both are written. The union answers "what did
+ * this turn retrieve" (and is what `/admin/observability`, `prompt-insights`, and
+ * `extractRetrievedDocumentChunks` read); this answers "what did each call return, in what order,
+ * and what did the cross-encoder think" — which the union cannot, and which cannot be reconstructed
+ * later from anything that gets persisted.
+ *
+ * Like the union, this is the forensic record: failed calls are skipped (they have no sources), but
+ * speculative and otherwise-unendorsed hits are kept (B0-635). A retrieval-quality metric that
+ * silently dropped the speculative call would be measuring a pipeline nobody runs.
+ */
+export function collectRetrievalCallsFromToolOutputs(
+  toolOutputs: RuntimeToolOutput[],
+): RetrievalCallRecord[] {
+  const calls: RetrievalCallRecord[] = [];
+
+  for (const entry of toolOutputs) {
+    if (!entry.ok) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(entry.output) as {
+        sources?: Array<{
+          documentId?: string;
+          chunkId?: string;
+          similarity?: number;
+          rerankScore?: number | null;
+          rerankRank?: number | null;
+        }>;
+      };
+
+      const chunks = (payload.sources ?? [])
+        .filter((s) => Boolean(s.documentId))
+        .map((s) => ({
+          document_id: s.documentId as string,
+          chunk_id: typeof s.chunkId === 'string' && s.chunkId.trim() ? s.chunkId.trim() : null,
+          similarity: typeof s.similarity === 'number' ? s.similarity : null,
+          rerank_score: typeof s.rerankScore === 'number' ? s.rerankScore : null,
+          rerank_rank: typeof s.rerankRank === 'number' ? s.rerankRank : null,
+        }));
+
+      // A call that returned no sources is not a retrieval call — recording it would pad the
+      // denominator of every per-call metric with rows that never had anything to rank.
+      if (chunks.length === 0) {
+        continue;
+      }
+
+      calls.push({
+        tool_name: entry.toolName,
+        call_id: entry.trace?.callId ?? null,
+        retrieval_strategy: entry.trace?.retrieval?.retrievalStrategy ?? null,
+        chunks,
+      });
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return calls;
 }
 
 /**
@@ -3262,6 +3327,10 @@ export async function runProductSupportWorkflow(input: {
       answerText: finalText,
       sources: [],
       retrieved_document_chunks: [],
+      // The early-decline gate short-circuits before any tool runs, so there is nothing to record.
+      // Empty, not absent: "this turn ran no retrieval" is a fact worth stating, and distinguishes
+      // a decline from a payload written before this field existed.
+      retrieval_calls: [],
       confidence: validation.confidence,
       workflowRunId: run.id,
       latestOpenaiResponseId: declineResponseId,
@@ -4611,6 +4680,7 @@ export async function runProductSupportWorkflow(input: {
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
     const retrieved_document_chunks =
       collectRetrievedDocumentChunksFromToolOutputs(toolOutputLog);
+    const retrieval_calls = collectRetrievalCallsFromToolOutputs(toolOutputLog);
     const sourceMeta = collectSourceMetaFromToolOutputs(toolOutputLog);
     /**
      * B0-885 — re-fetch the full (unwindowed) document body per distinct real source so both the
@@ -6241,6 +6311,7 @@ export async function runProductSupportWorkflow(input: {
       answerText: finalText,
       sources,
       retrieved_document_chunks,
+      retrieval_calls,
       confidence: validation.confidence,
       workflowRunId: run.id,
       latestOpenaiResponseId: finalResponseId,

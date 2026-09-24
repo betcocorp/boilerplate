@@ -268,6 +268,11 @@ function sourcePayload(
     // keying off the old name, but is never the field a NEW reader should source from.
     similarity: s.similarity,
     confidence: s.similarity,
+    // B0-XXX — the cross-encoder's score and position for this chunk under this call's query.
+    // `similarity` above is the PRE-rerank cosine; these are the only record of what reranking
+    // actually did, and `sources[]` order here is cosine order, not reranked order.
+    rerankScore: s.rerankScore,
+    rerankRank: s.rerankRank,
     documentKind: s.documentKind,
     productLineKey: s.productLineKey,
     productKey: s.productKey,
@@ -298,6 +303,10 @@ function sourcePayload(
       documentBodyChunkIds: [VERIFIED_FACTS_SOURCE_ID],
       similarity: 1,
       confidence: 1,
+      // Synthetic source — never went through retrieval, so it has no rerank verdict. Null, not 0:
+      // a 0 would read as "the cross-encoder scored this lowest".
+      rerankScore: null,
+      rerankRank: null,
       documentKind: 'facts',
       productLineKey: null,
       productKey: null,

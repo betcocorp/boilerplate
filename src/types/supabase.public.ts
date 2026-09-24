@@ -1229,6 +1229,50 @@ export type Database = {
           },
         ]
       }
+      test_result_rag_evaluations: {
+        Row: {
+          claim_token: string | null
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          lease_expires_at: string | null
+          snapshot: Json | null
+          status: string
+          test_result_id: string
+          updated_at: string
+        }
+        Insert: {
+          claim_token?: string | null
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          lease_expires_at?: string | null
+          snapshot?: Json | null
+          status?: string
+          test_result_id: string
+          updated_at?: string
+        }
+        Update: {
+          claim_token?: string | null
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          lease_expires_at?: string | null
+          snapshot?: Json | null
+          status?: string
+          test_result_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_result_rag_evaluations_test_result_id_fkey"
+            columns: ["test_result_id"]
+            isOneToOne: true
+            referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       test_result_items: {
         Row: {
           agent_confidence: number | null

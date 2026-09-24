@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { productLineLockSchema, type ProductLineLock } from '~/lib/audit/trace';
 import {
   isGenerationRuntime,
@@ -7,7 +8,11 @@ import {
   criteriaGradingOutcomeSchema,
   type CriteriaGradingOutcome,
 } from '~/lib/tests/criteria-schemas';
-import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
+import {
+  retrievalCallRecordSchema,
+  type RetrievalCallRecord,
+  type RetrievedDocumentChunkRef,
+} from '~/lib/workflows/product-support/product-support-schemas';
 import {
   CONFIDENCE_PROVENANCES,
   resolveConfidenceProvenance,
@@ -326,6 +331,32 @@ export function extractRetrievedDocumentChunks(
     }
   }
   return [...map.values()];
+}
+
+/**
+ * The turn's per-tool-call retrieval (`final_output.retrieval_calls`), or `null` when the payload
+ * has none.
+ *
+ * `null` and `[]` are NOT interchangeable and callers must not collapse them. `[]` means the turn
+ * genuinely ran no retrieval (an early decline, say); `null` means the payload predates the field
+ * and what retrieval did is unknowable. A rank metric that treats `null` as `[]` scores every
+ * historical run as having retrieved nothing — a fabricated regression, indistinguishable from a
+ * real one on the chart.
+ *
+ * Validated with `safeParse` rather than trusted: `response_payload` is `Json`, written by an older
+ * build than the one reading it, and a partially-shaped `retrieval_calls` should read as absent
+ * rather than throw mid-export.
+ */
+export function extractRetrievalCalls(responsePayload: unknown): RetrievalCallRecord[] | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const raw = (responsePayload as Record<string, unknown>).retrieval_calls;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  const parsed = z.array(retrievalCallRecordSchema).safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 export type SearchRunMatch = {
