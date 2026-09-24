@@ -1,3 +1,33 @@
+# [6.12.0](https://github.com/betcocorp/bex2.0/compare/v6.11.0...v6.12.0) (2026-09-24)
+
+
+### Bug Fixes
+
+* **admin:** resolve a pasted uuid in document search ([8b22432](https://github.com/betcocorp/bex2.0/commit/8b22432a846c0aa18676c4e615b6a73cb03e65a1))
+* **B0-1075:** render product-page citations as real markdown links, scoped by document kind ([4b3ec88](https://github.com/betcocorp/bex2.0/commit/4b3ec88bd07f0136abbf58850847ca1bb06e8fcc))
+* **B0-1075:** surface betco.com product URL in the model's own citation line ([640065a](https://github.com/betcocorp/bex2.0/commit/640065aef0a784ffedcec67434cf1b22a84d9199))
+* **B0-1084:** own act-as bex conversations by the acted-as user ([006b4ea](https://github.com/betcocorp/bex2.0/commit/006b4ea983986a7b466caa2d79d485d399c1a001))
+* **tests:** bound workflow and retrieval lookup batches ([8f3bf0c](https://github.com/betcocorp/bex2.0/commit/8f3bf0c356e0574885f9e22719b1c6af342a04bc))
+
+
+### Features
+
+* **B0-1074:** add rag.product_line_web_url view deriving betco.com URLs from legacy OnWeb items ([62a8f7f](https://github.com/betcocorp/bex2.0/commit/62a8f7fa982d7b9fe5773c67701e9fd99e17b62d))
+* **B0-1075:** attach derived betco.com product URL to retrieval sources and tool payloads ([9a32d43](https://github.com/betcocorp/bex2.0/commit/9a32d439239a7aa43a316b42fd9aba7f8bc3909f))
+* **B0-1076:** render betco.com product-page link on internal sources in the Sources panel ([69816d1](https://github.com/betcocorp/bex2.0/commit/69816d123e0672f8920d338ea328889417207f3b))
+* **B0-1077:** verify derived product-page URLs with a soft-404-aware link checker ([5c9be7c](https://github.com/betcocorp/bex2.0/commit/5c9be7c071e0cda75dbd45fceecb402c64fb246b))
+* **B0-1080:** add prompt search dialog to /admin/tests ([199adad](https://github.com/betcocorp/bex2.0/commit/199adad5d7bf6da2b09c0453d860536b226ae127))
+* **evals:** add rank quality and entity recall harness ([ed74cfa](https://github.com/betcocorp/bex2.0/commit/ed74cfaf346fb6abb80bdbf2a509bd498b24a194))
+* **evals:** export expected-source judgements ([6e078ac](https://github.com/betcocorp/bex2.0/commit/6e078ac19e1e53299982bb47cce67744e0f553e7))
+* **rag:** add Docling comparison scripts ([9c8193d](https://github.com/betcocorp/bex2.0/commit/9c8193d622267799fd29763794d2ad8c631ca51a))
+* **rag:** capture per-call retrieval rank and rerank scores ([8076478](https://github.com/betcocorp/bex2.0/commit/8076478649092bce483a6dd4d3cef0f2aa3051fe))
+* **scripts:** add local Supabase dump, restore, and bootstrap ([e324572](https://github.com/betcocorp/bex2.0/commit/e324572cdedd28a4afb9372787120f4836441c1c))
+* **tests:** add quoted-span grounding metric ([33e3f1c](https://github.com/betcocorp/bex2.0/commit/33e3f1cd9361e3d1767d4207b43d638c2314a3ed))
+* **tests:** add retrieval dataset join and exporter ([55fb4f6](https://github.com/betcocorp/bex2.0/commit/55fb4f637076cd15962f5dfef626ca13bf808209))
+* **tests:** integrate RAG evaluation dashboard ([3464288](https://github.com/betcocorp/bex2.0/commit/34642889ae83a25f359c2dee7b6f0734b16052da))
+* **tests:** show test outcomes beside retrieval misses ([db80e81](https://github.com/betcocorp/bex2.0/commit/db80e812a89c02dd668f3bcac0c16c9a358c4618))
+* **tests:** support VCT CSV import format ([5545c7a](https://github.com/betcocorp/bex2.0/commit/5545c7a07af60ba459ffe8302faca850956e1d78))
+
 # [6.11.0](https://github.com/betcocorp/bex2.0/compare/v6.10.0...v6.11.0) (2026-09-21)
 
 
