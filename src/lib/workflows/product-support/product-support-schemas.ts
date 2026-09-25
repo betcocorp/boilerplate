@@ -486,6 +486,12 @@ export const runtimeConfigSchema = z.object({
    * `useReranker`, so the product-support retrieval path never actually reads `ENABLE_RERANKER`.
    */
   rerankerActive: z.boolean(),
+  /**
+   * Deep-dive "System query expansion" phase 2 (2026-09-24) — `RAG_MULTI_INTENT_ENABLED` settings
+   * row, resolved once per turn. OPTIONAL like the semantic-router fields below: absent means this
+   * run predates the flag existing, not `false`.
+   */
+  multiIntentQueryExpansionEnabled: z.boolean().optional(),
   /** `BEX_DISABLE_CONFIDENCE_GATING === 'true'` — the B0-452 master confidence-gate kill switch. */
   confidenceGatingDisabled: z.boolean(),
   /**

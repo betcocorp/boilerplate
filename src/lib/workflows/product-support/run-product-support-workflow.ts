@@ -2899,6 +2899,7 @@ export async function runProductSupportWorkflow(input: {
     aiSdkGenerationEnabled: useAiSdkGeneration,
     factToolEnforcementEnabled,
     rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
+    multiIntentQueryExpansionEnabled: await getBooleanSetting('RAG_MULTI_INTENT_ENABLED', false),
     confidenceGatingDisabled: await isConfidenceGatingDisabled(),
     recommendationConfidenceGatingDisabled: await isRecommendationConfidenceGatingDisabled(),
     agentMode,

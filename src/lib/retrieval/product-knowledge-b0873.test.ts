@@ -42,6 +42,7 @@ vi.mock('~/lib/settings/settings-service', () => ({
     minLockMargin: 0.06,
     highConfidenceAbsolute: 0.64,
   })),
+  getBooleanSetting: vi.fn(async (_key: string, fallback: boolean) => fallback),
 }));
 
 import { searchProductChunks } from '~/lib/rag/search';

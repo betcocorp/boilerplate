@@ -873,7 +873,12 @@ async function getCachedOrNewEmbedding(
   }
 
   const embeddingStartedAt = nowMs();
-  const { embedding, model: createdModel } = await createEmbedding(query, { model });
+  // The rewritten/expanded text is what the cache is keyed on (see the lookup above); embed that
+  // same text, not the raw query, so the LLM's abbreviation expansion actually reaches the vector
+  // instead of only ever driving cache-key matching.
+  const { embedding, model: createdModel } = await createEmbedding(rewrittenQuery || query, {
+    model,
+  });
   const embeddingLiteral = toVectorLiteral(embedding);
   embeddingCreateMs = elapsedMs(embeddingStartedAt);
 
