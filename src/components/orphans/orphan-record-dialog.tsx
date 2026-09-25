@@ -6,7 +6,6 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { ProductLinePicker, type ProductLinePickerValue } from '~/components/admin/ProductLinePicker';
-import { Button } from '~/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -62,7 +61,9 @@ function draftFor(value: unknown): string {
  * B0-1094 — one editable field of the underlying record. Renders the right control by the
  * field's *current* value type (string/number/boolean/object), with `product_line_key`
  * special-cased to `ProductLinePicker` (a GUID FK — free text is exactly the typo risk that
- * picker exists to prevent). Each field saves independently via `updateOrphanRecordField`.
+ * picker exists to prevent). No Save button — every control commits on blur (the whole
+ * container's blur for the picker, since selecting an option doesn't itself blur the trigger),
+ * comparing against the last-known-good `value` prop so an unchanged field is a no-op.
  */
 function EditableField({
   dataType,
@@ -100,23 +101,24 @@ function EditableField({
 
   if (field === 'product_line_key') {
     return (
-      <div className="space-y-2">
-        <ProductLinePicker
-          disabled={saving}
-          idPrefix={`orphan-field-${refId}-${field}`}
-          onChange={setPicker}
-          value={picker}
-        />
-        <Button
-          disabled={saving || !picker.productLineKey.trim() || picker.productLineKey.trim() === value}
-          onClick={() => save(picker.productLineKey.trim(), picker.productLineKey.trim())}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {saving ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : null}
-          Save
-        </Button>
+      <div
+        className="flex items-center gap-2"
+        onBlur={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+          const next = picker.productLineKey.trim();
+          if (!next || next === value) return;
+          void save(next, next);
+        }}
+      >
+        <div className="flex-1">
+          <ProductLinePicker
+            disabled={saving}
+            idPrefix={`orphan-field-${refId}-${field}`}
+            onChange={setPicker}
+            value={picker}
+          />
+        </div>
+        {saving ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
       </div>
     );
   }
@@ -133,34 +135,27 @@ function EditableField({
 
   if (value !== null && typeof value === 'object') {
     return (
-      <div className="space-y-2">
+      <div className="flex items-start gap-2">
         <Textarea
-          className="min-h-24 font-mono text-xs"
+          className="min-h-24 flex-1 font-mono text-xs"
           disabled={saving}
-          onChange={(e) => setDraft(e.target.value)}
-          value={draft}
-        />
-        <Button
-          disabled={saving || draft === draftFor(value)}
-          onClick={() => {
+          onBlur={() => {
+            if (draft === draftFor(value)) return;
             try {
               const parsed = JSON.parse(draft) as unknown;
               if (parsed === null || typeof parsed !== 'object') {
                 toast.error(`${field} must be a JSON object or array`);
                 return;
               }
-              save(parsed, JSON.stringify(parsed, null, 2));
+              void save(parsed, JSON.stringify(parsed, null, 2));
             } catch {
               toast.error('Invalid JSON');
             }
           }}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {saving ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : null}
-          Save
-        </Button>
+          onChange={(e) => setDraft(e.target.value)}
+          value={draft}
+        />
+        {saving ? <Loader2 className="mt-2 size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
       </div>
     );
   }
@@ -169,33 +164,29 @@ function EditableField({
   return (
     <div className="flex items-center gap-2">
       <Input
-        className="h-8 text-sm"
+        className="h-8 flex-1 border-border/30 bg-transparent text-sm hover:border-transparent hover:bg-input/50"
         disabled={saving}
-        onChange={(e) => setDraft(e.target.value)}
-        type={isNumber ? 'number' : 'text'}
-        value={draft}
-      />
-      <Button
-        disabled={saving || draft === draftFor(value)}
-        onClick={() => {
+        onBlur={() => {
+          if (draft === draftFor(value)) return;
           if (isNumber) {
             const n = Number(draft);
             if (draft.trim() !== '' && Number.isNaN(n)) {
               toast.error(`${field} must be a number`);
               return;
             }
-            save(draft.trim() === '' ? null : n, draftFor(draft.trim() === '' ? null : n));
+            void save(draft.trim() === '' ? null : n, draftFor(draft.trim() === '' ? null : n));
             return;
           }
-          save(draft === '' ? null : draft, draft);
+          void save(draft === '' ? null : draft, draft);
         }}
-        size="sm"
-        type="button"
-        variant="outline"
-      >
-        {saving ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : null}
-        Save
-      </Button>
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+        }}
+        type={isNumber ? 'number' : 'text'}
+        value={draft}
+      />
+      {saving ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
     </div>
   );
 }
