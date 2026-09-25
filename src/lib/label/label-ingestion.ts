@@ -18,7 +18,7 @@ export interface LegacyProductFields {
   SKU?: string | null;
   DSLProdLn?: string | null;
   Status?: string | null;
-  OnWeb?: string | null;
+  OnWeb?: number | null;
   User_Str_00?: string | null; // Photo URL field
 }
 
@@ -52,15 +52,12 @@ export function isProductDiscontinued(status: string | null | undefined): boolea
 }
 
 /**
- * Determine if a product is marked as active/available on web.
+ * Determine if a product is marked as available on web.
  *
- * Recognizes various forms: 'Y', 'YES', 'TRUE', '1' (case-insensitive)
- * Returns false for null or unrecognized values.
+ * legacy.products."OnWeb" is integer 0/1 (B0-1089); only 1 means on web.
  */
-export function isProductOnWeb(onWeb: string | null | undefined): boolean {
-  if (!onWeb) return false;
-  const upper = onWeb.toUpperCase();
-  return ['Y', 'YES', 'TRUE', '1'].includes(upper);
+export function isProductOnWeb(onWeb: number | null | undefined): boolean {
+  return onWeb === 1;
 }
 
 /**
@@ -105,7 +102,7 @@ export function buildLabelMetadata(
  * ```sql
  * SELECT * FROM legacy.products
  * WHERE "Status" IN ('Active', 'ACT', 'A')
- *   AND "OnWeb" IN ('Y', 'YES', 'TRUE', '1')
+ *   AND "OnWeb" = 1
  *   AND "ProductsKey" IS NOT NULL
  * LIMIT 100;
  * ```
@@ -131,7 +128,7 @@ export const LABEL_INGESTION_QUERY_HELP = `
     END as is_discontinued
   FROM legacy.products
   WHERE "Status" IN ('Active', 'ACT', 'A')
-    AND "OnWeb" IN ('Y', 'YES', 'TRUE', '1')
+    AND "OnWeb" = 1
     AND "ProductsKey" IS NOT NULL
   ORDER BY "ProductsKey"
   LIMIT 5000;

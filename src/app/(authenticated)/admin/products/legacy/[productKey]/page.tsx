@@ -629,9 +629,9 @@ export default async function ProductDetailsPage({
                     Status: {product.Status}
                   </span>
                 ) : null}
-                {product.OnWeb ? (
+                {product.OnWeb === 1 ? (
                   <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                    OnWeb: {product.OnWeb}
+                    On web
                   </span>
                 ) : null}
                 {product.SKU ? (
