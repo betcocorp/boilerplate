@@ -94,6 +94,44 @@ export const orphanRecordInputSchema = z.object({
 });
 export type OrphanRecordInput = z.infer<typeof orphanRecordInputSchema>;
 
+/**
+ * B0-1094 — a single-field edit from `OrphanRecordDialog`. `value` is intentionally untyped: the
+ * target column's own type (text/numeric/boolean/jsonb) is whatever the client sends, and the
+ * server action only checks the field isn't on the read-only denylist
+ * (`~/lib/orphans/orphan-record-editing.ts`) before writing it — there is no per-column schema to
+ * validate against without hand-maintaining one for four tables' worth of columns.
+ */
+export const updateOrphanRecordFieldInputSchema = z.object({
+  dataType: orphanDataTypeSchema,
+  refId: z.string().min(1),
+  field: z.string().min(1),
+  value: z.unknown(),
+});
+export type UpdateOrphanRecordFieldInput = z.infer<typeof updateOrphanRecordFieldInputSchema>;
+
+/** B0-1094 — clears `rag.entity.metadata->>'link_needs_review'` for a `product_link_unverified` row. */
+export const confirmEntityLinkInputSchema = z.object({
+  refId: z.string().min(1),
+});
+export type ConfirmEntityLinkInput = z.infer<typeof confirmEntityLinkInputSchema>;
+
+/** B0-1094 — creates a real, human-verified `rag.product_alias` row for a `product_no_alias` row. */
+export const createOrphanProductAliasInputSchema = z.object({
+  entityId: z.string().min(1),
+  productLineKey: z.string().trim().min(1, 'A product line is required.'),
+  alias: z.string().trim().min(1, 'An alias is required.').max(200),
+  aliasType: z.enum([
+    'acronym',
+    'common_name',
+    'sku',
+    'misspelling',
+    'legacy_name',
+    'synonym',
+    'title',
+  ]),
+});
+export type CreateOrphanProductAliasInput = z.infer<typeof createOrphanProductAliasInputSchema>;
+
 export interface OrphanRecordResult {
   dataType: OrphanDataType;
   refId: string;

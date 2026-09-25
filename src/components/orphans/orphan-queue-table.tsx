@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { OrphanReconcileAction } from '~/components/orphans/orphan-reconcile-action';
 import { OrphanRecordDialog } from '~/components/orphans/orphan-record-dialog';
 import { acknowledgeOrphan } from '~/lib/orphans/orphan-queue-actions';
 import { ORPHAN_CHECK_LABELS, type OrphanDataType, type OrphanQueueRow } from '~/types/orphans';
@@ -224,14 +225,17 @@ export function OrphanQueueTable({
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() => onAcknowledge(row)}
-                    >
-                      {row.ignored ? 'Restore' : 'Acknowledge'}
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      {!row.ignored ? <OrphanReconcileAction row={row} /> : null}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() => onAcknowledge(row)}
+                      >
+                        {row.ignored ? 'Restore' : 'Acknowledge'}
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
