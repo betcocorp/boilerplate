@@ -40,6 +40,11 @@ export const orphanQueueRowSchema = z.object({
   detail: z.record(z.string(), z.unknown()).nullable(),
   /** Non-English source document (B0-804) — expected, never chunked or retrieved. */
   translated: z.boolean(),
+  /**
+   * Deactivated source record, or a record on an inactive/empty product line (B0-1093,
+   * via B0-1091 `line_lifecycle`) — expected, not a defect.
+   */
+  inactive: z.boolean(),
   ignored: z.boolean(),
   ignore_reason: z.string().nullable(),
   ignored_by: z.string().nullable(),
@@ -62,6 +67,16 @@ export const orphanSummaryRowSchema = z.object({
    * translated row that was also acknowledged.
    */
   active_translated: z.number(),
+  /** How many of `total` are inactive (B0-1093). */
+  inactive: z.number(),
+  /** How many of `active` are inactive. */
+  active_inactive: z.number(),
+  /**
+   * How many of `active` are hidden by default — translated OR inactive, counted once.
+   * A row can be both (a deactivated Spanish SDS), so `active - active_hidden` is the
+   * count the queue table shows; subtracting the two flags separately would double-count.
+   */
+  active_hidden: z.number(),
 });
 export type OrphanSummaryRow = z.infer<typeof orphanSummaryRowSchema>;
 

@@ -28,6 +28,7 @@ interface Props {
   pageSize: number;
   includeIgnored: boolean;
   includeTranslated: boolean;
+  includeInactive: boolean;
   search: string;
 }
 
@@ -43,8 +44,10 @@ function translatedBadgeLabel(row: OrphanQueueRow): string {
 /**
  * Client table for a single data type's orphan queue. Search, a "show acknowledged"
  * toggle, a "show translated" toggle (B0-804 — non-English SDS/label documents are
- * hidden by default because they are never chunked or retrieved), pagination, and the
- * acknowledge / restore action per row.
+ * hidden by default because they are never chunked or retrieved), a "show inactive"
+ * toggle (B0-1093 — deactivated sources and inactive/empty product lines are hidden by
+ * default because they were retired on purpose), pagination, and the acknowledge /
+ * restore action per row.
  */
 export function OrphanQueueTable({
   dataType,
@@ -54,6 +57,7 @@ export function OrphanQueueTable({
   pageSize,
   includeIgnored,
   includeTranslated,
+  includeInactive,
   search,
 }: Props) {
   const router = useRouter();
@@ -62,6 +66,11 @@ export function OrphanQueueTable({
   const [searchInput, setSearchInput] = useState(search);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const hiddenKinds = [
+    includeTranslated ? null : 'translated documents',
+    includeInactive ? null : 'inactive records',
+  ].filter((kind): kind is string => kind !== null);
+  const hiddenNote = hiddenKinds.length > 0 ? `${hiddenKinds.join(' and ')} are hidden` : null;
 
   function pushParams(next: Record<string, string | null>) {
     const sp = new URLSearchParams(params.toString());
@@ -139,6 +148,16 @@ export function OrphanQueueTable({
           />
           Show translated
         </label>
+
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox
+            checked={includeInactive}
+            onCheckedChange={(value) =>
+              pushParams({ includeInactive: value === true ? '1' : null, page: '1' })
+            }
+          />
+          Show inactive
+        </label>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-border">
@@ -157,7 +176,7 @@ export function OrphanQueueTable({
               <TableRow>
                 <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
                   {`Nothing here — no ${includeIgnored ? '' : 'active '}orphans for this data type${
-                    includeTranslated ? '' : ' (translated documents are hidden)'
+                    hiddenNote ? ` (${hiddenNote})` : ''
                   }.`}
                 </TableCell>
               </TableRow>
@@ -170,6 +189,14 @@ export function OrphanQueueTable({
                       {row.translated ? (
                         <Badge variant="outline" title="Non-English document — never chunked or retrieved">
                           {translatedBadgeLabel(row)}
+                        </Badge>
+                      ) : null}
+                      {row.inactive ? (
+                        <Badge
+                          variant="outline"
+                          title="Deactivated source record or inactive/empty product line — retired on purpose"
+                        >
+                          Inactive
                         </Badge>
                       ) : null}
                     </div>

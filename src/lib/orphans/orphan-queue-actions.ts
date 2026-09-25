@@ -23,6 +23,8 @@ export interface OrphanQueueQuery {
   includeIgnored?: boolean;
   /** B0-804 — non-English source documents are hidden unless this is true. */
   includeTranslated?: boolean;
+  /** B0-1093 — deactivated documents / inactive product lines are hidden unless this is true. */
+  includeInactive?: boolean;
   search?: string;
   page?: number;
   pageSize?: number;
@@ -36,10 +38,11 @@ export interface OrphanQueueResult {
 }
 
 /**
- * Loosely-typed builders for the orphan views. `translated` (B0-804) exists on the live
- * views but not yet in `src/types/supabase.public.ts` — those files are generated and the
- * Supabase CLI is unauthenticated locally, so we cast instead of regenerating (same
- * pattern as `~/lib/rag/corpus-stats.ts`). The Zod schemas still validate every row.
+ * Loosely-typed builders for the orphan views. `translated` (B0-804) and `inactive`
+ * (B0-1093) were added to the live views and hand-edited into `src/types/supabase.public.ts`
+ * — those files are generated and the Supabase CLI is unauthenticated locally, so the cast
+ * stays as insurance against a stale regeneration (same pattern as
+ * `~/lib/rag/corpus-stats.ts`). The Zod schemas still validate every row.
  */
 type LooseQueueFilter = {
   eq: (column: string, value: string | boolean) => LooseQueueFilter;
@@ -70,7 +73,9 @@ export async function getOrphanSummary(): Promise<OrphanSummaryRow[]> {
   const supabase = getSupabaseServiceRoleClient();
   const { data, error } = await (
     supabase.from('orphan_queue_summary_v') as unknown as LooseSummaryClient
-  ).select('data_type, check_key, total, active, ignored, translated, active_translated');
+  ).select(
+    'data_type, check_key, total, active, ignored, translated, active_translated, inactive, active_inactive, active_hidden',
+  );
 
   if (error) throw new Error(`getOrphanSummary failed: ${error.message}`);
   return orphanSummaryRowSchema.array().parse(data ?? []);
@@ -78,14 +83,16 @@ export async function getOrphanSummary(): Promise<OrphanSummaryRow[]> {
 
 /**
  * Paginated orphan rows for a single data type. Hides acknowledged rows unless
- * includeIgnored, and hides translated (non-English) documents unless includeTranslated.
- * The two filters compose independently.
+ * includeIgnored, hides translated (non-English) documents unless includeTranslated, and
+ * hides inactive (deactivated source / inactive product line) rows unless includeInactive.
+ * The three filters compose independently.
  */
 export async function getOrphanQueue(query: OrphanQueueQuery): Promise<OrphanQueueResult> {
   const {
     dataType,
     includeIgnored = false,
     includeTranslated = false,
+    includeInactive = false,
     search,
     page = 1,
     pageSize = DEFAULT_PAGE_SIZE,
@@ -97,13 +104,14 @@ export async function getOrphanQueue(query: OrphanQueueQuery): Promise<OrphanQue
 
   let q = (supabase.from('orphan_queue_v') as unknown as LooseQueueClient)
     .select(
-      'check_key, data_type, ref_id, ref_label, detail, translated, ignored, ignore_reason, ignored_by, ignored_at',
+      'check_key, data_type, ref_id, ref_label, detail, translated, inactive, ignored, ignore_reason, ignored_by, ignored_at',
       { count: 'exact' },
     )
     .eq('data_type', dataType);
 
   if (!includeIgnored) q = q.eq('ignored', false);
   if (!includeTranslated) q = q.eq('translated', false);
+  if (!includeInactive) q = q.eq('inactive', false);
   if (search && search.trim()) q = q.ilike('ref_label', `%${search.trim()}%`);
 
   const { data, error, count } = await q
