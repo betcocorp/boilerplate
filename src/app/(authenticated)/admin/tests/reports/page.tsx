@@ -10,6 +10,7 @@ import {
 } from '~/components/admin/tests/ReportDatasetFilter';
 import { ReportFailTrendChart } from '~/components/admin/tests/ReportFailTrendChart';
 import { ReportFiltersToggle } from '~/components/admin/tests/ReportFiltersToggle';
+import { ReportGoldenArchiveFilter } from '~/components/admin/tests/ReportGoldenArchiveFilter';
 import { ReportMetricTrendChart } from '~/components/admin/tests/ReportMetricTrendChart';
 import {
   ReportModelFilter,
@@ -252,7 +253,11 @@ export default async function AdminTestReportsPage({
   const success = typeof params.success === 'string' ? params.success : null;
   const error = typeof params.error === 'string' ? params.error : null;
 
-  const allReports = await listAllReportRuns();
+  // Off by default (absent or anything other than "true") — golden+archived is an explicit opt-in.
+  const allGoldenParam = readSearchParam(params.allGolden).trim();
+  const showAllGolden = allGoldenParam === 'true';
+
+  const allReports = await listAllReportRuns({ onlyGolden: showAllGolden });
   const datasetOptions = buildDatasetOptions(allReports);
   const runByOptions = buildRunByOptions(allReports);
   const modelOptions = buildModelOptions(allReports);
@@ -371,6 +376,7 @@ export default async function AdminTestReportsPage({
                 options={modelOptions}
                 selectedModel={selectedModel}
               />
+              <ReportGoldenArchiveFilter allGolden={showAllGolden} />
               {selectedTestId || selectedRunBy || selectedModel ? (
                 <Link
                   className="shrink-0 text-sm text-sky-700 underline-offset-2 hover:underline"

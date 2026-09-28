@@ -802,16 +802,21 @@ const REPORT_RUN_ITEM_METRICS_PAGE_SIZE = 1000;
  * would hide them entirely. Score/grade come from the persisted `report_state.overall` (B0-609),
  * never recomputed from per-item data, so this page and `/admin/tests/[testId]` can't disagree.
  *
- * B0-688 — archived datasets are EXCLUDED: an archived test set disappears from this index the
- * same way it disappears from `/admin/tests`. The filter rides on the existing `tests!inner`
- * embed, so it is a join predicate applied in Postgres rather than a post-fetch filter in JS —
- * which also keeps the paging honest (a client-side filter would make each page's row count
- * mean something different from the rows returned).
+ * B0-688 — archived datasets are EXCLUDED by default: an archived test set disappears from this
+ * index the same way it disappears from `/admin/tests`. The filter rides on the existing
+ * `tests!inner` embed, so it is a join predicate applied in Postgres rather than a post-fetch
+ * filter in JS — which also keeps the paging honest (a client-side filter would make each page's
+ * row count mean something different from the rows returned).
+ *
+ * B0-1096 — `options.onlyGolden` switches to the opposite mode: golden test sets only, INCLUDING
+ * archived ones, so a golden set that was later archived stays reachable. This is a separate
+ * Postgres predicate on the same join, not a post-fetch filter, for the same paging reason above.
  */
-export async function listAllReportRuns(): Promise<ReportRunRow[]> {
+export async function listAllReportRuns(options?: { onlyGolden?: boolean }): Promise<ReportRunRow[]> {
   const supabase = getSupabaseServiceRoleClient();
+  const onlyGolden = options?.onlyGolden ?? false;
 
-  type EmbeddedTest = { id: string; name: string; is_archived: boolean };
+  type EmbeddedTest = { id: string; name: string; is_archived: boolean; is_golden: boolean };
   type RawRow = {
     id: string;
     test_id: string;
@@ -830,15 +835,16 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
   // Paged rather than a bare select so a growing history can never be silently truncated at
   // PostgREST's 1000-row cap (there are ~40 reported runs today).
   const rows = await fetchAllPages<RawRow>(REPORT_RUNS_PAGE_SIZE, async (from, to) => {
-    const result = await supabase
+    let query = supabase
       .from('test_results')
       .select(
-        'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived)',
+        'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived, is_golden)',
       )
-      .not('report_state', 'is', null)
-      .eq('tests.is_archived', false)
-      .order('started_at', { ascending: false })
-      .range(from, to);
+      .not('report_state', 'is', null);
+
+    query = onlyGolden ? query.eq('tests.is_golden', true) : query.eq('tests.is_archived', false);
+
+    const result = await query.order('started_at', { ascending: false }).range(from, to);
 
     return (assertNoError(result) || []) as unknown as RawRow[];
   });
