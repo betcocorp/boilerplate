@@ -4,7 +4,6 @@ import { Download, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
-import { AddPromptsToTestDialog } from '~/components/admin/tests/AddPromptsToTestDialog';
 import { CreateTestFromPromptsDialog } from '~/components/admin/tests/CreateTestFromPromptsDialog';
 import { DeleteTestPromptDialog } from '~/components/admin/tests/DeleteTestPromptDialog';
 import { EditTestItemDialog } from '~/components/admin/tests/EditTestItemDialog';
@@ -482,10 +481,10 @@ export function TestPromptsSection({
             </p>
           ) : null}
         </div>
-        <div className="flex w-full flex-wrap items-center gap-2 lg:max-w-4xl lg:flex-[0_1_56rem]">
+        <div className="flex w-full items-center gap-2 lg:max-w-2xl lg:flex-[0_1_44rem]">
           <Input
             autoComplete="off"
-            className="min-w-56 flex-1 rounded-2xl"
+            className="min-w-0 flex-1 rounded-2xl"
             id="test-prompts-filter"
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Filter by prompt text, row number, concepts, or sources…"
@@ -506,17 +505,11 @@ export function TestPromptsSection({
             Select golden-set prompts ({goldenItemIds.length})
           </Button>
           <CreateTestFromPromptsDialog
+            existingTests={mergeTargets}
             returnPath={returnPath}
             selectedTestItemIds={orderedSelectedIds}
             sourceTestId={testId}
             sourceTestName={datasetName}
-          />
-          <AddPromptsToTestDialog
-            returnPath={returnPath}
-            selectedTestItemIds={orderedSelectedIds}
-            sourceTestId={testId}
-            sourceTestName={datasetName}
-            targets={mergeTargets}
           />
           <Button
             aria-label="Download all test prompts as CSV"
