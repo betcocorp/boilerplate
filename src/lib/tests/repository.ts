@@ -244,6 +244,28 @@ export async function getTestById(testId: string) {
   return assertNoError(result) as TestRecord;
 }
 
+/** Lean row for the "Add to existing test set" target picker (B0-1098). */
+export type TestPickerOption = Pick<
+  TestRecord,
+  'id' | 'name' | 'is_golden' | 'row_count' | 'uploaded_at'
+>;
+
+/**
+ * Active (non-archived) tests, newest first, projected to the handful of columns a picker
+ * needs. Deliberately NOT `listTests`, whose completion/score rollups are far too heavy for a
+ * combobox that renders on every test detail page.
+ */
+export async function listTestPickerOptions(): Promise<TestPickerOption[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('tests')
+    .select('id, name, is_golden, row_count, uploaded_at')
+    .eq('is_archived', false)
+    .order('uploaded_at', { ascending: false });
+
+  return (assertNoError(result) || []) as TestPickerOption[];
+}
+
 const TEST_ITEMS_PAGE_SIZE = 1000;
 
 export type TestItemSuggestionRow = Pick<

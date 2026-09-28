@@ -36,6 +36,7 @@ import {
   buildEditedTestItemPayload,
   buildManualAddTestItemPayload,
 } from '~/lib/tests/manual-add-payload';
+import { planPromptMerge } from '~/lib/tests/merge-prompts';
 import {
   buildTestItemsFromScenarioSet,
   parseMultiTurnScenarioSetJson,
@@ -62,6 +63,7 @@ import {
 import { buildTestRunOptions } from '~/lib/tests/run-config';
 import { uploadTestCsvToS3 } from '~/lib/tests/storage';
 import { runCreatedRecordOrCleanup } from '~/lib/tests/upload-cleanup';
+import type { Json } from '~/types/supabase.public';
 
 function normalizeReturnPath(value: FormDataEntryValue | null, fallback: string) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -1068,6 +1070,197 @@ export async function createTestFromPromptsAction(formData: FormData) {
       `Created "${name}" with ${newItems.length} prompt${
         newItems.length === 1 ? '' : 's'
       } from ${sourceTest.name}.`,
+    ),
+  );
+}
+
+/** Existing `tests.metadata` when it is a plain object, else a fresh object — keeps `Json` typing. */
+function readMetadataObject(metadata: Json): { [key: string]: Json | undefined } {
+  if (metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)) {
+    return { ...metadata };
+  }
+  return {};
+}
+
+/**
+ * B0-1098 — copy the selected prompts of one test into an EXISTING test set. Prompts whose
+ * normalized text already lives in the target (or repeats within the selection) are skipped;
+ * the source is never modified. Selection order and copied columns mirror
+ * `createTestFromPromptsAction`; the dedupe/row_index rules live in `planPromptMerge`.
+ */
+export async function addPromptsToTestAction(formData: FormData) {
+  const sourceTestIdRaw = formData.get('sourceTestId');
+  const sourceTestId =
+    typeof sourceTestIdRaw === 'string' && sourceTestIdRaw.trim()
+      ? sourceTestIdRaw.trim()
+      : null;
+  const sourceReturnPath = sourceTestId
+    ? `/admin/tests/${sourceTestId}`
+    : '/admin/tests';
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    sourceReturnPath,
+  );
+
+  if (!sourceTestId) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing source test id.'));
+  }
+
+  const targetTestIdRaw = formData.get('targetTestId');
+  const targetTestId =
+    typeof targetTestIdRaw === 'string' && targetTestIdRaw.trim()
+      ? targetTestIdRaw.trim()
+      : null;
+  if (!targetTestId) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'Choose a test set to add the prompts to.',
+      ),
+    );
+  }
+
+  if (targetTestId === sourceTestId) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'Choose a different test set — these prompts are already in this one.',
+      ),
+    );
+  }
+
+  const rawIds = formData.getAll('testItemId');
+  const selectedIds = Array.from(
+    new Set(
+      rawIds
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0),
+    ),
+  );
+
+  if (selectedIds.length === 0) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'Select at least one prompt to add.'),
+    );
+  }
+
+  let sourceTest;
+  try {
+    sourceTest = await getTestById(sourceTestId);
+  } catch {
+    redirect(encodeMessage(returnPath, 'error', 'Source test not found.'));
+  }
+
+  let targetTest;
+  try {
+    targetTest = await getTestById(targetTestId);
+  } catch {
+    redirect(encodeMessage(returnPath, 'error', 'Target test not found.'));
+  }
+
+  if (targetTest.is_archived) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'That test set is archived. Unarchive it first or choose another.',
+      ),
+    );
+  }
+
+  const [sourceItems, targetItems, maxRowIndex] = await Promise.all([
+    getTestItemsByTestId(sourceTestId),
+    getTestItemsByTestId(targetTestId),
+    getMaxRowIndexForTest(targetTestId),
+  ]);
+
+  const plan = planPromptMerge({
+    selectedIds,
+    sourceItems,
+    targetItems,
+    nextRowIndex: maxRowIndex + 1,
+  });
+
+  if (plan.missingCount === selectedIds.length) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'None of the selected prompts belong to this dataset.',
+      ),
+    );
+  }
+
+  if (plan.toInsert.length === 0) {
+    const consideredCount = selectedIds.length - plan.missingCount;
+    redirect(
+      encodeMessage(
+        `/admin/tests/${targetTestId}`,
+        'success',
+        `All ${consideredCount} selected prompt${
+          consideredCount === 1 ? '' : 's'
+        } already exist in ${targetTest.name}; nothing was added.`,
+      ),
+    );
+  }
+
+  const rows = plan.toInsert.map(({ item, row_index }) => ({
+    test_id: targetTestId,
+    row_index,
+    prompt: item.prompt,
+    expected_canonical_products: item.expected_canonical_products,
+    expected_reason_code: item.expected_reason_code,
+    source: item.source,
+    priority: item.priority,
+    ideal_response: item.ideal_response,
+    expected_concepts: item.expected_concepts,
+    minimum_concepts: item.minimum_concepts,
+    expected_sources: item.expected_sources,
+    should_cite: item.should_cite,
+    input_payload: item.input_payload,
+    metadata: item.metadata,
+  }));
+
+  await insertTestItems(rows);
+
+  const existingMetadata = readMetadataObject(targetTest.metadata);
+  const priorMerges = Array.isArray(existingMetadata.merged_from)
+    ? existingMetadata.merged_from
+    : [];
+  const mergedFrom: Json[] = [
+    ...priorMerges,
+    {
+      test_id: sourceTestId,
+      test_name: sourceTest.name,
+      item_count: rows.length,
+      merged_at: new Date().toISOString(),
+    },
+  ];
+  const metadata: Json = { ...existingMetadata, merged_from: mergedFrom };
+
+  await updateTestRecord(targetTestId, {
+    row_count: targetItems.length + rows.length,
+    metadata,
+  });
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${sourceTestId}`);
+  revalidatePath(`/admin/tests/${targetTestId}`);
+  redirect(
+    encodeMessage(
+      `/admin/tests/${targetTestId}`,
+      'success',
+      `Added ${rows.length} prompt${rows.length === 1 ? '' : 's'} from ${
+        sourceTest.name
+      } to ${targetTest.name}.${
+        plan.skippedDuplicateCount > 0
+          ? ` Skipped ${plan.skippedDuplicateCount} duplicate${
+              plan.skippedDuplicateCount === 1 ? '' : 's'
+            }.`
+          : ''
+      }`,
     ),
   );
 }

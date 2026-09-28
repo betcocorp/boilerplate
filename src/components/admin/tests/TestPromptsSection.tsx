@@ -4,6 +4,7 @@ import { Download, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
+import { AddPromptsToTestDialog } from '~/components/admin/tests/AddPromptsToTestDialog';
 import { CreateTestFromPromptsDialog } from '~/components/admin/tests/CreateTestFromPromptsDialog';
 import { DeleteTestPromptDialog } from '~/components/admin/tests/DeleteTestPromptDialog';
 import { EditTestItemDialog } from '~/components/admin/tests/EditTestItemDialog';
@@ -27,6 +28,7 @@ import {
   formatSimilarityPercent,
 } from '~/lib/tests/format';
 import type { GoldenSetItemOrigin } from '~/lib/tests/golden-set';
+import type { TestPickerOption } from '~/lib/tests/repository';
 import { escapeCsvCell, sanitizeCsvFilename } from '~/lib/utils/csv';
 import type { Json } from '~/types/supabase.public';
 
@@ -290,6 +292,8 @@ type TestPromptsSectionProps = {
    * simply absent and render as unresolved.
    */
   documentTitlesById: Record<string, string>;
+  /** B0-1098 — active tests the selection can be appended to (the current test already excluded). */
+  mergeTargets: TestPickerOption[];
 };
 
 export function TestPromptsSection({
@@ -303,6 +307,7 @@ export function TestPromptsSection({
   suggestionLists,
   goldenOriginsByItemId,
   documentTitlesById,
+  mergeTargets,
 }: TestPromptsSectionProps) {
   const [query, setQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -477,10 +482,10 @@ export function TestPromptsSection({
             </p>
           ) : null}
         </div>
-        <div className="flex w-full items-center gap-2 lg:max-w-2xl lg:flex-[0_1_44rem]">
+        <div className="flex w-full flex-wrap items-center gap-2 lg:max-w-4xl lg:flex-[0_1_56rem]">
           <Input
             autoComplete="off"
-            className="min-w-0 flex-1 rounded-2xl"
+            className="min-w-56 flex-1 rounded-2xl"
             id="test-prompts-filter"
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Filter by prompt text, row number, concepts, or sources…"
@@ -505,6 +510,13 @@ export function TestPromptsSection({
             selectedTestItemIds={orderedSelectedIds}
             sourceTestId={testId}
             sourceTestName={datasetName}
+          />
+          <AddPromptsToTestDialog
+            returnPath={returnPath}
+            selectedTestItemIds={orderedSelectedIds}
+            sourceTestId={testId}
+            sourceTestName={datasetName}
+            targets={mergeTargets}
           />
           <Button
             aria-label="Download all test prompts as CSV"
