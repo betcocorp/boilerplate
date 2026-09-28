@@ -1,3 +1,33 @@
+# [7.0.0](https://github.com/betcocorp/bex2.0/compare/v6.12.0...v7.0.0) (2026-09-28)
+
+
+* feat(B0-1089)!: make legacy.products.OnWeb an integer 0/1 flag ([1886bb8](https://github.com/betcocorp/bex2.0/commit/1886bb887eaef6c039e3aed8f10bb92b8ab54740))
+
+
+### Bug Fixes
+
+* **B0-1083:** embed the LLM query rewrite instead of discarding it, wire multi-intent expansion into live chat ([7c017e5](https://github.com/betcocorp/bex2.0/commit/7c017e5c5884279eef1fa9561bcf6095e7c5eca5))
+* **B0-1089:** normalize legacy.products.OnWeb to '0'/'1' only ([f44aaab](https://github.com/betcocorp/bex2.0/commit/f44aaab6fc70afa8f7221c1df1d3206f8e93003e))
+* **B0-1091:** restore rich product-line profile view, add line lifecycle, exclude dead lines ([9d3410d](https://github.com/betcocorp/bex2.0/commit/9d3410d996cee98cc8dcd937212a105e3fa4ffc8))
+* **B0-1094:** save orphan record fields on blur, no Save button ([dd5423a](https://github.com/betcocorp/bex2.0/commit/dd5423a449fea8b474370b3abc862e0e82070591))
+
+
+### Features
+
+* **B0-1087:** add paired A/B script for signals-consolidation impact ([6a597e2](https://github.com/betcocorp/bex2.0/commit/6a597e25a21586a16f9d19d22d081f15f993b49f))
+* **B0-1087:** add queryable generated columns for report overall score ([5e12b2f](https://github.com/betcocorp/bex2.0/commit/5e12b2f62a09acdfe5fcdd51d0981a38c80eafae))
+* **B0-1092:** link orphan Betco labels and SDS to product lines by ERP line id ([3aad97e](https://github.com/betcocorp/bex2.0/commit/3aad97e6a52f9f0c9405bee02687c00f484e9bb8))
+* **B0-1093:** flag inactive-line rows in the orphan monitor and add a Show inactive toggle ([4cc9910](https://github.com/betcocorp/bex2.0/commit/4cc99105162ed5adc61e7a8e48e41100e63380ad))
+* **B0-1094:** add real reconciliation actions and inline editing to orphan monitor ([0bb8c9e](https://github.com/betcocorp/bex2.0/commit/0bb8c9e6589ba4fca3c1e2a9f413490e2ba5ef0c))
+
+
+### BREAKING CHANGES
+
+* any external reader comparing "OnWeb" to the text '1'
+or to Y/YES/TRUE must compare against integer 1; nulls no longer occur.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
 # [6.12.0](https://github.com/betcocorp/bex2.0/compare/v6.11.0...v6.12.0) (2026-09-24)
 
 
