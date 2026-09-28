@@ -19,7 +19,7 @@ import {
   resolveProductLineFromMatches,
   type ProductLineResolutionResult,
 } from '~/lib/retrieval/product-line-resolution';
-import { getProductLineLockThresholds } from '~/lib/settings/settings-service';
+import { getBooleanSetting, getProductLineLockThresholds } from '~/lib/settings/settings-service';
 import {
   DEFAULT_MIN_SIMILARITY,
   selectCuratedMatches,
@@ -1051,6 +1051,12 @@ async function runProductKnowledgeQuery(input: {
     resolveRequiredDocumentKinds(input.query, sectionType, input.regulatedSectionIntent);
   const excludeKnowledgeCategories = input.excludeKnowledgeCategories ?? [];
   const proceduralIntent = input.proceduralIntent === true;
+  // Deep-dive "System query expansion" phase 2 (2026-09-24) — expandQueryIntents existed but was
+  // never reachable from live chat (only the admin RAG test page and the eval-run executor set
+  // this). Applied only to the primary content searches below (the ones that answer the user's
+  // actual question), not the knowledge-supplement/line-tier-widening passes, which search a
+  // deliberately different or broader query and would just double the LLM-call cost per turn.
+  const multiIntentEnabled = await getBooleanSetting('RAG_MULTI_INTENT_ENABLED', false);
   // B0-873 — a regulated (label-governed) question never gets unlocked knowledge merged into a
   // locked retrieval, whatever its shape: "how long is the contact time for <SKU>" is procedural
   // by phrasing but its answer must come from the locked line's label/SDS alone (B0-693).
@@ -1080,6 +1086,7 @@ async function runProductKnowledgeQuery(input: {
         scope: 'all',
         useHybrid: true,
         useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+        useMultiIntent: multiIntentEnabled,
         excludeKnowledgeCategories,
       }),
       knowledgeSupplementEligible
@@ -1241,6 +1248,7 @@ async function runProductKnowledgeQuery(input: {
       scope: 'products',
       useHybrid: true,
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+      useMultiIntent: multiIntentEnabled,
       excludeKnowledgeCategories,
     });
 
@@ -1305,6 +1313,7 @@ async function runProductKnowledgeQuery(input: {
     scope: 'all',
     useHybrid: true,
     useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+    useMultiIntent: multiIntentEnabled,
     excludeKnowledgeCategories,
   });
 
@@ -1418,6 +1427,7 @@ async function runProductKnowledgeQuery(input: {
       scope: 'all',
       useHybrid: true,
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+      useMultiIntent: multiIntentEnabled,
       excludeKnowledgeCategories,
     }),
     // B0-873 — the anchored search below is line-filtered in SQL exactly like the explicit-key

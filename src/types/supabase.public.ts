@@ -1840,18 +1840,25 @@ export type Database = {
           check_key: string | null
           data_type: string | null
           detail: Json | null
+          inactive: boolean | null
           ref_id: string | null
           ref_label: string | null
+          translated: boolean | null
         }
         Relationships: []
       }
       orphan_queue_summary_v: {
         Row: {
           active: number | null
+          active_hidden: number | null
+          active_inactive: number | null
+          active_translated: number | null
           check_key: string | null
           data_type: string | null
           ignored: number | null
+          inactive: number | null
           total: number | null
+          translated: number | null
         }
         Relationships: []
       }
@@ -1864,8 +1871,10 @@ export type Database = {
           ignored: boolean | null
           ignored_at: string | null
           ignored_by: string | null
+          inactive: boolean | null
           ref_id: string | null
           ref_label: string | null
+          translated: boolean | null
         }
         Relationships: []
       }

@@ -521,7 +521,7 @@ export type Database = {
           MetaKeyWords: string | null
           MSRP: number | null
           OnBuilders: string | null
-          OnWeb: string | null
+          OnWeb: number
           ProductsKey: string | null
           SKU: string | null
           SLDescr: string | null
@@ -585,7 +585,7 @@ export type Database = {
           MetaKeyWords?: string | null
           MSRP?: number | null
           OnBuilders?: string | null
-          OnWeb?: string | null
+          OnWeb?: number
           ProductsKey?: string | null
           SKU?: string | null
           SLDescr?: string | null
@@ -649,7 +649,7 @@ export type Database = {
           MetaKeyWords?: string | null
           MSRP?: number | null
           OnBuilders?: string | null
-          OnWeb?: string | null
+          OnWeb?: number
           ProductsKey?: string | null
           SKU?: string | null
           SLDescr?: string | null

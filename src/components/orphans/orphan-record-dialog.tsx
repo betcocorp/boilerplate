@@ -1,8 +1,11 @@
 'use client';
 
+import { Loader2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { ProductLinePicker, type ProductLinePickerValue } from '~/components/admin/ProductLinePicker';
 import {
   Dialog,
   DialogContent,
@@ -10,9 +13,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '~/components/ui/dialog';
+import { Input } from '~/components/ui/input';
 import { ScrollArea } from '~/components/ui/scroll-area';
 import { Spinner } from '~/components/ui/spinner';
-import { getOrphanRecord } from '~/lib/orphans/orphan-queue-actions';
+import { Switch } from '~/components/ui/switch';
+import { Textarea } from '~/components/ui/textarea';
+import { getOrphanRecord, updateOrphanRecordField } from '~/lib/orphans/orphan-queue-actions';
+import { isOrphanRecordFieldEditable } from '~/lib/orphans/orphan-record-editing';
+import { getErrorMessage } from '~/lib/utils';
 import {
   ORPHAN_DATA_TYPE_LABELS,
   type OrphanDataType,
@@ -41,14 +49,159 @@ function isMultiline(value: unknown): boolean {
   );
 }
 
+/** Draft text for a field's edit control — the inverse of `formatValue` for jsonb/number fields. */
+function draftFor(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  return String(value);
+}
+
 /**
- * Makes an orphan row's GUID clickable: opens a dialog that fetches and shows the entire
- * underlying record (document body + every field). Fetch is lazy — only on first open.
+ * B0-1094 — one editable field of the underlying record. Renders the right control by the
+ * field's *current* value type (string/number/boolean/object), with `product_line_key`
+ * special-cased to `ProductLinePicker` (a GUID FK — free text is exactly the typo risk that
+ * picker exists to prevent). No Save button — every control commits on blur (the whole
+ * container's blur for the picker, since selecting an option doesn't itself blur the trigger),
+ * comparing against the last-known-good `value` prop so an unchanged field is a no-op.
+ */
+function EditableField({
+  dataType,
+  refId,
+  field,
+  value,
+  onSaved,
+}: {
+  dataType: OrphanDataType;
+  refId: string;
+  field: string;
+  value: unknown;
+  onSaved: (next: unknown) => void;
+}) {
+  const [draft, setDraft] = useState(() => draftFor(value));
+  const [picker, setPicker] = useState<ProductLinePickerValue>({
+    productLineKey: typeof value === 'string' ? value : '',
+    title: '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function save(nextValue: unknown, nextDraft: string) {
+    setSaving(true);
+    try {
+      await updateOrphanRecordField({ dataType, refId, field, value: nextValue });
+      onSaved(nextValue);
+      setDraft(nextDraft);
+      toast.success(`Saved ${field}`);
+    } catch (err) {
+      toast.error(getErrorMessage(err, `Failed to save ${field}`));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (field === 'product_line_key') {
+    return (
+      <div
+        className="flex items-center gap-2"
+        onBlur={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+          const next = picker.productLineKey.trim();
+          if (!next || next === value) return;
+          void save(next, next);
+        }}
+      >
+        <div className="flex-1">
+          <ProductLinePicker
+            disabled={saving}
+            idPrefix={`orphan-field-${refId}-${field}`}
+            onChange={setPicker}
+            value={picker}
+          />
+        </div>
+        {saving ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
+      </div>
+    );
+  }
+
+  if (typeof value === 'boolean') {
+    return (
+      <Switch
+        checked={value}
+        disabled={saving}
+        onCheckedChange={(checked) => save(checked, String(checked))}
+      />
+    );
+  }
+
+  if (value !== null && typeof value === 'object') {
+    return (
+      <div className="flex items-start gap-2">
+        <Textarea
+          className="min-h-24 flex-1 font-mono text-xs"
+          disabled={saving}
+          onBlur={() => {
+            if (draft === draftFor(value)) return;
+            try {
+              const parsed = JSON.parse(draft) as unknown;
+              if (parsed === null || typeof parsed !== 'object') {
+                toast.error(`${field} must be a JSON object or array`);
+                return;
+              }
+              void save(parsed, JSON.stringify(parsed, null, 2));
+            } catch {
+              toast.error('Invalid JSON');
+            }
+          }}
+          onChange={(e) => setDraft(e.target.value)}
+          value={draft}
+        />
+        {saving ? <Loader2 className="mt-2 size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
+      </div>
+    );
+  }
+
+  const isNumber = typeof value === 'number';
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        className="h-8 flex-1 border-border/30 bg-transparent text-sm hover:border-transparent hover:bg-input/50"
+        disabled={saving}
+        onBlur={() => {
+          if (draft === draftFor(value)) return;
+          if (isNumber) {
+            const n = Number(draft);
+            if (draft.trim() !== '' && Number.isNaN(n)) {
+              toast.error(`${field} must be a number`);
+              return;
+            }
+            void save(draft.trim() === '' ? null : n, draftFor(draft.trim() === '' ? null : n));
+            return;
+          }
+          void save(draft === '' ? null : draft, draft);
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+        }}
+        type={isNumber ? 'number' : 'text'}
+        value={draft}
+      />
+      {saving ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
+    </div>
+  );
+}
+
+/**
+ * Makes an orphan row's GUID clickable: opens a dialog that fetches the entire underlying
+ * record (document body + every field) and lets every non-read-only field be edited and saved
+ * back to its own table in place (B0-1094) — this used to be a pure viewer. Fetch is lazy —
+ * only on first open.
  */
 export function OrphanRecordDialog({ dataType, refId, label }: Props) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<OrphanRecordResult | null>(null);
+  const router = useRouter();
 
   function onOpenChange(next: boolean) {
     setOpen(next);
@@ -64,6 +217,11 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
         })
         .finally(() => setLoading(false));
     }
+  }
+
+  function handleFieldSaved(key: string, next: unknown) {
+    setResult((prev) => (prev?.record ? { ...prev, record: { ...prev.record, [key]: next } } : prev));
+    router.refresh();
   }
 
   const record = result?.record ?? null;
@@ -84,7 +242,7 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
         type="button"
         onClick={() => onOpenChange(true)}
         className="cursor-pointer font-mono text-xs text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-        title="View full record"
+        title="View & edit full record"
       >
         {refId}
       </button>
@@ -117,9 +275,19 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
                   <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {key}
                   </h3>
-                  <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/40 p-3 text-xs">
-                    {String(value)}
-                  </pre>
+                  {isOrphanRecordFieldEditable(dataType, key) ? (
+                    <EditableField
+                      dataType={dataType}
+                      field={key}
+                      onSaved={(next) => handleFieldSaved(key, next)}
+                      refId={refId}
+                      value={value}
+                    />
+                  ) : (
+                    <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/40 p-3 text-xs">
+                      {String(value)}
+                    </pre>
+                  )}
                 </section>
               ))}
 
@@ -130,7 +298,15 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
                       {key}
                     </dt>
                     <dd className="min-w-0">
-                      {isMultiline(value) ? (
+                      {isOrphanRecordFieldEditable(dataType, key) ? (
+                        <EditableField
+                          dataType={dataType}
+                          field={key}
+                          onSaved={(next) => handleFieldSaved(key, next)}
+                          refId={refId}
+                          value={value}
+                        />
+                      ) : isMultiline(value) ? (
                         <pre className="whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/40 p-2 text-xs">
                           {formatValue(value)}
                         </pre>

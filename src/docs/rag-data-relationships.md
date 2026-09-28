@@ -201,8 +201,9 @@ https://www.betco.com/ProductsDetail?productID=<uppercase legacy.prod_line."Prod
 ```
 e.g. line `311` (Fight Bac RTU) → `https://www.betco.com/ProductsDetail?productID=CA352FDA-543F-4D28-BB61-371247F351D4`.
 
-**Predicate — which lines get a URL at all:** `legacy.products."OnWeb" = '1'` (exact string match;
-`'0'`, `null`, and ~27 rows of garbage text are all excluded — never treated as web-visible). The
+**Predicate — which lines get a URL at all:** `legacy.products."OnWeb" = 1`. Since B0-1089 the
+column is `integer NOT NULL DEFAULT 0` with a CHECK constraint allowing only `0` or `1` (the
+nulls and ~27 rows of column-shifted export text it used to carry were normalized to `0`). The
 item→line link is `lower(legacy.products_attr."AttrTable") = 'prodline'` (both `ProdLine` and
 `Prodline` spellings exist live).
 

@@ -40,6 +40,11 @@ export const orphanQueueRowSchema = z.object({
   detail: z.record(z.string(), z.unknown()).nullable(),
   /** Non-English source document (B0-804) — expected, never chunked or retrieved. */
   translated: z.boolean(),
+  /**
+   * Deactivated source record, or a record on an inactive/empty product line (B0-1093,
+   * via B0-1091 `line_lifecycle`) — expected, not a defect.
+   */
+  inactive: z.boolean(),
   ignored: z.boolean(),
   ignore_reason: z.string().nullable(),
   ignored_by: z.string().nullable(),
@@ -62,6 +67,16 @@ export const orphanSummaryRowSchema = z.object({
    * translated row that was also acknowledged.
    */
   active_translated: z.number(),
+  /** How many of `total` are inactive (B0-1093). */
+  inactive: z.number(),
+  /** How many of `active` are inactive. */
+  active_inactive: z.number(),
+  /**
+   * How many of `active` are hidden by default — translated OR inactive, counted once.
+   * A row can be both (a deactivated Spanish SDS), so `active - active_hidden` is the
+   * count the queue table shows; subtracting the two flags separately would double-count.
+   */
+  active_hidden: z.number(),
 });
 export type OrphanSummaryRow = z.infer<typeof orphanSummaryRowSchema>;
 
@@ -78,6 +93,44 @@ export const orphanRecordInputSchema = z.object({
   refId: z.string().min(1),
 });
 export type OrphanRecordInput = z.infer<typeof orphanRecordInputSchema>;
+
+/**
+ * B0-1094 — a single-field edit from `OrphanRecordDialog`. `value` is intentionally untyped: the
+ * target column's own type (text/numeric/boolean/jsonb) is whatever the client sends, and the
+ * server action only checks the field isn't on the read-only denylist
+ * (`~/lib/orphans/orphan-record-editing.ts`) before writing it — there is no per-column schema to
+ * validate against without hand-maintaining one for four tables' worth of columns.
+ */
+export const updateOrphanRecordFieldInputSchema = z.object({
+  dataType: orphanDataTypeSchema,
+  refId: z.string().min(1),
+  field: z.string().min(1),
+  value: z.unknown(),
+});
+export type UpdateOrphanRecordFieldInput = z.infer<typeof updateOrphanRecordFieldInputSchema>;
+
+/** B0-1094 — clears `rag.entity.metadata->>'link_needs_review'` for a `product_link_unverified` row. */
+export const confirmEntityLinkInputSchema = z.object({
+  refId: z.string().min(1),
+});
+export type ConfirmEntityLinkInput = z.infer<typeof confirmEntityLinkInputSchema>;
+
+/** B0-1094 — creates a real, human-verified `rag.product_alias` row for a `product_no_alias` row. */
+export const createOrphanProductAliasInputSchema = z.object({
+  entityId: z.string().min(1),
+  productLineKey: z.string().trim().min(1, 'A product line is required.'),
+  alias: z.string().trim().min(1, 'An alias is required.').max(200),
+  aliasType: z.enum([
+    'acronym',
+    'common_name',
+    'sku',
+    'misspelling',
+    'legacy_name',
+    'synonym',
+    'title',
+  ]),
+});
+export type CreateOrphanProductAliasInput = z.infer<typeof createOrphanProductAliasInputSchema>;
 
 export interface OrphanRecordResult {
   dataType: OrphanDataType;

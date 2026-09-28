@@ -27,7 +27,7 @@ export type CategoryProduct = {
   shortDescription: string | null;
   url: string | null;
   status: string | null;
-  onWeb: string | null;
+  onWeb: number | null;
 };
 
 /**
@@ -158,7 +158,7 @@ export async function getProductsForCategory(categoryKey: string): Promise<Categ
     const key = typeof row.ProductsKey === 'string' ? row.ProductsKey : null;
     if (!key || seen.has(key)) continue;
     // B0-28: honor web-visibility — exclude unpublished products.
-    if (!['Y', 'YES', 'TRUE', '1'].includes(String(row.OnWeb ?? '').toUpperCase())) continue;
+    if (Number(row.OnWeb) !== 1) continue;
     seen.add(key);
     const product = row as unknown as LegacyProductRow;
     const descr = descrByKey.get(key);
@@ -170,7 +170,7 @@ export async function getProductsForCategory(categoryKey: string): Promise<Categ
       shortDescription: descr?.ShortDescr ?? null,
       url: link.url ?? null,
       status: (row.Status as string | null) ?? null,
-      onWeb: (row.OnWeb as string | null) ?? null,
+      onWeb: typeof row.OnWeb === 'number' ? row.OnWeb : null,
     });
   }
   return products;

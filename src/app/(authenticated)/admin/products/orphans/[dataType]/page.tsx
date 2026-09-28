@@ -14,6 +14,7 @@ interface PageProps {
     q?: string;
     includeIgnored?: string;
     includeTranslated?: string;
+    includeInactive?: string;
   }>;
 }
 
@@ -28,6 +29,7 @@ export default async function OrphanDataTypePage({ params, searchParams }: PageP
   const search = sp.q ?? '';
   const includeIgnored = sp.includeIgnored === '1';
   const includeTranslated = sp.includeTranslated === '1';
+  const includeInactive = sp.includeInactive === '1';
 
   const { rows, total, pageSize } = await getOrphanQueue({
     dataType,
@@ -35,6 +37,7 @@ export default async function OrphanDataTypePage({ params, searchParams }: PageP
     search,
     includeIgnored,
     includeTranslated,
+    includeInactive,
   });
 
   return (
@@ -54,6 +57,7 @@ export default async function OrphanDataTypePage({ params, searchParams }: PageP
         pageSize={pageSize}
         includeIgnored={includeIgnored}
         includeTranslated={includeTranslated}
+        includeInactive={includeInactive}
         search={search}
       />
     </div>

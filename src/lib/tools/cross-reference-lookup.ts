@@ -19,7 +19,7 @@ export type LegacyProductRow = {
   SLDescr: string | null;
   InvtID: string | null;
   Status: string | null;
-  OnWeb: string | null;
+  OnWeb: number;
   User_Str_00: string | null;
   User_Str_01: string | null;
   User_Str_02: string | null;
@@ -124,7 +124,6 @@ export function deriveCanonicalProductUrl(input: {
   productDescr: LegacyProductDescrRow | undefined;
 }) {
   const candidates = [
-    input.product?.OnWeb,
     input.product?.User_Str_00,
     input.product?.User_Str_01,
     input.product?.User_Str_02,
