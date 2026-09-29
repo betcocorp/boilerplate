@@ -254,6 +254,10 @@ const RUN_MODE_PREDICATE = /\.(eq|neq|in|not|is|filter|or|match)\(\s*['"`]run_mo
 const ALLOWED_RUN_MODE_PREDICATES: ReadonlyArray<{ file: string; predicate: string }> = [
   // The search-runs page list: a `search` reader, not a metric reader (B0-1105 scope note).
   { file: 'repository.ts', predicate: ".eq('run_mode', 'search')" },
+  // B0-1101 — the per-item latest-score fold for threshold-filtered dispatch. It reads full AND
+  // partial history by design (via the shared CHAT_RUN_MODES constant, never a literal) and feeds
+  // the Run Golden working set, not a metric.
+  { file: 'latest-item-scores.ts', predicate: ".in('run_mode', [...CHAT_RUN_MODES])" },
 ];
 
 function listSourceFiles(dir: string): string[] {
