@@ -788,6 +788,20 @@ export async function getTestResultById(testResultId: string) {
   return assertNoError(result) as TestResultRecord;
 }
 
+/** B0-1108 — the runs a sweep's ledger children point at, by id only (no test-level aggregate). */
+export async function listTestResultsByIds(testResultIds: string[]) {
+  if (testResultIds.length === 0) {
+    return [] as TestResultRecord[];
+  }
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_results')
+    .select('*')
+    .in('id', testResultIds);
+
+  return (assertNoError(result) || []) as TestResultRecord[];
+}
+
 /** One row of the cross-dataset report index (B0-687). */
 export type ReportRunRow = {
   runId: string;
