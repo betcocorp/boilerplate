@@ -19,7 +19,6 @@ import {
   countPassedAndFailedByResultId,
   getExistingResultItemIds,
   getTestById,
-  getTestItemsByTestId,
   getTestResultById,
   insertTestResultItems,
   listOrchestrationPlannerStepOutputsByWorkflowRunIds,
@@ -38,6 +37,7 @@ import {
 import { scheduleReportGeneration } from './report/schedule-report-generation';
 import { evaluateAndPersistRagRun } from './rag-evaluation/evaluate-run';
 import { scheduleRagEvaluation } from './rag-evaluation/schedule-rag-evaluation';
+import { resolveRunItems } from './resolve-run-items';
 import { parseTestRunConfig } from './run-config';
 import { runSingleTestItem } from './runner';
 import { canScheduleRunContinuation } from './schedule-run-continuation';
@@ -313,7 +313,9 @@ export async function executeTestRun(
     return 'skipped';
   }
 
-  const items = await getTestItemsByTestId(testResult.test_id);
+  // B0-1110 — scoped to `item_scope` for a partial run (null = every item on the test), so
+  // `total_items` / `progress_percent` below count only what this run actually covers.
+  const items = await resolveRunItems(testResult);
   // B0-501 — fetched once per run (not per item): `tests.intended_agent` is the suite-level
   // ground-truth fallback `resolveIntendedAgentLabel` uses when a row has no `intended_agent_item`.
   const test = await getTestById(testResult.test_id);

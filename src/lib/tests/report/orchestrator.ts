@@ -1,11 +1,11 @@
 import {
   getTestById,
-  getTestItemsByTestId,
   getTestResultById,
   listAllResultItemsByResultId,
   saveReportMarkdown,
   saveReportState,
 } from '~/lib/tests/repository';
+import { resolveRunItems } from '~/lib/tests/resolve-run-items';
 import type { ModelEffort } from '~/lib/constants/models';
 import type { TestItemRecord, TestResultItemRecord } from '~/lib/tests/types';
 
@@ -300,8 +300,10 @@ export async function generateReport(
   const deadline = Date.now() + WALL_CLOCK_BUDGET_MS;
   const run = await getTestResultById(testResultId);
   const test = await getTestById(run.test_id);
+  // B0-1110 — a partial run grades only its `item_scope`; un-run items must never appear as
+  // "Unable to Evaluate" placeholders, so `totalCases` below equals the scope size.
   const [items, resultItems] = await Promise.all([
-    getTestItemsByTestId(run.test_id),
+    resolveRunItems(run),
     listAllResultItemsByResultId(run.id),
   ]);
 

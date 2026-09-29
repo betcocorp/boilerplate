@@ -93,7 +93,7 @@ type ItemScript = 'faulted' | 'passed' | 'quality_failure';
  */
 let insertedRows: Array<{ passed?: boolean }> = [];
 
-function setUpRun(script: ItemScript[]) {
+function setUpRun(script: ItemScript[], runOverrides: Record<string, unknown> = {}) {
   insertedRows = [];
   const items = script.map((_, index) => ({
     id: `item-${index}`,
@@ -110,6 +110,8 @@ function setUpRun(script: ItemScript[]) {
     run_options: {},
     passed_items: 0,
     failed_items: 0,
+    item_scope: null,
+    ...runOverrides,
   } as never);
   vi.mocked(getTestById).mockResolvedValue({
     id: TEST_ID,
@@ -235,5 +237,47 @@ describe('executeTestRun — provider-fault circuit breaker (B0-1014)', () => {
     expect(runSingleTestItem).toHaveBeenCalledTimes(8);
     expect(lastRunUpdate().status).toBe('completed_with_failures');
     expect(logError).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * B0-1110 — a partial run persists its `item_scope`; the executor must run exactly those items and
+ * count only them. The repository still returns the whole dataset (mocked), so what is pinned is
+ * that the scope is applied on the way in, not that the query changed.
+ */
+describe('executeTestRun — item_scope (B0-1110)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('executes only the scoped items, in dataset order, and counts only them', async () => {
+    // Six items on the test; the run is scoped to three of them, stored out of order.
+    setUpRun(Array.from({ length: 6 }, () => 'passed' as const), {
+      run_mode: 'partial',
+      item_scope: ['item-4', 'item-1', 'item-3'],
+    });
+
+    await expect(executeTestRun(RUN_ID)).resolves.toBe('completed');
+
+    expect(runSingleTestItem).toHaveBeenCalledTimes(3);
+    expect(
+      vi.mocked(runSingleTestItem).mock.calls.map((call) => (call[1] as { id: string }).id),
+    ).toEqual(['item-1', 'item-3', 'item-4']);
+
+    const closing = lastRunUpdate();
+    expect(closing.status).toBe('completed');
+    expect(closing.summary?.total_items).toBe(3);
+    expect(closing.summary?.completed_items).toBe(3);
+    expect(closing.summary?.progress_percent).toBe(100);
+    expect(closing.summary?.pass_rate).toBe(1);
+  });
+
+  it('runs the whole dataset when item_scope is null (unchanged behaviour)', async () => {
+    setUpRun(Array.from({ length: 4 }, () => 'passed' as const));
+
+    await expect(executeTestRun(RUN_ID)).resolves.toBe('completed');
+
+    expect(runSingleTestItem).toHaveBeenCalledTimes(4);
+    expect(lastRunUpdate().summary?.total_items).toBe(4);
   });
 });

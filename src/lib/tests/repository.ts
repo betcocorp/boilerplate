@@ -603,15 +603,20 @@ export async function createGeneratingRunComparison(
   return { created: true, row: result.data as TestResultComparisonRecord };
 }
 
-/** Same insert-not-upsert idempotency as `createGeneratingRunComparison`, for the no-baseline case. */
+/**
+ * Same insert-not-upsert idempotency as `createGeneratingRunComparison`, for the no-baseline case.
+ * B0-1110 — `note` (persisted in `error_message`) lets a partial run say why it was not compared.
+ */
 export async function createNoBaselineRunComparison(
   resultId: string,
+  note: string | null = null,
 ): Promise<{ created: true } | { created: false }> {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase.from('test_result_comparisons').insert({
     test_result_id: resultId,
     previous_test_result_id: null,
     status: 'no_baseline',
+    error_message: note,
   });
 
   if (result.error) {
