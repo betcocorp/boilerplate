@@ -156,6 +156,8 @@ async function scoreOnePass(
   modelTag: string,
   effort: ModelEffort | undefined,
   expectedSourceIndex: ExpectedSourceIndex,
+  resultId: string,
+  passIndex: number,
 ): Promise<CaseScore> {
   const responseText = resultItem?.response_text?.trim();
   if (!resultItem) {
@@ -180,19 +182,25 @@ async function scoreOnePass(
    * a model call. `expected_sources` is a `uuid[]`; it is resolved to `rag.document` titles from the
    * index built once for the whole run, never looked up here per case.
    */
-  return scoreCase({
-    question: item.prompt,
-    category: item.prompt_category,
-    priorityRaw: item.priority,
-    idealResponse: item.ideal_response,
-    expectedSources: resolveExpectedSourceRefs(item.expected_sources, expectedSourceIndex),
-    shouldCite: item.should_cite,
-    mandatoryConcepts: item.minimum_concepts,
-    expectedConcepts: item.expected_concepts,
-    actualResponseText: responseText,
-    modelTag,
-    effort,
-  });
+  return scoreCase(
+    {
+      question: item.prompt,
+      category: item.prompt_category,
+      priorityRaw: item.priority,
+      idealResponse: item.ideal_response,
+      expectedSources: resolveExpectedSourceRefs(item.expected_sources, expectedSourceIndex),
+      shouldCite: item.should_cite,
+      mandatoryConcepts: item.minimum_concepts,
+      expectedConcepts: item.expected_concepts,
+      actualResponseText: responseText,
+      modelTag,
+      effort,
+    },
+    {},
+    // B0-1115 — this pass's identity, so a successful grading call is attributed to the exact
+    // (report, item, pass) it graded in `test_grading_usage`.
+    { testResultId: resultId, testItemId: item.id, passIndex },
+  );
 }
 
 /**
@@ -261,6 +269,8 @@ async function scoreRemainingCases(
           modelTag,
           effort,
           expectedSourceIndex,
+          resultId,
+          passIndex,
         );
         return { itemId: item.id, passIndex, score } as const;
       }),
@@ -466,6 +476,7 @@ export async function generateReport(
     const synthesis = await synthesizeReportFindings(
       metrics,
       findingsByCaseId,
+      testResultId,
       modelTag,
       effortFromState(state.gradingEffort),
     );

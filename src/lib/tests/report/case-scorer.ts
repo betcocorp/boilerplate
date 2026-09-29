@@ -2,8 +2,13 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
-import type { ModelEffort } from '~/lib/constants/models';
-import { completeStructured, type StructuredCompletion } from '~/lib/llm/structured-completion';
+import { modelProviderFor, type ModelEffort } from '~/lib/constants/models';
+import {
+  completeStructuredWithUsage,
+  type CompletionResult,
+  type StructuredCompletionRequest,
+} from '~/lib/llm/structured-completion';
+import { recordGradingUsage, type GradingUsageContext } from '~/lib/tests/grading-usage';
 
 import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case-concepts';
 import { formatExpectedSourceRef, type ExpectedSourceRef } from './expected-sources';
@@ -417,8 +422,13 @@ export function toCaseScore(output: GraderOutput, input: CaseScoringInput): Case
  * Production routes on the resolved model id — `claude-*` to Anthropic, everything else to the
  * OpenAI Responses API — and hands both the same prompt and the same `GRADER_JSON_SCHEMA` bytes;
  * tests inject a fake.
+ *
+ * B0-1115 — widened to also return the call's token usage (`CompletionResult`), so a successful
+ * grading call can be recorded via `recordGradingUsage` before it is discarded.
  */
-export type { StructuredCompletion };
+export type StructuredCompletionWithUsage = (
+  request: StructuredCompletionRequest,
+) => Promise<CompletionResult>;
 
 /**
  * Output cap for one grade. Anthropic counts thinking tokens against it, so it is sized for a
@@ -427,25 +437,34 @@ export type { StructuredCompletion };
 export const GRADER_MAX_OUTPUT_TOKENS = 16_000;
 
 export type ScoreCaseDeps = {
-  complete?: StructuredCompletion;
+  complete?: StructuredCompletionWithUsage;
   resolveModel?: (modelTag: string | undefined) => Promise<string>;
 };
 
 /**
  * Grades one case on one pass. A case with no concept columns is returned Unable to Evaluate without
  * a model call — there is no concept data to grade against, so there is nothing to pay for.
+ *
+ * B0-1115 — `context`, when given, is the (testResultId, testItemId, passIndex) triple this pass is
+ * scoring; a successful call's usage is recorded against it via `recordGradingUsage`. Optional so
+ * every existing caller/test that doesn't care about usage keeps working unchanged; the production
+ * caller (`scoreOnePass` in `orchestrator.ts`) always passes it.
  */
-export async function scoreCase(input: CaseScoringInput, deps: ScoreCaseDeps = {}): Promise<CaseScore> {
+export async function scoreCase(
+  input: CaseScoringInput,
+  deps: ScoreCaseDeps = {},
+  context?: GradingUsageContext,
+): Promise<CaseScore> {
   if (hasNoConcepts(input)) {
     return unableToEvaluateScore(NO_EXPECTED_CONCEPTS_UTE_REASON);
   }
 
-  const complete = deps.complete ?? completeStructured;
+  const complete = deps.complete ?? completeStructuredWithUsage;
   const resolveModel = deps.resolveModel ?? resolveGradingModel;
 
   try {
     const model = await resolveModel(input.modelTag ?? DEFAULT_GRADING_MODEL_TAG);
-    const text = await complete({
+    const { text, usage } = await complete({
       model,
       system: CASE_SCORING_SYSTEM_PROMPT,
       user: buildGraderPayload(input),
@@ -455,6 +474,19 @@ export async function scoreCase(input: CaseScoringInput, deps: ScoreCaseDeps = {
       temperature: 0,
       effort: input.effort,
     });
+    // B0-1115 — success path only: a refusal/truncation/transport failure throws before any usage
+    // is ever returned (see structured-completion.ts runOpenAI/runAnthropic), so there is nothing to
+    // record on those paths. Recorded before parsing so a parseable-but-unusable answer still counts
+    // the spend that produced it.
+    if (context) {
+      recordGradingUsage({
+        context,
+        callSite: 'case_scorer',
+        provider: modelProviderFor(model),
+        model,
+        usage,
+      });
+    }
     const parsed = graderOutputSchema.parse(JSON.parse(text));
     return toCaseScore(parsed, input);
   } catch (error) {
