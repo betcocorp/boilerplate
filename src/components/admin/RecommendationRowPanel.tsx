@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, Loader2, Plus, Search } from 'lucide-react';
+import { ChevronDown, Loader2, Pencil, Plus, Search } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
@@ -24,11 +24,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '~/components/ui/dialog';
+import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Textarea } from '~/components/ui/textarea';
 import {
   addRecommendationCandidate,
   editRecommendationCandidate,
+  editRecommendationCompetitor,
   rejectRecommendation,
   verifyRecommendation,
 } from '~/lib/recommendations/review-actions';
@@ -289,6 +291,144 @@ function AddCandidateForm({
   );
 }
 
+/**
+ * B0-1072 — reviewer edit of the recommendation's own competitor identity. The engine persists a
+ * row with no brand for an unbranded prompt, and `promoteRecommendationToOverride` refuses to
+ * write the fast-path mapping without one — previously the only way out was to reject the row.
+ * Brand is required; product name is editable in the same form since it costs nothing and the
+ * pair is what the fast-path mapping is keyed on.
+ */
+function CompetitorIdentity({
+  recommendation,
+  disabled,
+  locked,
+}: {
+  recommendation: RecommendationWithCandidates;
+  disabled: boolean;
+  locked: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [brand, setBrand] = useState(recommendation.competitorBrand ?? '');
+  const [product, setProduct] = useState(recommendation.competitorProduct);
+  const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+
+  const canSubmit = brand.trim().length > 0 && product.trim().length > 0;
+
+  function openEditor() {
+    setBrand(recommendation.competitorBrand ?? '');
+    setProduct(recommendation.competitorProduct);
+    setEditing(true);
+  }
+
+  function save() {
+    if (!canSubmit) {
+      toast.error('A competitor brand and product name are both required.');
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const result = await editRecommendationCompetitor(recommendation.id, {
+          competitorBrand: brand.trim(),
+          competitorProduct: product.trim(),
+        });
+        if (!result.ok) {
+          toast.error(result.reason);
+          return;
+        }
+        toast.success('Competitor updated');
+        setEditing(false);
+        router.refresh();
+      } catch (err) {
+        toast.error(getErrorMessage(err, 'Failed to update competitor'));
+      }
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-border/60 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium text-foreground">Competitor</p>
+          {editing ? null : (
+            <p className="mt-1 text-sm text-muted-foreground">
+              {recommendation.competitorBrand ? (
+                <span className="text-foreground">{recommendation.competitorBrand}</span>
+              ) : (
+                <span className="italic">No brand recorded</span>
+              )}
+              {' — '}
+              {recommendation.competitorProduct}
+            </p>
+          )}
+        </div>
+        {!editing && !locked ? (
+          <Button
+            className="h-auto p-0 text-xs"
+            disabled={disabled}
+            onClick={openEditor}
+            size="sm"
+            type="button"
+            variant="link"
+          >
+            <Pencil className="mr-1 size-3" />
+            {recommendation.competitorBrand ? 'Edit competitor' : 'Add competitor brand'}
+          </Button>
+        ) : null}
+      </div>
+      {locked ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Competitor details are locked once a recommendation has been {recommendation.status}.
+        </p>
+      ) : null}
+      {editing ? (
+        <div className="mt-3 space-y-2">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor={`competitor-brand-${recommendation.id}`}>Competitor brand</Label>
+              <Input
+                autoFocus
+                id={`competitor-brand-${recommendation.id}`}
+                onChange={(e) => setBrand(e.target.value)}
+                placeholder="e.g. Diversey"
+                value={brand}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`competitor-product-${recommendation.id}`}>Competitor product</Label>
+              <Input
+                id={`competitor-product-${recommendation.id}`}
+                onChange={(e) => setProduct(e.target.value)}
+                placeholder="e.g. Virex II 256"
+                value={product}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Brand and product name are what the fast-path mapping is keyed on, so both are required.
+            The pair must not match another open recommendation.
+          </p>
+          <div className="flex gap-2">
+            <Button disabled={isPending || !canSubmit} onClick={save} size="sm" type="button">
+              {isPending ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : null}
+              Save
+            </Button>
+            <Button
+              disabled={isPending}
+              onClick={() => setEditing(false)}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function RecommendationRowPanel({
   recommendation,
 }: {
@@ -320,7 +460,7 @@ export function RecommendationRowPanel({
       : !chosenCandidate.betcoTitle?.trim()
         ? 'The selected candidate has no Betco title. Add it with "Edit chosen candidate" before approving.'
         : !recommendation.competitorBrand?.trim()
-          ? 'This recommendation has no competitor brand recorded, which the fast-path mapping requires.'
+          ? 'This recommendation has no competitor brand recorded, which the fast-path mapping requires. Add one with "Add competitor brand" above.'
           : null;
 
   function handleVerify() {
@@ -396,7 +536,11 @@ export function RecommendationRowPanel({
             >
               <div className="min-w-0">
                 <p className="truncate font-medium text-foreground">
-                  {recommendation.competitorBrand ? `${recommendation.competitorBrand} — ` : ''}
+                  {recommendation.competitorBrand ? (
+                    `${recommendation.competitorBrand} — `
+                  ) : (
+                    <span className="font-normal italic text-muted-foreground">No brand — </span>
+                  )}
                   {recommendation.competitorProduct}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -447,6 +591,12 @@ export function RecommendationRowPanel({
                 Declined: {recommendation.declineReason}
               </p>
             ) : null}
+
+            <CompetitorIdentity
+              disabled={isPending}
+              locked={isDecided}
+              recommendation={recommendation}
+            />
 
             <div>
               <p className="text-sm font-medium text-foreground">Candidates</p>

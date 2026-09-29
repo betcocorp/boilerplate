@@ -8,6 +8,7 @@ import {
   recommendationSchema,
   recommendationWithCandidatesSchema,
   updateRecommendationCandidateInputSchema,
+  updateRecommendationCompetitorInputSchema,
   updateRecommendationStatusInputSchema,
   type AddRecommendationCandidateInput,
   type CreateRecommendationInput,
@@ -17,6 +18,7 @@ import {
   type RecommendationStatus,
   type RecommendationWithCandidates,
   type UpdateRecommendationCandidateInput,
+  type UpdateRecommendationCompetitorInput,
   type UpdateRecommendationStatusInput,
 } from '~/lib/recommendations/recommendation-schemas';
 
@@ -561,6 +563,95 @@ export async function updateRecommendationCandidate(
     throw new Error(`updateRecommendationCandidate failed: ${res.error?.message ?? 'no row'}`);
   }
   return fromCandidateRow(res.data);
+}
+
+/**
+ * B0-1072 — an expected, reviewer-facing failure of `updateRecommendationCompetitor`. Carries a
+ * `code` so the server action can turn it into a return value (Next.js strips thrown error
+ * messages from Server Functions in production) instead of a raw Postgres message.
+ */
+export class RecommendationCompetitorEditError extends Error {
+  readonly code: 'not_found' | 'decided' | 'identity_conflict';
+
+  constructor(code: RecommendationCompetitorEditError['code'], message: string) {
+    super(message);
+    this.name = 'RecommendationCompetitorEditError';
+    this.code = code;
+  }
+}
+
+/**
+ * B0-1072 — reviewer edit of a recommendation's own competitor identity, so a row the engine
+ * persisted with no brand (unbranded prompt, no grounded manufacturer) can still be approved:
+ * `promoteRecommendationToOverride` needs both brand and product to write the fast-path mapping.
+ *
+ * Only not-yet-reviewed rows may change — a verified/rejected row is a permanent human decision and
+ * the override it may already have produced carries the old identity. The new identity has to be
+ * unique among open rows (partial unique index `cross_reference_recommendations_identity_unreviewed_uq`
+ * on the generated `*_norm` columns), so the collision is checked up front and again on 23505 for
+ * the concurrent case, and surfaced as a typed error rather than the constraint's message. The
+ * previous identity is kept in `evidence.competitorEdit` (same convention as `evidence.verification`).
+ */
+export async function updateRecommendationCompetitor(
+  id: string,
+  rawInput: UpdateRecommendationCompetitorInput,
+  editedBy?: string | null,
+): Promise<Recommendation> {
+  const input = updateRecommendationCompetitorInputSchema.parse(rawInput);
+
+  const existing = await getRecommendation(id);
+  if (!existing) {
+    throw new RecommendationCompetitorEditError('not_found', 'Recommendation not found.');
+  }
+  if (REVIEWED_STATUSES.includes(existing.status)) {
+    throw new RecommendationCompetitorEditError(
+      'decided',
+      `This recommendation has already been ${existing.status}; its competitor details are locked.`,
+    );
+  }
+
+  const competitorBrand = input.competitorBrand;
+  const competitorProduct = input.competitorProduct ?? existing.competitorProduct;
+  const brandNorm = normalizeIdentityPart(competitorBrand);
+  const productNorm = normalizeIdentityPart(competitorProduct);
+
+  const conflict = (): RecommendationCompetitorEditError =>
+    new RecommendationCompetitorEditError(
+      'identity_conflict',
+      `Another open recommendation already exists for ${competitorBrand} — ${competitorProduct}. Review that one instead, or reject this one.`,
+    );
+  const clashId = await findExistingUnreviewedRecommendationId(brandNorm, productNorm);
+  if (clashId && clashId !== id) {
+    throw conflict();
+  }
+
+  const evidence: Json = {
+    ...existing.evidence,
+    competitorEdit: {
+      editor: editedBy ?? null,
+      at: new Date().toISOString(),
+      previousBrand: existing.competitorBrand,
+      previousProduct: existing.competitorProduct,
+    },
+  };
+
+  const res = await ragIdentityTable('cross_reference_recommendations')
+    .update({
+      competitor_brand: competitorBrand,
+      competitor_product: competitorProduct,
+      evidence,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (res.error || !res.data) {
+    if (res.error?.code === '23505') {
+      throw conflict();
+    }
+    throw new Error(`updateRecommendationCompetitor failed: ${res.error?.message ?? 'no row'}`);
+  }
+  return fromRecommendationRow(res.data);
 }
 
 export type RecommendationMetrics = {

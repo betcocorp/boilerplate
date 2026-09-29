@@ -11,13 +11,17 @@ import { searchBetcoProducts, type BetcoProductOption } from '~/lib/recommendati
 import {
   createRecommendationCandidate,
   getRecommendation,
+  RecommendationCompetitorEditError,
   updateRecommendationCandidate,
+  updateRecommendationCompetitor,
   updateRecommendationStatus,
 } from '~/lib/recommendations/repository';
 import type {
   AddRecommendationCandidateInput,
+  Recommendation,
   RecommendationCandidate,
   UpdateRecommendationCandidateInput,
+  UpdateRecommendationCompetitorInput,
 } from '~/lib/recommendations/recommendation-schemas';
 
 /**
@@ -156,6 +160,51 @@ export async function addRecommendationCandidate(
  */
 export async function searchBetcoProductOptions(query: string): Promise<BetcoProductOption[]> {
   return searchBetcoProducts(query);
+}
+
+/**
+ * B0-1072 — the outcome the reviewer needs to see when editing a recommendation's competitor
+ * identity. Expected failures (row already decided, brand+product collides with another open
+ * recommendation) are returned rather than thrown: Next.js replaces thrown Server Function error
+ * messages with a generic one in production, which would hide exactly the message that matters.
+ */
+export type EditRecommendationCompetitorResult =
+  | { ok: true; recommendation: Recommendation }
+  | { ok: false; reason: string };
+
+/**
+ * B0-1072 — add or change the competitor brand (and optionally the product name) on a
+ * not-yet-reviewed recommendation, so a row persisted without a brand can be approved and promoted.
+ */
+export async function editRecommendationCompetitor(
+  recommendationId: string,
+  input: UpdateRecommendationCompetitorInput,
+): Promise<EditRecommendationCompetitorResult> {
+  const verifier = await currentReviewer();
+  const traceId = newCorrelationId();
+
+  let recommendation: Recommendation;
+  try {
+    recommendation = await updateRecommendationCompetitor(recommendationId, input, verifier);
+  } catch (err) {
+    if (err instanceof RecommendationCompetitorEditError) {
+      return { ok: false, reason: err.message };
+    }
+    throw err;
+  }
+  await writeAuditLog(
+    'cross_reference_recommendation_competitor_edited',
+    {
+      recommendation_id: recommendationId,
+      verifier,
+      competitor_brand: recommendation.competitorBrand,
+      competitor_product: recommendation.competitorProduct,
+    },
+    { traceId },
+  );
+
+  revalidatePath(REVIEW_QUEUE_PATH);
+  return { ok: true, recommendation };
 }
 
 export async function editRecommendationCandidate(
