@@ -160,3 +160,76 @@ export function computeScheduledRunAggregates(items: ScheduledTestItem[]): {
     allTerminal: items.length > 0 && terminal.length === items.length,
   };
 }
+
+/* -------------------------------------------------------------------------- *
+ * Display derivations shared by /admin/scheduled and the /admin/tests sweep pages (B0-1107)
+ * -------------------------------------------------------------------------- */
+
+/**
+ * The parent's stored status lags its children: the sweep writes it at dispatch time and only the
+ * hourly reconciler closes it out, so a row can read `completed` while children are still running.
+ * Children win unless the sweep itself failed.
+ */
+export function getRunDisplayStatus(
+  run: ScheduledTestRunWithItems,
+): ScheduledRunStatus {
+  if (run.status === 'failed') {
+    return 'failed';
+  }
+
+  const hasOpenItems = run.items.some(
+    (item) => !isTerminalScheduledItemStatus(item.status),
+  );
+
+  return hasOpenItems ? 'in_progress' : run.status;
+}
+
+export type ScheduledRunDisplayCounts = {
+  successful: number;
+  failed: number;
+  timedOut: number;
+  successRate: number | null;
+};
+
+/**
+ * Counts lag for the same reason the status does, so they are derived from the children the page
+ * already has rather than read off the parent — otherwise a sweep with a dispatch failure shows
+ * 0 failed until the reconciler catches up. The stored columns are the fallback for a sweep whose
+ * children were never written.
+ */
+export function getRunDisplayCounts(
+  run: ScheduledTestRunWithItems,
+): ScheduledRunDisplayCounts {
+  if (run.items.length === 0) {
+    return {
+      successful: run.successful_tests,
+      failed: run.failed_tests,
+      timedOut: run.timed_out_tests,
+      successRate: run.success_rate,
+    };
+  }
+
+  const derived = computeScheduledRunAggregates(run.items);
+  return {
+    successful: derived.successful_tests,
+    failed: derived.failed_tests,
+    timedOut: derived.timed_out_tests,
+    successRate: derived.success_rate,
+  };
+}
+
+export function formatRate(rate: number | null): string {
+  // Null is "nothing terminal to measure yet" — never the same claim as 0%.
+  return rate === null ? '—' : `${Math.round(rate * 100)}%`;
+}
+
+/** "Nightly" for the cron's sweep_name, "Manual" for the Run Golden dialog's; anything else as-is. */
+export function getSweepSourceLabel(sweepName: string): string {
+  if (sweepName === CRON_SWEEP_NAME) {
+    return 'Nightly';
+  }
+  if (sweepName === MANUAL_SWEEP_NAME) {
+    return 'Manual';
+  }
+  return sweepName;
+}
