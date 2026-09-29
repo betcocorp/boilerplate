@@ -116,23 +116,25 @@ export async function listTests(includeArchived = false) {
   // Both roll-ups are single, whole-table queries folded in memory — never a per-test fan-out
   // (B0-585 decommissioned that). The score query projects only the scalar JSON path so the heavy
   // `report_state.caseScores` prose stays in Postgres.
+  //
+  // B0-1103 — every roll-up is scoped by `onlyMetricEligibleRuns` so a `partial` run (a
+  // threshold-filtered re-run of only the failing items, B0-1099) can never become a test's
+  // Avg score, its latest-run score/Fails/model, or its completed-run count.
   const [completionCounts, reportScores, latestRunScores] = await Promise.all([
-    supabase
-      .from('test_results')
-      .select('test_id')
-      .in(
-        'status',
-        COMPLETED_RUN_STATUSES as unknown as string[],
-      ),
-    supabase
-      .from('test_results')
-      .select('test_id, overall_avg:report_state->overall->>avg')
-      .eq('report_state->>status', 'completed'),
-    supabase
-      .from('test_results')
-      .select(
-        'test_id, overall_avg:report_state->overall->>avg, failed_items, model_tag:run_options->>modelTag, created_at',
-      )
+    onlyMetricEligibleRuns(supabase.from('test_results').select('test_id')).in(
+      'status',
+      COMPLETED_RUN_STATUSES as unknown as string[],
+    ),
+    onlyMetricEligibleRuns(
+      supabase.from('test_results').select('test_id, overall_avg:report_state->overall->>avg'),
+    ).eq('report_state->>status', 'completed'),
+    onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select(
+          'test_id, overall_avg:report_state->overall->>avg, failed_items, model_tag:run_options->>modelTag, created_at',
+        ),
+    )
       .eq('report_state->>status', 'completed')
       .order('created_at', { ascending: false }),
   ]);
@@ -859,13 +861,17 @@ export async function listAllReportRuns(options?: { onlyGolden?: boolean }): Pro
 
   // Paged rather than a bare select so a growing history can never be silently truncated at
   // PostgREST's 1000-row cap (there are ~40 reported runs today).
+  //
+  // B0-1103 — scoped by `onlyMetricEligibleRuns`: a `partial` run's report must never appear in
+  // this index or in the score/fail/metric trend charts folded from it.
   const rows = await fetchAllPages<RawRow>(REPORT_RUNS_PAGE_SIZE, async (from, to) => {
-    let query = supabase
-      .from('test_results')
-      .select(
-        'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived, is_golden)',
-      )
-      .not('report_state', 'is', null);
+    let query = onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select(
+          'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived, is_golden)',
+        ),
+    ).not('report_state', 'is', null);
 
     query = onlyGolden ? query.eq('tests.is_golden', true) : query.eq('tests.is_archived', false);
 
