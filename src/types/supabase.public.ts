@@ -1484,8 +1484,10 @@ export type Database = {
           id: string
           insights: Json | null
           insights_generated_at: string | null
+          item_scope: string[] | null
           notes: string | null
           passed_items: number
+          partial_score_threshold: number | null
           report: string | null
           report_generated_at: string | null
           report_state: Json | null
@@ -1510,8 +1512,10 @@ export type Database = {
           id?: string
           insights?: Json | null
           insights_generated_at?: string | null
+          item_scope?: string[] | null
           notes?: string | null
           passed_items?: number
+          partial_score_threshold?: number | null
           report?: string | null
           report_generated_at?: string | null
           report_state?: Json | null
@@ -1536,8 +1540,10 @@ export type Database = {
           id?: string
           insights?: Json | null
           insights_generated_at?: string | null
+          item_scope?: string[] | null
           notes?: string | null
           passed_items?: number
+          partial_score_threshold?: number | null
           report?: string | null
           report_generated_at?: string | null
           report_state?: Json | null
