@@ -1088,9 +1088,10 @@ export type Database = {
           created_at: string
           id: string
           model: string
+          pass_index: number | null
           prompt_tokens: number
           provider: string
-          test_item_id: string
+          test_item_id: string | null
           test_result_id: string
           total_tokens: number
         }
@@ -1101,9 +1102,10 @@ export type Database = {
           created_at?: string
           id?: string
           model: string
+          pass_index?: number | null
           prompt_tokens?: number
           provider: string
-          test_item_id: string
+          test_item_id?: string | null
           test_result_id: string
           total_tokens?: number
         }
@@ -1114,9 +1116,10 @@ export type Database = {
           created_at?: string
           id?: string
           model?: string
+          pass_index?: number | null
           prompt_tokens?: number
           provider?: string
-          test_item_id?: string
+          test_item_id?: string | null
           test_result_id?: string
           total_tokens?: number
         }

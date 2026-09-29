@@ -47,7 +47,33 @@ describe('recordGradingUsage (B0-1109)', () => {
     expect(mockInsert).toHaveBeenCalledWith({
       test_result_id: 'tr-1',
       test_item_id: 'ti-1',
+      pass_index: null,
       call_site: 'criteria_grader',
+      provider: 'openai',
+      model: 'gpt-4.1',
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      cached_prompt_tokens: 2,
+      total_tokens: 15,
+    });
+  });
+
+  it('B0-1112 — omits testItemId and passes passIndex through for report-generation call sites', () => {
+    mockInsert.mockReturnValue(Promise.resolve({ error: null }));
+
+    recordGradingUsage({
+      context: { testResultId: 'tr-5', passIndex: 2 },
+      callSite: 'case_scorer',
+      provider: 'openai',
+      model: 'gpt-4.1',
+      usage: USAGE,
+    });
+
+    expect(mockInsert).toHaveBeenCalledWith({
+      test_result_id: 'tr-5',
+      test_item_id: null,
+      pass_index: 2,
+      call_site: 'case_scorer',
       provider: 'openai',
       model: 'gpt-4.1',
       prompt_tokens: 10,

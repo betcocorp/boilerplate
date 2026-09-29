@@ -5,14 +5,27 @@ import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 
 /**
  * B0-1109 — the three per-item graders that run during test execution (criteria, decline,
- * failure-root-cause). Deliberately does NOT cover report-generation grading (case-scorer,
- * synthesizer, run-insights, run-comparison-analysis) — that is a separate, later scope.
+ * failure-root-cause). B0-1112 widened this to also cover report-generation grading call sites:
+ * case_scorer (per-item, but multiple passes — see `passIndex` below), synthesizer_digest,
+ * synthesizer_final, run_insights, and run_comparison_analysis (whole-run/whole-comparison, no
+ * single test item).
  */
-export type GradingCallSite = 'criteria_grader' | 'decline_grader' | 'failure_root_cause';
+export type GradingCallSite =
+  | 'criteria_grader'
+  | 'decline_grader'
+  | 'failure_root_cause'
+  | 'case_scorer'
+  | 'synthesizer_digest'
+  | 'synthesizer_final'
+  | 'run_insights'
+  | 'run_comparison_analysis';
 
 export type GradingUsageContext = {
   testResultId: string;
-  testItemId: string;
+  /** Omit for call sites with no single test item (run_insights, run_comparison_analysis, synthesizer_*). */
+  testItemId?: string;
+  /** B0-1112 — disambiguates case_scorer's multiple grading passes per testItemId. */
+  passIndex?: number;
 };
 
 /**
@@ -33,7 +46,8 @@ export function recordGradingUsage(params: {
     .from('test_grading_usage')
     .insert({
       test_result_id: params.context.testResultId,
-      test_item_id: params.context.testItemId,
+      test_item_id: params.context.testItemId ?? null,
+      pass_index: params.context.passIndex ?? null,
       call_site: params.callSite,
       provider: params.provider,
       model: params.model,
