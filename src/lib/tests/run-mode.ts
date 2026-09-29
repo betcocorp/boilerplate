@@ -29,6 +29,22 @@ export function isMetricEligibleRunMode(value: string): value is MetricEligibleR
   return (METRIC_ELIGIBLE_RUN_MODES as readonly string[]).includes(value);
 }
 
+/** The narrowest slice of a PostgREST filter builder the chokepoint needs. */
+type RunModeFilterable<T> = {
+  in(column: 'run_mode', values: readonly string[]): T;
+};
+
+/**
+ * B0-1105 — THE run_mode predicate for every `test_results` reader that feeds a golden-set metric,
+ * rollup, trend, alert or report index. Apply it to the builder (`onlyMetricEligibleRuns(
+ * supabase.from('test_results').select(...))`) instead of writing `.eq('run_mode', 'full')` inline;
+ * the regression test `run-mode-metric-chokepoint.test.ts` fails on any metric reader that skips
+ * it and on any `run_mode` literal that appears outside this module.
+ */
+export function onlyMetricEligibleRuns<T extends RunModeFilterable<T>>(query: T): T {
+  return query.in('run_mode', [...METRIC_ELIGIBLE_RUN_MODES]);
+}
+
 /**
  * Runs that execute the chat pipeline item by item (as opposed to a retrieval-only `search` run).
  * The executor, the report grader and the stalled-run sweeper treat these alike; a `partial` run

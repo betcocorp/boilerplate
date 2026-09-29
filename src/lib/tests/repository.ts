@@ -8,6 +8,7 @@ import {
   extractSearchRunMaxSimilarity,
 } from './response-payload';
 import { parseReportState } from './report/schemas';
+import { onlyMetricEligibleRuns } from './run-mode';
 import type { RunRoutingHealthInput } from './run-health';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
@@ -725,11 +726,9 @@ export async function insertTestResultItems(items: NewTestResultItemRecord[]) {
 
 export async function listTestResultsByTestId(testId: string, limit = 10) {
   const supabase = getSupabaseServiceRoleClient();
-  const result = await supabase
-    .from('test_results')
-    .select('*')
-    .eq('test_id', testId)
-    .eq('run_mode', 'full')
+  const result = await onlyMetricEligibleRuns(
+    supabase.from('test_results').select('*').eq('test_id', testId),
+  )
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -738,7 +737,8 @@ export async function listTestResultsByTestId(testId: string, limit = 10) {
 
 /**
  * B0-313 — the run immediately preceding `currentResultId` for post-mortem comparison: the most
- * recent OTHER completed run (`completed`/`completed_with_failures`, `run_mode='full'`) on the same
+ * recent OTHER completed run (`completed`/`completed_with_failures`, metric-eligible `run_mode`
+ * via `onlyMetricEligibleRuns`) on the same
  * test, strictly older than the current run's `created_at`. Returns null when none exists — a
  * "no baseline" run (e.g. the first-ever run of a dataset) is a normal, clean outcome, not an error.
  */
@@ -749,11 +749,9 @@ export async function getPreviousCompletedTestResult(
   const supabase = getSupabaseServiceRoleClient();
   const current = await getTestResultById(currentResultId);
 
-  const result = await supabase
-    .from('test_results')
-    .select('*')
-    .eq('test_id', testId)
-    .eq('run_mode', 'full')
+  const result = await onlyMetricEligibleRuns(
+    supabase.from('test_results').select('*').eq('test_id', testId),
+  )
     .in('status', [...COMPLETED_RUN_STATUSES])
     .neq('id', currentResultId)
     .lt('created_at', current.created_at)
@@ -957,9 +955,6 @@ export async function listAllReportRuns(options?: { onlyGolden?: boolean }): Pro
 }
 
 const RESULT_ITEMS_PAGE_SIZE = 500;
-const TEST_CASE_METRICS_PAGE_SIZE = 1000;
-const TEST_RUNS_PAGE_SIZE = 500;
-const COMPLETED_TEST_RUN_STATUSES = COMPLETED_RUN_STATUSES;
 
 export async function listResultItemsByResultId(testResultId: string, limit = 200) {
   const supabase = getSupabaseServiceRoleClient();
@@ -1007,183 +1002,6 @@ export async function listAllResultItemsByResultId(testResultId: string) {
       .range(from, to)
       .then((r) => (assertNoError(r) || []) as TestResultItemRecord[]),
   );
-}
-
-export async function getGlobalTestCaseMetrics() {
-  const supabase = getSupabaseServiceRoleClient();
-  const completedRunRows = await fetchAllPages<{ id: string }>(TEST_RUNS_PAGE_SIZE, (from, to) =>
-    supabase
-      .from('test_results')
-      .select('id')
-      .in('status', [...COMPLETED_TEST_RUN_STATUSES])
-      .order('created_at', { ascending: true })
-      .range(from, to)
-      .then((r) => (assertNoError(r) || []) as Array<{ id: string }>),
-  );
-  const completedRunIds = completedRunRows.map((run) => run.id);
-
-  if (completedRunIds.length === 0) {
-    return {
-      totalCases: 0,
-      passedCases: 0,
-      failedCases: 0,
-      passRate: 0,
-      failRate: 0,
-      avgElapsedMs: 0,
-      avgSimilarity: null,
-      similaritySampleSize: 0,
-    };
-  }
-
-  let from = 0;
-  let totalCases = 0;
-  let passedCases = 0;
-  let failedCases = 0;
-  let elapsedSumMs = 0;
-  let similaritySum = 0;
-  let similarityCount = 0;
-
-  while (true) {
-    const result = await supabase
-      .from('test_result_items')
-      .select('passed, elapsed_ms, response_payload, status, test_result_id')
-      .in('status', ['completed', 'failed'])
-      .in('test_result_id', completedRunIds)
-      .order('created_at', { ascending: true })
-      .range(from, from + TEST_CASE_METRICS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as Array<{
-      passed: boolean;
-      elapsed_ms: number;
-      response_payload: unknown;
-      status: string;
-      test_result_id: string;
-    }>;
-
-    if (page.length === 0) {
-      break;
-    }
-
-    for (const item of page) {
-      totalCases += 1;
-      elapsedSumMs += Math.max(0, item.elapsed_ms || 0);
-      if (item.passed) {
-        passedCases += 1;
-      } else {
-        failedCases += 1;
-      }
-
-      const similarity = extractItemSimilarityScore(item.response_payload);
-      if (typeof similarity === 'number') {
-        similaritySum += similarity;
-        similarityCount += 1;
-      }
-    }
-
-    if (page.length < TEST_CASE_METRICS_PAGE_SIZE) {
-      break;
-    }
-    from += TEST_CASE_METRICS_PAGE_SIZE;
-  }
-
-  return {
-    totalCases,
-    passedCases,
-    failedCases,
-    passRate: totalCases > 0 ? passedCases / totalCases : 0,
-    failRate: totalCases > 0 ? failedCases / totalCases : 0,
-    avgElapsedMs: totalCases > 0 ? elapsedSumMs / totalCases : 0,
-    avgSimilarity: similarityCount > 0 ? similaritySum / similarityCount : null,
-    similaritySampleSize: similarityCount,
-  };
-}
-
-type RunSimilarityAccumulator = {
-  similaritySum: number;
-  similarityCount: number;
-};
-
-export async function getGlobalSimilarityFailRateTrend(options?: { maxRuns?: number }) {
-  const maxRuns = Math.min(Math.max(options?.maxRuns ?? 30, 2), 200);
-  const supabase = getSupabaseServiceRoleClient();
-
-  const runsResult = await supabase
-    .from('test_results')
-    .select('id, created_at, failed_items, total_items')
-    .in('status', [...COMPLETED_TEST_RUN_STATUSES])
-    .order('created_at', { ascending: false })
-    .limit(maxRuns);
-
-  const runs = (assertNoError(runsResult) || []) as Array<{
-    id: string;
-    created_at: string;
-    failed_items: number;
-    total_items: number;
-  }>;
-
-  if (runs.length === 0) {
-    return [];
-  }
-
-  const orderedRuns = [...runs].reverse();
-  const runIds = orderedRuns.map((run) => run.id);
-  const similarityByRunId = new Map<string, RunSimilarityAccumulator>(
-    runIds.map((id) => [id, { similaritySum: 0, similarityCount: 0 }]),
-  );
-
-  let from = 0;
-
-  while (true) {
-    const result = await supabase
-      .from('test_result_items')
-      .select('test_result_id, response_payload, status')
-      .in('status', ['completed', 'failed'])
-      .in('test_result_id', runIds)
-      .order('created_at', { ascending: true })
-      .range(from, from + TEST_CASE_METRICS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as Array<{
-      test_result_id: string;
-      response_payload: unknown;
-      status: string;
-    }>;
-
-    if (page.length === 0) {
-      break;
-    }
-
-    for (const item of page) {
-      const accumulator = similarityByRunId.get(item.test_result_id);
-      if (!accumulator) {
-        continue;
-      }
-
-      const similarity = extractItemSimilarityScore(item.response_payload);
-      if (typeof similarity === 'number') {
-        accumulator.similaritySum += similarity;
-        accumulator.similarityCount += 1;
-      }
-    }
-
-    if (page.length < TEST_CASE_METRICS_PAGE_SIZE) {
-      break;
-    }
-    from += TEST_CASE_METRICS_PAGE_SIZE;
-  }
-
-  return orderedRuns.map((run, index) => {
-    const similarity = similarityByRunId.get(run.id);
-    return {
-      label: `Run ${index + 1}`,
-      runCreatedAt: run.created_at,
-      avgSimilarity:
-        similarity && similarity.similarityCount > 0
-          ? similarity.similaritySum / similarity.similarityCount
-          : null,
-      failRate: run.total_items > 0 ? run.failed_items / run.total_items : 0,
-      totalCases: run.total_items,
-    };
-  });
 }
 
 export async function listResultItemsByTestItemId(testItemId: string, limit = 500) {
