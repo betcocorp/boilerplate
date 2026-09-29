@@ -530,6 +530,8 @@ export async function executeTestRun(
       const payload = insertedItem.response_payload as { criteriaGrading?: CriteriaGradingOutcome } | null;
       await analyzeAndPersistFailureRootCause({
         testResultItemId: insertedItem.id,
+        testResultId: testResult.id,
+        testItemId: item.id,
         testName: test.name,
         prompt: item.prompt,
         mandatoryConcepts: mandatoryConceptPhrases(item),

@@ -1080,6 +1080,63 @@ export type Database = {
         }
         Relationships: []
       }
+      test_grading_usage: {
+        Row: {
+          call_site: string
+          cached_prompt_tokens: number
+          completion_tokens: number
+          created_at: string
+          id: string
+          model: string
+          prompt_tokens: number
+          provider: string
+          test_item_id: string
+          test_result_id: string
+          total_tokens: number
+        }
+        Insert: {
+          call_site: string
+          cached_prompt_tokens?: number
+          completion_tokens?: number
+          created_at?: string
+          id?: string
+          model: string
+          prompt_tokens?: number
+          provider: string
+          test_item_id: string
+          test_result_id: string
+          total_tokens?: number
+        }
+        Update: {
+          call_site?: string
+          cached_prompt_tokens?: number
+          completion_tokens?: number
+          created_at?: string
+          id?: string
+          model?: string
+          prompt_tokens?: number
+          provider?: string
+          test_item_id?: string
+          test_result_id?: string
+          total_tokens?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_grading_usage_test_item_id_fkey"
+            columns: ["test_item_id"]
+            isOneToOne: false
+            referencedRelation: "test_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_grading_usage_test_result_id_fkey"
+            columns: ["test_result_id"]
+            isOneToOne: false
+            referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       test_items: {
         Row: {
           created_at: string
@@ -1875,6 +1932,18 @@ export type Database = {
           ref_id: string | null
           ref_label: string | null
           translated: boolean | null
+        }
+        Relationships: []
+      }
+      test_grading_cost_by_run: {
+        Row: {
+          cached_prompt_tokens: number | null
+          call_count: number | null
+          completion_tokens: number | null
+          estimated_cost_usd: number | null
+          prompt_tokens: number | null
+          test_result_id: string | null
+          total_tokens: number | null
         }
         Relationships: []
       }

@@ -1,4 +1,5 @@
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { modelProviderFor } from '~/lib/constants/models';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -13,6 +14,7 @@ import {
   type CriterionVerdict,
   type ExpectedCriterion,
 } from './criteria-schemas';
+import { recordGradingUsage, type GradingUsageContext } from './grading-usage';
 import { resolveItemGradingConfig, type ItemGradingConfig } from './item-grading-model';
 
 /**
@@ -71,6 +73,7 @@ async function gradeSemanticCriteria(params: {
   responseText: string;
   semanticCriteria: Array<{ index: number; criterion: ExpectedCriterion }>;
   modelTag?: string;
+  context?: GradingUsageContext;
 }): Promise<SemanticGradingResult | null> {
   if (params.semanticCriteria.length === 0) {
     return null;
@@ -80,7 +83,7 @@ async function gradeSemanticCriteria(params: {
 
   let text: string;
   try {
-    ({ text } = await retryTransportFaults(
+    const completion = await retryTransportFaults(
       () =>
         completeStructuredWithUsage({
           model: grading.model,
@@ -101,7 +104,20 @@ async function gradeSemanticCriteria(params: {
           requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
         }),
       { runtime: 'responses', label: 'criteria-grader.create' },
-    ));
+    );
+    text = completion.text;
+    // B0-1109 — success path only: a refusal/truncation/transport failure throws below before any
+    // usage is ever read (see structured-completion.ts runOpenAI/runAnthropic), so there is nothing
+    // to record on those paths.
+    if (params.context) {
+      recordGradingUsage({
+        context: params.context,
+        callSite: 'criteria_grader',
+        provider: modelProviderFor(grading.model),
+        model: grading.model,
+        usage: completion.usage,
+      });
+    }
   } catch (error) {
     // `StructuredOutputRefusedError` / `StructuredOutputTruncatedError` and exhausted transport
     // retries all land here: the model gave no usable judgment, so say so rather than guess.
@@ -417,6 +433,8 @@ export async function gradeWithCriteria(params: {
   responseText: string;
   criteria: ExpectedCriterion[];
   modelTag?: string;
+  /** B0-1109 — when present, the successful semantic-grading call's token usage is persisted. */
+  context?: GradingUsageContext;
 }): Promise<CriteriaGradingOutcome | null> {
   if (params.criteria.length === 0) {
     return null;
@@ -456,6 +474,7 @@ export async function gradeWithCriteria(params: {
     responseText: params.responseText,
     semanticCriteria,
     modelTag: params.modelTag,
+    context: params.context,
   });
 
   // B0-902 — no model call happened (every criterion was settled in code, by the `exact` check or

@@ -5,10 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * `completeStructuredWithUsage`, so a `claude-*` id resolved from `BEX_RESPONSES_MODEL` / the run's
  * `modelTag` reaches it unchanged and is what gets stamped on the persisted suggestion.
  */
-const { mockComplete, mockResolveModel, mockReplace } = vi.hoisted(() => ({
+const { mockComplete, mockResolveModel, mockReplace, mockRecordGradingUsage } = vi.hoisted(() => ({
   mockComplete: vi.fn(),
   mockResolveModel: vi.fn(async () => 'gpt-test'),
   mockReplace: vi.fn(async () => {}),
+  mockRecordGradingUsage: vi.fn(),
 }));
 vi.mock('~/lib/llm/structured-completion', () => ({
   completeStructuredWithUsage: mockComplete,
@@ -29,6 +30,10 @@ vi.mock('~/lib/ai-suggestions/repository', () => ({
 vi.mock('~/lib/observability/logger', () => ({
   logWarn: vi.fn(),
 }));
+// B0-1109 — recordGradingUsage talks to Supabase; stubbed so this stays a pure unit test.
+vi.mock('./grading-usage', () => ({
+  recordGradingUsage: mockRecordGradingUsage,
+}));
 
 import {
   analyzeAndPersistFailureRootCause,
@@ -39,6 +44,8 @@ const USAGE = { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedProm
 
 const INPUT = {
   testResultItemId: 'tri-1',
+  testResultId: 'tr-1',
+  testItemId: 'ti-1',
   testName: 'Restroom set',
   prompt: 'What is the contact time for Pine Quat?',
   mandatoryConcepts: [
@@ -56,6 +63,7 @@ describe('analyzeAndPersistFailureRootCause (B0-617 / B0-908)', () => {
     mockReplace.mockClear();
     mockResolveModel.mockReset();
     mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    mockRecordGradingUsage.mockClear();
   });
 
   it('sends the evidence + schema to completeStructuredWithUsage with the resolved claude id and persists it', async () => {
@@ -99,6 +107,15 @@ describe('analyzeAndPersistFailureRootCause (B0-617 / B0-908)', () => {
         metadata: expect.objectContaining({ category: 'agent' }),
       }),
     ]);
+
+    // B0-1109 — the grading call's token usage is recorded against the run + source test item.
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith({
+      context: { testResultId: 'tr-1', testItemId: 'ti-1' },
+      callSite: 'failure_root_cause',
+      provider: 'anthropic',
+      model: 'claude-sonnet-5',
+      usage: USAGE,
+    });
   });
 
   it('persists nothing when the helper throws (truncation, refusal, transport)', async () => {
@@ -107,5 +124,7 @@ describe('analyzeAndPersistFailureRootCause (B0-617 / B0-908)', () => {
     await expect(analyzeAndPersistFailureRootCause(INPUT)).resolves.toBeUndefined();
 
     expect(mockReplace).not.toHaveBeenCalled();
+    // B0-1109 — no usage on a thrown/refused/truncated call: never reaches the usage line.
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
   });
 });
