@@ -1,16 +1,32 @@
 import { z } from 'zod';
 
-import type { ModelEffort } from '~/lib/constants/models';
+import { modelProviderFor, type ModelEffort } from '~/lib/constants/models';
 import {
-  completeStructured,
-  type StructuredCompletion,
+  completeStructuredWithUsage,
+  type CompletionResult,
   type StructuredCompletionRequest,
 } from '~/lib/llm/structured-completion';
+import {
+  recordGradingUsage,
+  type GradingCallSite,
+  type GradingUsageContext,
+} from '~/lib/tests/grading-usage';
 
 import { DEFAULT_GRADING_MODEL_TAG, resolveGradingModel } from './grading-model';
 import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
 import type { CaseHarnessAside } from './render';
 import { reportSynthesisSchema, type ReportSynthesis } from './schemas';
+
+/**
+ * B0-1116 — the seam this file talks to a model through, widened (same pattern as
+ * `case-scorer.ts`'s `StructuredCompletionWithUsage`, B0-1115) to also return the call's token
+ * usage, so every successful call can be recorded via `recordGradingUsage`. Defined locally
+ * because `synthesizer.ts` deliberately does not import `StructuredCompletion`-family types from
+ * `case-scorer.ts` — it can be changed independently of it.
+ */
+export type StructuredCompletionWithUsage = (
+  request: StructuredCompletionRequest,
+) => Promise<CompletionResult>;
 
 /**
  * Strict json_schema for the Top-3 synthesis call (B0-453), hand-mirrored from
@@ -290,16 +306,33 @@ function formatMetricsHeaderAsText(
  * `StructuredOutputTruncatedError` (B0-819) — so the failure reads "raise the cap" instead of a
  * `JSON.parse` message that doesn't say why. Labeled per call site so a future failure names which
  * call (and which chunk) broke.
+ *
+ * B0-1116 — `usage`, when given, records this call's token usage the moment `complete` returns
+ * successfully (before the JSON is even parsed): the spend happened regardless of whether the
+ * answer turns out to be parseable. A call that throws (refusal/truncation/transport failure)
+ * never reaches that point, so nothing is ever recorded for a failed attempt — including a
+ * bisected retry's failed half, which throws from its own `completeAndParse` call.
  */
 async function completeAndParse<T>(
-  complete: StructuredCompletion,
+  complete: StructuredCompletionWithUsage,
   request: StructuredCompletionRequest,
   schema: z.ZodType<T>,
   label: string,
+  usage?: { context: GradingUsageContext; callSite: GradingCallSite },
 ): Promise<T> {
   let text: string;
   try {
-    text = await complete(request);
+    const completion = await complete(request);
+    text = completion.text;
+    if (usage) {
+      recordGradingUsage({
+        context: usage.context,
+        callSite: usage.callSite,
+        provider: modelProviderFor(request.model),
+        model: request.model,
+        usage: completion.usage,
+      });
+    }
   } catch (error) {
     throw new Error(`${label}: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
@@ -319,11 +352,12 @@ function mergeDigests(a: BatchDigest, b: BatchDigest): BatchDigest {
 }
 
 async function digestChunkOnce(
-  complete: StructuredCompletion,
+  complete: StructuredCompletionWithUsage,
   model: string,
   chunk: CaseSummary[],
   label: string,
   effort: ModelEffort | undefined,
+  context: GradingUsageContext | undefined,
 ): Promise<BatchDigest> {
   return completeAndParse(
     complete,
@@ -339,6 +373,7 @@ async function digestChunkOnce(
     },
     batchDigestSchema,
     label,
+    context ? { context, callSite: 'synthesizer_digest' } : undefined,
   );
 }
 
@@ -350,22 +385,23 @@ async function digestChunkOnce(
  * a chunk that overflows always has a smaller one under it that won't.
  */
 export async function digestChunkWithRetry(
-  complete: StructuredCompletion,
+  complete: StructuredCompletionWithUsage,
   model: string,
   chunk: CaseSummary[],
   label: string,
   effort?: ModelEffort,
+  context?: GradingUsageContext,
 ): Promise<BatchDigest> {
   try {
-    return await digestChunkOnce(complete, model, chunk, label, effort);
+    return await digestChunkOnce(complete, model, chunk, label, effort, context);
   } catch (error) {
     if (chunk.length <= MIN_DIGEST_CHUNK_SIZE) {
       throw error;
     }
     const mid = Math.ceil(chunk.length / 2);
     const [left, right] = await Promise.all([
-      digestChunkWithRetry(complete, model, chunk.slice(0, mid), `${label} (split a)`, effort),
-      digestChunkWithRetry(complete, model, chunk.slice(mid), `${label} (split b)`, effort),
+      digestChunkWithRetry(complete, model, chunk.slice(0, mid), `${label} (split a)`, effort, context),
+      digestChunkWithRetry(complete, model, chunk.slice(mid), `${label} (split b)`, effort, context),
     ]);
     return mergeDigests(left, right);
   }
@@ -373,10 +409,11 @@ export async function digestChunkWithRetry(
 
 /** Runs `digestChunkWithRetry` over every chunk in bounded concurrency, mirroring `scoreRemainingCases`. */
 async function digestAllChunks(
-  complete: StructuredCompletion,
+  complete: StructuredCompletionWithUsage,
   model: string,
   chunks: CaseSummary[][],
   effort: ModelEffort | undefined,
+  context: GradingUsageContext | undefined,
 ): Promise<BatchDigest[]> {
   const digests: BatchDigest[] = new Array(chunks.length);
   for (let i = 0; i < chunks.length; i += DIGEST_CONCURRENCY) {
@@ -389,6 +426,7 @@ async function digestAllChunks(
           chunk,
           `Batch digest ${i + j + 1}/${chunks.length}`,
           effort,
+          context,
         ),
       ),
     );
@@ -420,21 +458,28 @@ async function digestAllChunks(
  * `status: 'failed'` / `state.error` path for exactly that — this no longer bypasses it.
  */
 export type SynthesizeReportDeps = {
-  complete?: StructuredCompletion;
+  complete?: StructuredCompletionWithUsage;
   resolveModel?: (modelTag: string | undefined) => Promise<string>;
 };
 
+/**
+ * B0-1116 — `testResultId` identifies the report every digest and final-synthesis call in this run
+ * belongs to for `recordGradingUsage`; there is no single test item behind either call site, so
+ * `testItemId`/`passIndex` are never set on the context built from it.
+ */
 export async function synthesizeReportFindings(
   metrics: ReportMetrics,
   findingsByCaseId: Map<string, CaseFindings>,
+  testResultId: string,
   modelTag?: string,
   /** B0-806 — Anthropic `output_config.effort`; ignored on OpenAI models. */
   effort?: ModelEffort,
   deps: SynthesizeReportDeps = {},
 ): Promise<ReportSynthesis> {
-  const complete = deps.complete ?? completeStructured;
+  const complete = deps.complete ?? completeStructuredWithUsage;
   const resolveModel = deps.resolveModel ?? resolveGradingModel;
   const model = await resolveModel(modelTag ?? DEFAULT_GRADING_MODEL_TAG);
+  const usageContext: GradingUsageContext = { testResultId };
 
   const overallSummary = rateBlockSummary(metrics.overall);
   const tiersSummary = Object.fromEntries(metrics.tiers.map(([k, v]) => [k, rateBlockSummary(v)]));
@@ -458,7 +503,7 @@ export async function synthesizeReportFindings(
   const chunks = chunkCases(casesSummary);
   const contentText =
     chunks.length > 1
-      ? `${metricsHeaderText}${formatDigestsAsText(await digestAllChunks(complete, model, chunks, effort))}`
+      ? `${metricsHeaderText}${formatDigestsAsText(await digestAllChunks(complete, model, chunks, effort, usageContext))}`
       : `${metricsHeaderText}PER-CASE FINDINGS\n${formatCasesAsText(casesSummary)}`;
 
   const runFinalSynthesis = (instructions: string, maxOutputTokens: number) =>
@@ -476,6 +521,7 @@ export async function synthesizeReportFindings(
       },
       reportSynthesisSchema,
       'Final synthesis call',
+      { context: usageContext, callSite: 'synthesizer_final' },
     );
 
   try {
