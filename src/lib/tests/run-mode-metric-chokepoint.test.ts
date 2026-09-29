@@ -288,7 +288,14 @@ describe('no run_mode literal outside run-mode.ts (B0-1105 source guard)', () =>
       }
     }
 
-    expect(found).toEqual(ALLOWED_RUN_MODE_PREDICATES);
+    // Order-insensitive: `found` comes back in directory order, which is not a contract.
+    const byFileThenPredicate = (
+      a: { file: string; predicate: string },
+      b: { file: string; predicate: string },
+    ) => a.file.localeCompare(b.file) || a.predicate.localeCompare(b.predicate);
+    expect([...found].sort(byFileThenPredicate)).toEqual(
+      [...ALLOWED_RUN_MODE_PREDICATES].sort(byFileThenPredicate),
+    );
   });
 
   it('the eligible-mode list is defined exactly once', () => {
