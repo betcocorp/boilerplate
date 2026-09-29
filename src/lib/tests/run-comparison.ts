@@ -102,6 +102,9 @@ export async function runRunComparisonAnalysis(resultId: string): Promise<void> 
       diff,
       currentNotes: current.notes,
       previousNotes: previous.notes,
+      // B0-1114 — attribute this call's token usage to the current/triggering run only;
+      // `previousResultId` is read-only prompt context, never graded, so it gets no usage row.
+      testResultId: resultId,
     });
 
     if (!analysisResult.ok) {

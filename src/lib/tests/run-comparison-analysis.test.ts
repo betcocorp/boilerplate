@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+const { mockComplete, mockResolveModel, mockRecordGradingUsage } = vi.hoisted(() => ({
   mockComplete: vi.fn(),
   mockResolveModel: vi.fn(async () => 'gpt-test'),
+  mockRecordGradingUsage: vi.fn(),
 }));
 vi.mock('~/lib/llm/structured-completion', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/lib/llm/structured-completion')>()),
@@ -10,6 +11,10 @@ vi.mock('~/lib/llm/structured-completion', async (importOriginal) => ({
 }));
 vi.mock('~/lib/openai/client', () => ({
   resolveResponsesModel: mockResolveModel,
+}));
+// B0-1114 — recordGradingUsage talks to Supabase; stubbed so this stays a pure unit test.
+vi.mock('./grading-usage', () => ({
+  recordGradingUsage: mockRecordGradingUsage,
 }));
 
 import { StructuredOutputTruncatedError } from '~/lib/llm/structured-completion';
@@ -135,6 +140,7 @@ describe('analyzeRunComparison', () => {
     mockComplete.mockReset();
     mockResolveModel.mockReset();
     mockResolveModel.mockResolvedValue('gpt-test');
+    mockRecordGradingUsage.mockClear();
   });
 
   it('never calls the model when there are no new failures', async () => {
@@ -142,6 +148,7 @@ describe('analyzeRunComparison', () => {
       diff: diffWith({ fixes: [{ ...NEW_FAILURE, testItemId: 'fixed-1' }] }),
       currentNotes: null,
       previousNotes: null,
+      testResultId: 'tr-current',
     });
 
     expect(mockComplete).not.toHaveBeenCalled();
@@ -153,6 +160,8 @@ describe('analyzeRunComparison', () => {
         failures: [],
       },
     });
+    // No model call means nothing to attribute usage to.
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
   });
 
   it('sends the strict schema and a resolved claude id to completeStructuredWithUsage', async () => {
@@ -170,6 +179,7 @@ describe('analyzeRunComparison', () => {
       diff: diffWith({ newFailures: [NEW_FAILURE] }),
       currentNotes: 'Deployed reranker v2',
       previousNotes: null,
+      testResultId: 'tr-current',
     });
 
     expect(mockComplete).toHaveBeenCalledOnce();
@@ -192,18 +202,30 @@ describe('analyzeRunComparison', () => {
         failures: [{ testItemId: 'item-1', cause: 'Reranker demoted the chunk.', fix: 'Retune.' }],
       },
     });
+
+    // B0-1114 — usage attributed to the CURRENT run only, never `previousResultId`.
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith({
+      context: { testResultId: 'tr-current' },
+      callSite: 'run_comparison_analysis',
+      provider: 'anthropic',
+      model: 'claude-sonnet-5',
+      usage: USAGE,
+    });
   });
 
-  it('reports parse_error when the structured answer is truncated', async () => {
+  it('reports parse_error when the structured answer is truncated and records no usage', async () => {
     mockComplete.mockRejectedValue(new StructuredOutputTruncatedError());
 
     const result = await analyzeRunComparison({
       diff: diffWith({ newFailures: [NEW_FAILURE] }),
       currentNotes: null,
       previousNotes: null,
+      testResultId: 'tr-current',
     });
 
     expect(result).toEqual({ ok: false, reason: 'parse_error' });
+    // B0-1114 — no usage on a thrown/refused/truncated call: never reaches the usage line.
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
   });
 
   it('reports invalid_shape when the JSON does not satisfy the Zod schema', async () => {
@@ -216,8 +238,18 @@ describe('analyzeRunComparison', () => {
       diff: diffWith({ newFailures: [NEW_FAILURE] }),
       currentNotes: null,
       previousNotes: null,
+      testResultId: 'tr-current',
     });
 
     expect(result).toEqual({ ok: false, reason: 'invalid_shape' });
+    // The model call itself succeeded, so usage is still recorded even though the shape failed
+    // downstream — matching the "success path" being the completion call, not the parse.
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith({
+      context: { testResultId: 'tr-current' },
+      callSite: 'run_comparison_analysis',
+      provider: 'openai',
+      model: 'gpt-test',
+      usage: USAGE,
+    });
   });
 });
