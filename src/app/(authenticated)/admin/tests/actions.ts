@@ -15,10 +15,22 @@ import { writeAuditLog } from '~/lib/audit/audit-log';
 import { authOptions } from '~/lib/auth';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logError, logWarn } from '~/lib/observability/logger';
+import {
+  closeManualSweepLedger,
+  openManualSweepLedger,
+  recordManualSweepRunCreated,
+  recordManualSweepTestSkipped,
+} from '~/lib/observability/manual-golden-sweep-ledger';
+import type { SweepRunMode } from '~/lib/observability/scheduled-test-types';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePermission } from '~/lib/permissions/require-permission';
 import { executeQueuedTestRun } from '~/lib/tests/execute-queued-run';
 import { GOLDEN_TIERS, listGoldenTests, type GoldenTier } from '~/lib/tests/golden-set';
+import { getLatestItemScores } from '~/lib/tests/latest-item-scores';
+import {
+  parseScoreThresholdField,
+  selectThresholdWorkingSet,
+} from '~/lib/tests/threshold-working-set';
 import { updateTierTarget } from '~/lib/tests/tier-targets';
 import supportedModels from '~/lib/constants/models';
 import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -763,6 +775,19 @@ export async function runTestAction(formData: FormData) {
  * `admin/tests/page.tsx`); a run whose execution is cut off by that budget is left `running` and
  * recovered by the existing hourly `/api/v1/observability/sweep-stalled-runs` cron — there is
  * deliberately no second recovery mechanism here.
+ *
+ * B0-1102 — the dialog's optional `scoreThreshold` (0–100). Blank is today's path exactly: one
+ * `run_mode='full'` run of every item per set. Set, each active set is narrowed to the items whose
+ * latest displayed score (`getLatestItemScores`, B0-1101, across full AND partial history) is
+ * strictly below it, plus never-run / Unable-to-Evaluate items; a set with nothing qualifying gets
+ * no `test_results` row at all, and one that qualifies is created `run_mode='partial'` with
+ * `partial_score_threshold` + `item_scope`. A set with no graded run at all therefore re-runs every
+ * item — still as `partial`, never auto-promoted to `full`: partial runs never feed golden metrics.
+ *
+ * B0-1106 — the whole fan-out is recorded in the `scheduled_test_runs` ledger under
+ * `sweep_name='manual_golden_sweep'` (`~/lib/observability/manual-golden-sweep-ledger`): one child
+ * per active set, linked to its run at creation or closed `skipped` with the reason. Every ledger
+ * write is best-effort — a ledger failure is logged and never blocks a run.
  */
 export async function runGoldenTestsAction(formData: FormData) {
   const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
@@ -782,6 +807,14 @@ export async function runGoldenTestsAction(formData: FormData) {
   const { modelTag, useValidator, routerType, agentMode } =
     parseTestRunOptionFields(formData);
 
+  // B0-1102 — blank/absent → undefined (full run); anything else must be a 0–100 integer.
+  const thresholdField = parseScoreThresholdField(formData.get('scoreThreshold'));
+  if (!thresholdField.ok) {
+    redirect(encodeMessage(returnPath, 'error', thresholdField.error));
+  }
+  const scoreThreshold = thresholdField.threshold;
+  const runMode: SweepRunMode = scoreThreshold === undefined ? 'full' : 'partial';
+
   const goldenTests = await listGoldenTests({ includeArchived: false });
   if (goldenTests.length === 0) {
     redirect(
@@ -793,20 +826,57 @@ export async function runGoldenTestsAction(formData: FormData) {
   const runOptions = buildTestRunOptions({ modelTag, useValidator, agentMode, routerType });
   const createdRunIds: string[] = [];
   const skippedEmpty: string[] = [];
+  const skippedNoQualifying: string[] = [];
+
+  // B0-1106 — parent + one `running` child per set, written before anything is created. Null when
+  // the write failed (already logged); every record* call below is then a no-op.
+  const ledger = await openManualSweepLedger({
+    goldenTests: goldenTests.map((test) => ({ id: test.id, name: test.name })),
+    runMode,
+    partialScoreThreshold: scoreThreshold ?? null,
+    triggeredBy,
+    metadata: { model_tag: modelTag },
+  });
 
   for (const test of goldenTests) {
     const items = await getTestItemsByTestId(test.id);
     if (items.length === 0) {
       // A run needs total_items > 0; an empty set is skipped and reported, never a hard failure.
       skippedEmpty.push(test.name);
+      await recordManualSweepTestSkipped(ledger, test.id, {
+        code: 'empty_set',
+        message: 'This golden set has no items.',
+      });
       continue;
+    }
+
+    // B0-1102 — with a threshold the run is scoped to the qualifying items only. A set with no
+    // graded history has no scores at all, so every item qualifies — still a partial run.
+    let workingSet = items;
+    if (scoreThreshold !== undefined) {
+      const latestScores = await getLatestItemScores(test.id);
+      workingSet = selectThresholdWorkingSet(items, latestScores, scoreThreshold);
+      if (workingSet.length === 0) {
+        skippedNoQualifying.push(test.name);
+        await recordManualSweepTestSkipped(ledger, test.id, {
+          code: 'no_qualifying_items',
+          message: `No items scored below ${scoreThreshold} on their latest graded run.`,
+        });
+        continue;
+      }
     }
 
     const testResult = await createTestResult({
       test_id: test.id,
       status: 'queued',
-      run_mode: 'full',
-      total_items: items.length,
+      run_mode: runMode,
+      ...(scoreThreshold !== undefined
+        ? {
+            partial_score_threshold: scoreThreshold,
+            item_scope: workingSet.map((item) => item.id),
+          }
+        : {}),
+      total_items: workingSet.length,
       passed_items: 0,
       failed_items: 0,
       started_at: new Date().toISOString(),
@@ -815,14 +885,18 @@ export async function runGoldenTestsAction(formData: FormData) {
       triggered_by: triggeredBy,
       summary: {
         completed_items: 0,
-        total_items: items.length,
+        total_items: workingSet.length,
         progress_percent: 0,
         runner_state: 'queued',
       },
     });
     await updateTestRecord(test.id, { status: 'running' });
     createdRunIds.push(testResult.id);
+    await recordManualSweepRunCreated(ledger, test.id, testResult.id);
   }
+
+  // Parent stays `in_progress` while runs execute; the hourly reconciler closes it.
+  await closeManualSweepLedger(ledger);
 
   if (createdRunIds.length > 0) {
     after(async () => {
@@ -858,13 +932,23 @@ export async function runGoldenTestsAction(formData: FormData) {
     skippedEmpty.length > 0
       ? ` Skipped ${skippedEmpty.length} empty set${skippedEmpty.length === 1 ? '' : 's'}: ${skippedEmpty.join(', ')}.`
       : '';
+  const noQualifyingNote =
+    skippedNoQualifying.length > 0
+      ? ` Skipped ${skippedNoQualifying.length} set${skippedNoQualifying.length === 1 ? '' : 's'} with nothing below ${scoreThreshold}: ${skippedNoQualifying.join(', ')}.`
+      : '';
+  const runLabel =
+    scoreThreshold === undefined
+      ? `golden run${started === 1 ? '' : 's'}`
+      : `partial golden run${started === 1 ? '' : 's'} (items scoring below ${scoreThreshold})`;
   redirect(
     encodeMessage(
       returnPath,
       started > 0 ? 'success' : 'error',
       started > 0
-        ? `Started ${started} golden run${started === 1 ? '' : 's'} (${modelTag}). Archived golden sets were skipped.${skippedNote}`
-        : `No golden runs started — every active golden set is empty.${skippedNote}`,
+        ? `Started ${started} ${runLabel} (${modelTag}). Archived golden sets were skipped.${skippedNote}${noQualifyingNote}`
+        : scoreThreshold === undefined
+          ? `No golden runs started — every active golden set is empty.${skippedNote}`
+          : `No partial golden runs started — no active golden set has items scoring below ${scoreThreshold}.${skippedNote}${noQualifyingNote}`,
     ),
   );
 }
