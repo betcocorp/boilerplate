@@ -67,6 +67,8 @@ function parentRun(overrides: Partial<ScheduledTestRun> = {}): ScheduledTestRun 
   return {
     id: 'sweep-1',
     sweep_name: 'golden_test_sweep',
+    run_mode: 'full',
+    partial_score_threshold: null,
     sweep_triggered_at: isoAgo(30 * 60 * 1000),
     status: 'in_progress',
     error_message: null,

@@ -49,9 +49,25 @@ export function isTerminalScheduledItemStatus(
   );
 }
 
+/**
+ * B0-1106 — a sweep is either a full sweep (every item of every active golden set) or a partial
+ * sweep (only the items under a score threshold). Partial sweeps are display-only: they never feed
+ * a golden-set metric, which is why the two are listed in separate sections on /admin/tests.
+ */
+export const SWEEP_RUN_MODES = ['full', 'partial'] as const;
+export type SweepRunMode = (typeof SWEEP_RUN_MODES)[number];
+
+/** `scheduled_test_runs.sweep_name` values — the trigger source, not the mode. */
+export const CRON_SWEEP_NAME = 'golden_test_sweep';
+export const MANUAL_SWEEP_NAME = 'manual_golden_sweep';
+
 export const scheduledTestRunSchema = z.object({
   id: z.string(),
   sweep_name: z.string(),
+  /** B0-1106 — `full` | `partial`; defaults to `full` at the database. */
+  run_mode: z.enum(SWEEP_RUN_MODES),
+  /** B0-1106 — the 0–100 bar a partial sweep was filtered by; null for full sweeps. */
+  partial_score_threshold: z.number().nullable(),
   sweep_triggered_at: z.string(),
   status: z.enum(SCHEDULED_RUN_STATUSES),
   error_message: z.string().nullable(),

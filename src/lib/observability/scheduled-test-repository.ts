@@ -9,11 +9,15 @@
  */
 
 import {
+  CRON_SWEEP_NAME,
   computeScheduledRunAggregates,
   scheduledTestItemSchema,
   scheduledTestRunSchema,
+  type ScheduledItemStatus,
   type ScheduledTestItem,
   type ScheduledTestRun,
+  type ScheduledTestRunWithItems,
+  type SweepRunMode,
 } from '~/lib/observability/scheduled-test-types';
 import { logInfo, logWarn } from '~/lib/observability/logger';
 import {
@@ -38,7 +42,8 @@ export type ScheduledTestRunPatch = Partial<
   Omit<ScheduledTestRun, 'id' | 'created_at' | 'updated_at'>
 >;
 
-export const DEFAULT_SWEEP_NAME = 'golden_test_sweep';
+/** The nightly cron's `sweep_name`; the Run Golden dialog writes `MANUAL_SWEEP_NAME` instead. */
+export const DEFAULT_SWEEP_NAME = CRON_SWEEP_NAME;
 
 /* -------------------------------------------------------------------------- *
  * The one untyped seam
@@ -92,6 +97,10 @@ function unwrap(result: QueryResult, context: string): unknown {
 
 export async function insertScheduledTestRun(input: {
   sweepName?: string;
+  /** B0-1106 — defaults to `full`; the cron never passes it, so its rows are unchanged. */
+  runMode?: SweepRunMode;
+  /** B0-1106 — only meaningful with `runMode: 'partial'`. */
+  partialScoreThreshold?: number | null;
   sweepTriggeredAt: string;
   totalTests: number;
   metadata: Record<string, unknown>;
@@ -99,6 +108,8 @@ export async function insertScheduledTestRun(input: {
   const result = await scheduledTable('scheduled_test_runs')
     .insert({
       sweep_name: input.sweepName ?? DEFAULT_SWEEP_NAME,
+      run_mode: input.runMode ?? 'full',
+      partial_score_threshold: input.partialScoreThreshold ?? null,
       sweep_triggered_at: input.sweepTriggeredAt,
       started_at: input.sweepTriggeredAt,
       status: 'in_progress',
@@ -114,7 +125,21 @@ export async function insertScheduledTestRun(input: {
 export async function insertScheduledTestItems(input: {
   scheduledRunId: string;
   startedAt: string;
-  tests: { id: string; name: string }[];
+  /**
+   * B0-1106 — a child may be written already terminal (e.g. `skipped` for an empty golden set) or
+   * already linked to its run when the caller created the run in-process; per-test fields win over
+   * the call-level `status`.
+   */
+  tests: {
+    id: string;
+    name: string;
+    status?: ScheduledItemStatus;
+    testRunId?: string | null;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+  }[];
+  /** Status for every child that does not carry its own; the cron's default stays `running`. */
+  status?: ScheduledItemStatus;
 }): Promise<ScheduledTestItem[]> {
   if (input.tests.length === 0) {
     return [];
@@ -122,13 +147,21 @@ export async function insertScheduledTestItems(input: {
 
   const result = await scheduledTable('scheduled_test_items')
     .insert(
-      input.tests.map((test) => ({
-        scheduled_run_id: input.scheduledRunId,
-        test_id: test.id,
-        test_name: test.name,
-        status: 'running',
-        started_at: input.startedAt,
-      })),
+      input.tests.map((test) => {
+        const status = test.status ?? input.status ?? 'running';
+        const terminal = status !== 'queued' && status !== 'claimed' && status !== 'running';
+        return {
+          scheduled_run_id: input.scheduledRunId,
+          test_id: test.id,
+          test_name: test.name,
+          status,
+          started_at: input.startedAt,
+          ...(terminal ? { completed_at: input.startedAt } : {}),
+          ...(test.testRunId !== undefined ? { test_run_id: test.testRunId } : {}),
+          ...(test.errorCode !== undefined ? { error_code: test.errorCode } : {}),
+          ...(test.errorMessage !== undefined ? { error_message: test.errorMessage } : {}),
+        };
+      }),
     )
     .select('*');
 
@@ -205,6 +238,71 @@ export async function listScheduledTestRuns(ids: string[]): Promise<ScheduledTes
   return z
     .array(scheduledTestRunSchema)
     .parse(unwrap(result, 'select scheduled_test_runs') ?? []);
+}
+
+/* -------------------------------------------------------------------------- *
+ * Reads — used by /admin/scheduled and the /admin/tests sweep sections (B0-1106)
+ * -------------------------------------------------------------------------- */
+
+function groupItemsByRun(
+  runs: ScheduledTestRun[],
+  items: ScheduledTestItem[],
+): ScheduledTestRunWithItems[] {
+  const itemsByRunId = new Map<string, ScheduledTestItem[]>();
+  for (const item of items) {
+    const existing = itemsByRunId.get(item.scheduled_run_id);
+    if (existing) {
+      existing.push(item);
+    } else {
+      itemsByRunId.set(item.scheduled_run_id, [item]);
+    }
+  }
+  return runs.map((run) => ({ ...run, items: itemsByRunId.get(run.id) ?? [] }));
+}
+
+/**
+ * Recent sweeps with their children, newest first. `/admin/scheduled` scopes to the cron
+ * (`sweepName: DEFAULT_SWEEP_NAME`) so its "Scheduled test sweeps" title stays true; the
+ * /admin/tests sections scope by `runMode` and take every source. This reads the ledger only —
+ * never `test_results` aggregates — so a partial sweep listed here cannot leak into any rollup.
+ */
+export async function listRecentScheduledTestRuns(input: {
+  runMode?: SweepRunMode;
+  sweepName?: string;
+  limit: number;
+}): Promise<ScheduledTestRunWithItems[]> {
+  let query = scheduledTable('scheduled_test_runs').select('*');
+  if (input.runMode) {
+    query = query.eq('run_mode', input.runMode);
+  }
+  if (input.sweepName) {
+    query = query.eq('sweep_name', input.sweepName);
+  }
+  const result = await query
+    .order('sweep_triggered_at', { ascending: false })
+    .limit(input.limit);
+
+  const runs = z
+    .array(scheduledTestRunSchema)
+    .parse(unwrap(result, 'select scheduled_test_runs') ?? []);
+  if (runs.length === 0) {
+    return [];
+  }
+
+  const items = await listScheduledTestItemsForRuns(runs.map((run) => run.id));
+  return groupItemsByRun(runs, items);
+}
+
+/** One sweep with its children, or null when the id is unknown (the detail page 404s on null). */
+export async function getScheduledTestRunWithItems(
+  scheduledRunId: string,
+): Promise<ScheduledTestRunWithItems | null> {
+  const [run] = await listScheduledTestRuns([scheduledRunId]);
+  if (!run) {
+    return null;
+  }
+  const items = await listScheduledTestItemsForRuns([run.id]);
+  return groupItemsByRun([run], items)[0] ?? null;
 }
 
 /* -------------------------------------------------------------------------- *
