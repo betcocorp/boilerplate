@@ -39,12 +39,16 @@ type TestRunNotesContextValue = {
   hasNotes: boolean;
 };
 
-const TestRunNotesContext = createContext<TestRunNotesContextValue | null>(null);
+const TestRunNotesContext = createContext<TestRunNotesContextValue | null>(
+  null,
+);
 
 function useTestRunNotes() {
   const ctx = useContext(TestRunNotesContext);
   if (!ctx) {
-    throw new Error('TestRunNotes components must be used within TestRunNotesProvider');
+    throw new Error(
+      'TestRunNotes components must be used within TestRunNotesProvider',
+    );
   }
   return ctx;
 }
@@ -119,8 +123,8 @@ export function TestRunNotesProvider({
           <DialogHeader>
             <DialogTitle>Run notes</DialogTitle>
             <DialogDescription>
-              Record what changed for this run—dataset updates, similarity tweaks, model
-              changes—so you can compare outcomes later.
+              Record what changed for this run—dataset updates, similarity
+              tweaks, model changes—so you can compare outcomes later.
             </DialogDescription>
           </DialogHeader>
           <Textarea
@@ -198,7 +202,7 @@ export function TestRunNotesToolbarButton() {
 
   return (
     <Button onClick={openDialog} size="sm" type="button" variant="outline">
-      {hasNotes ? 'Edit notes' : 'Add run notes'}
+      {hasNotes ? 'Edit notes' : 'Add notes'}
     </Button>
   );
 }

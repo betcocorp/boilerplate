@@ -35,8 +35,8 @@ export function AddTestItemDialog({
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button size="sm" type="button" variant="outline">
-          Add prompt
+        <Button size="sm" type="button">
+          Add
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">

@@ -5,18 +5,18 @@ import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { AliasResolutionPanel } from '~/components/admin/tests/AliasResolutionPanel';
-import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
-import { ProviderFaultBanner } from '~/components/admin/tests/ProviderFaultBanner';
 import { AppVersionBadge } from '~/components/admin/tests/AppVersionBadge';
+import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
 import { MultiTurnRunPanel } from '~/components/admin/tests/MultiTurnRunPanel';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
-import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
-import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
-import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
+import { ProviderFaultBanner } from '~/components/admin/tests/ProviderFaultBanner';
 import {
   RagEvaluationPanel,
   type RagEvaluationPanelData,
 } from '~/components/admin/tests/RagEvaluationPanel';
+import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
+import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
+import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import {
   RunComparisonPanel,
   type RunComparisonPanelData,
@@ -56,10 +56,11 @@ import { computeAliasResolutionReport } from '~/lib/tests/alias-routing';
 import {
   formatItemSimilarityConfidenceLabel,
   formatRetrievedChunksForCsv,
-  formatYesNoExport,
   formatTimingBreakdownLabel,
+  formatYesNoExport,
 } from '~/lib/tests/format';
 import { extractMultiTurnResult } from '~/lib/tests/multi-turn-result';
+import { getRagEvaluation } from '~/lib/tests/rag-evaluation/persistence';
 import {
   completedPassCount,
   parseReportState,
@@ -100,7 +101,6 @@ import {
   computeRoutingComparisonReport,
   type RoutingComparisonReportInput,
 } from '~/lib/tests/routing-comparison';
-import { getRagEvaluation } from '~/lib/tests/rag-evaluation/persistence';
 import { parseTestRunConfig } from '~/lib/tests/run-config';
 import { computeRunRoutingHealth } from '~/lib/tests/run-health';
 import { computeRunProviderHealth } from '~/lib/tests/run-provider-health';
@@ -121,6 +121,7 @@ import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 import { shortHash } from '~/lib/workflows/product-support/prompt-version';
 
 import { deleteTestRunAction } from '../../../actions';
+import { Trash } from 'lucide-react';
 
 export async function generateMetadata({
   params,
@@ -175,14 +176,19 @@ export default async function AdminTestRunDetailsPage({
     notFound();
   }
 
-  const [allResultItems, testItems, completedFromRows, runComparison, ragEvaluation] =
-    await Promise.all([
-      listAllResultItemsByResultId(result.id),
-      getTestItemsByTestId(test.id),
-      countResultItemsByResultId(result.id),
-      getRunComparisonByResultId(result.id),
-      getRagEvaluation(result.id),
-    ]);
+  const [
+    allResultItems,
+    testItems,
+    completedFromRows,
+    runComparison,
+    ragEvaluation,
+  ] = await Promise.all([
+    listAllResultItemsByResultId(result.id),
+    getTestItemsByTestId(test.id),
+    countResultItemsByResultId(result.id),
+    getRunComparisonByResultId(result.id),
+    getRagEvaluation(result.id),
+  ]);
   /**
    * B0-315 — hydrates `RunComparisonPanel` from the persisted B0-312 row. `null` when no comparison
    * job was ever started for this run (still running, or a pre-B0-311 legacy run) — the panel
@@ -397,7 +403,10 @@ export default async function AdminTestRunDetailsPage({
   // Reuses `agentStepOutputs`, already fetched above for the tool-routing trace.
   const persistedModelByWorkflowRunId = new Map(
     agentStepOutputs
-      .map((row) => [row.workflow_run_id, extractAgentStepModel(row.output)] as const)
+      .map(
+        (row) =>
+          [row.workflow_run_id, extractAgentStepModel(row.output)] as const,
+      )
       .filter((entry): entry is [string, string] => entry[1] !== null),
   );
   const modelByWorkflowRunId = new Map(
@@ -456,28 +465,44 @@ export default async function AdminTestRunDetailsPage({
    */
   const signalsByWorkflowRunId = new Map(
     orchestrationPlannerStepOutputs.map(
-      (row) => [row.workflow_run_id, parseSignalsAnalysisGate(row.output)] as const,
+      (row) =>
+        [row.workflow_run_id, parseSignalsAnalysisGate(row.output)] as const,
     ),
   );
   const expectedProductMentionByTestItemId = new Map(
     testItems.map(
       (item) =>
-        [item.id, extractProductMentionFromInputPayload(item.input_payload)] as const,
+        [
+          item.id,
+          extractProductMentionFromInputPayload(item.input_payload),
+        ] as const,
     ),
   );
   const expectedSurfaceTypeByTestItemId = new Map(
     testItems.map(
-      (item) => [item.id, extractExpectedGroundTruthString(item.expected_surface_type)] as const,
+      (item) =>
+        [
+          item.id,
+          extractExpectedGroundTruthString(item.expected_surface_type),
+        ] as const,
     ),
   );
   const expectedBrandFamilyByTestItemId = new Map(
     testItems.map(
-      (item) => [item.id, extractExpectedGroundTruthString(item.expected_brand_family)] as const,
+      (item) =>
+        [
+          item.id,
+          extractExpectedGroundTruthString(item.expected_brand_family),
+        ] as const,
     ),
   );
   const expectedSettingByTestItemId = new Map(
     testItems.map(
-      (item) => [item.id, extractExpectedGroundTruthString(item.expected_setting)] as const,
+      (item) =>
+        [
+          item.id,
+          extractExpectedGroundTruthString(item.expected_setting),
+        ] as const,
     ),
   );
   const signalAccuracyReport = computeSignalAccuracyReport(
@@ -492,9 +517,12 @@ export default async function AdminTestRunDetailsPage({
         prompt: promptByItemId.get(row.test_item_id) ?? '',
         expectedProductMention:
           expectedProductMentionByTestItemId.get(row.test_item_id) ?? null,
-        expectedSurfaceType: expectedSurfaceTypeByTestItemId.get(row.test_item_id) ?? null,
-        expectedBrandFamily: expectedBrandFamilyByTestItemId.get(row.test_item_id) ?? null,
-        expectedSetting: expectedSettingByTestItemId.get(row.test_item_id) ?? null,
+        expectedSurfaceType:
+          expectedSurfaceTypeByTestItemId.get(row.test_item_id) ?? null,
+        expectedBrandFamily:
+          expectedBrandFamilyByTestItemId.get(row.test_item_id) ?? null,
+        expectedSetting:
+          expectedSettingByTestItemId.get(row.test_item_id) ?? null,
         signals,
       };
     }),
@@ -712,7 +740,9 @@ export default async function AdminTestRunDetailsPage({
                   <RuntimeConfigBadge
                     // B0-912 — the run-level loop, so a claude-* run reads as the AI SDK loop and a
                     // gpt-* run with the flag off reads as the Responses loop.
-                    generationRuntime={extractGenerationRuntimeFromSummary(result.summary)}
+                    generationRuntime={extractGenerationRuntimeFromSummary(
+                      result.summary,
+                    )}
                     runConfig={runConfigForRun}
                     runtimeConfig={runtimeConfigForRun}
                   />
@@ -720,7 +750,7 @@ export default async function AdminTestRunDetailsPage({
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Button asChild size="sm" variant="outline">
-                  <Link href={`/admin/tests/${test.id}`}>Back to test</Link>
+                  <Link href={`/admin/tests/${test.id}`}>Back</Link>
                 </Button>
                 <TestRunNotesToolbarButton />
                 <RunReportButton
@@ -745,7 +775,8 @@ export default async function AdminTestRunDetailsPage({
                   <input name="testId" type="hidden" value={test.id} />
                   <input name="runId" type="hidden" value={result.id} />
                   <Button size="sm" type="submit" variant="destructive">
-                    Delete run
+                    <Trash className="size-4" />
+                    Delete
                   </Button>
                 </form>
               </div>

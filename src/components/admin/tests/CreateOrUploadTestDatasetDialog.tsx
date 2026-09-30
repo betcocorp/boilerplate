@@ -47,7 +47,7 @@ export function CreateOrUploadTestDatasetDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" size="sm">
-          Create new test
+          Create
         </Button>
       </DialogTrigger>
       <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-2xl">

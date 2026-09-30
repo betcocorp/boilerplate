@@ -1,5 +1,8 @@
 import { Badge } from '~/components/ui/badge';
-import type { AliasResolutionOutcome, AliasResolutionReport } from '~/lib/tests/alias-routing';
+import type {
+  AliasResolutionOutcome,
+  AliasResolutionReport,
+} from '~/lib/tests/alias-routing';
 
 type AliasResolutionPanelProps = {
   report: AliasResolutionReport;
@@ -42,18 +45,27 @@ const OUTCOME_ORDER: AliasResolutionOutcome[] = [
  */
 export function AliasResolutionPanel({ report }: AliasResolutionPanelProps) {
   const { totalAttempts, counts, hitRate, ambiguousRate } = report;
-  const maxCount = OUTCOME_ORDER.reduce((max, outcome) => Math.max(max, counts[outcome]), 0);
+  const maxCount = OUTCOME_ORDER.reduce(
+    (max, outcome) => Math.max(max, counts[outcome]),
+    0,
+  );
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Alias resolution</h2>
+          <h2 className="text-lg font-semibold text-slate-900">
+            Alias resolution
+          </h2>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
-            How often <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">rag.product_alias</code>{' '}
-            resolution actually fired for a product-tool call in this run: exact match, fuzzy match, no
-            match (fell through to broad/legacy retrieval), or an ambiguous match rejected by the
-            verified-tiebreak gate (B0-483).
+            How often{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+              rag.product_alias
+            </code>{' '}
+            resolution actually fired for a product-tool call in this run: exact
+            match, fuzzy match, no match (fell through to broad/legacy
+            retrieval), or an ambiguous match rejected by the verified-tiebreak
+            gate (B0-483).
           </p>
         </div>
         {hitRate !== null ? (
@@ -67,23 +79,27 @@ export function AliasResolutionPanel({ report }: AliasResolutionPanelProps) {
             }
             variant="outline"
           >
-            {formatPercent(hitRate)} alias hit rate ({counts.alias_exact + counts.alias_fuzzy}/{totalAttempts})
+            {formatPercent(hitRate)} alias hit rate (
+            {counts.alias_exact + counts.alias_fuzzy}/{totalAttempts})
           </Badge>
         ) : (
-          <Badge variant="secondary">No alias-resolution attempts recorded for this run</Badge>
+          <Badge variant="secondary">No alias-resolution attempts</Badge>
         )}
       </div>
 
       {totalAttempts === 0 ? (
         <p className="text-sm text-slate-500">
-          No product-tool call in this run carried alias-resolution telemetry — every item either
-          early-declined, never resolved a product name, or predates this instrumentation (B0-488).
+          No product-tool call in this run carried alias-resolution telemetry —
+          every item either early-declined, never resolved a product name, or
+          predates this instrumentation (B0-488).
         </p>
       ) : (
         <div className="space-y-2">
           {OUTCOME_ORDER.map((outcome) => (
             <div key={outcome} className="flex items-center gap-3">
-              <span className="w-36 shrink-0 text-xs text-slate-700">{OUTCOME_LABELS[outcome]}</span>
+              <span className="w-36 shrink-0 text-xs text-slate-700">
+                {OUTCOME_LABELS[outcome]}
+              </span>
               <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
                 <div
                   className={`h-full rounded-full ${OUTCOME_BAR_CLASSNAMES[outcome]}`}
@@ -98,8 +114,12 @@ export function AliasResolutionPanel({ report }: AliasResolutionPanelProps) {
             </div>
           ))}
           <p className="pt-1 text-xs text-slate-400">
-            {totalAttempts} alias-resolution attempt{totalAttempts === 1 ? '' : 's'} across this run
-            {ambiguousRate !== null ? ` · ${formatPercent(ambiguousRate)} rejected as ambiguous` : ''}.
+            {totalAttempts} alias-resolution attempt
+            {totalAttempts === 1 ? '' : 's'} across this run
+            {ambiguousRate !== null
+              ? ` · ${formatPercent(ambiguousRate)} rejected as ambiguous`
+              : ''}
+            .
           </p>
         </div>
       )}

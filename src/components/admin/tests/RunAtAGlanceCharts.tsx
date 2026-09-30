@@ -195,7 +195,7 @@ export function RunAtAGlanceCharts({
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-4">
         <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4">
           <h3 className="text-sm font-semibold text-slate-900">
-            Elapsed by prompt order (seconds)
+            Elapsed vs TTFT
           </h3>
           {elapsedTrendData.length === 0 ? (
             <p className="mt-4 text-sm text-slate-500">

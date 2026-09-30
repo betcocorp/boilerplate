@@ -106,7 +106,7 @@ export function RunFullExportDownload({
   return (
     <Button onClick={downloadJson} size="sm" type="button" variant="outline">
       <Download className="size-4" />
-      Export run data
+      Export
     </Button>
   );
 }

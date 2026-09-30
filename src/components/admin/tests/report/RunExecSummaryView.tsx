@@ -37,8 +37,8 @@ import {
   gradeBandsAtPassMark,
   mandatoryMissingCountByCategory,
   plural,
-  resolveCaseIdMentions,
   type ReportExecSummaryData,
+  resolveCaseIdMentions,
   scoringRulesSentence,
   weightPercent,
 } from '~/lib/tests/report/exec-summary';
@@ -70,7 +70,10 @@ type ExecLinkContextValue = {
   perCaseIds: string[];
 };
 
-const ExecLinkContext = createContext<ExecLinkContextValue>({ reportHref: '', perCaseIds: [] });
+const ExecLinkContext = createContext<ExecLinkContextValue>({
+  reportHref: '',
+  perCaseIds: [],
+});
 
 const GRADE_CLASSES: Record<ReportRateGrade, string> = {
   A: 'text-emerald-700',
@@ -187,22 +190,37 @@ function Section({
       data-exec-section
     >
       {title ? (
-        <h2 className="text-sm font-semibold tracking-tight text-slate-950">{title}</h2>
+        <h2 className="text-sm font-semibold tracking-tight text-slate-950">
+          {title}
+        </h2>
       ) : null}
       {children}
     </section>
   );
 }
 
-function Line({ children, className }: { children: ReactNode; className?: string }) {
-  return <p className={cn('mt-1.5 text-sm leading-6 text-slate-700', className)}>{children}</p>;
+function Line({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <p className={cn('mt-1.5 text-sm leading-6 text-slate-700', className)}>
+      {children}
+    </p>
+  );
 }
 
 function Grade({ grade }: { grade: ReportRateGrade }) {
-  return <span className={cn('font-semibold', GRADE_CLASSES[grade])}>{grade}</span>;
+  return (
+    <span className={cn('font-semibold', GRADE_CLASSES[grade])}>{grade}</span>
+  );
 }
 
-const TH_CLASS = 'border-b border-slate-300 px-2 py-1 text-left font-semibold text-slate-600';
+const TH_CLASS =
+  'border-b border-slate-300 px-2 py-1 text-left font-semibold text-slate-600';
 const TD_CLASS = 'border-b border-slate-200 px-2 py-1 align-top text-slate-800';
 const NUM_CLASS = 'text-right tabular-nums';
 
@@ -233,7 +251,9 @@ function RateRow({
         className={cn(
           TD_CLASS,
           NUM_CLASS,
-          block.n > 0 && block.failPct >= FAIL_PCT_ALERT && 'font-semibold text-red-700',
+          block.n > 0 &&
+            block.failPct >= FAIL_PCT_ALERT &&
+            'font-semibold text-red-700',
         )}
       >
         {block.failPct}%
@@ -303,10 +323,17 @@ function ScoreTile({
       <p className="text-[11px] font-semibold tracking-[0.16em] text-slate-500 uppercase">
         {label}
       </p>
-      <p className={cn('mt-1 text-2xl font-semibold tabular-nums text-slate-950', valueClassName)}>
+      <p
+        className={cn(
+          'mt-1 text-2xl font-semibold tabular-nums text-slate-950',
+          valueClassName,
+        )}
+      >
         {value}
       </p>
-      {caption ? <p className="mt-0.5 text-xs text-slate-500">{caption}</p> : null}
+      {caption ? (
+        <p className="mt-0.5 text-xs text-slate-500">{caption}</p>
+      ) : null}
     </div>
   );
 }
@@ -334,7 +361,9 @@ function SpeedRow({
       <td className={cn(TD_CLASS, NUM_CLASS)}>{aggregate.avgSeconds} s</td>
       <td className={cn(TD_CLASS, NUM_CLASS)}>{aggregate.medianSeconds} s</td>
       <td className={cn(TD_CLASS, NUM_CLASS)}>
-        {aggregate.p90Seconds == null ? aggregate.p90Label : `${aggregate.p90Seconds} s`}
+        {aggregate.p90Seconds == null
+          ? aggregate.p90Label
+          : `${aggregate.p90Seconds} s`}
       </td>
       <td className={cn(TD_CLASS, NUM_CLASS)}>{aggregate.bands.good}</td>
       <td className={cn(TD_CLASS, NUM_CLASS)}>{aggregate.bands.acceptable}</td>
@@ -344,7 +373,13 @@ function SpeedRow({
 }
 
 /** `{id} ({seconds} s), {id} ({seconds} s)` for the two slowest cases of one metric. */
-function Outliers({ entries, unit }: { entries: ReadonlyArray<{ id: string; seconds: number }>; unit: string }) {
+function Outliers({
+  entries,
+  unit,
+}: {
+  entries: ReadonlyArray<{ id: string; seconds: number }>;
+  unit: string;
+}) {
   return (
     <>
       {entries.slice(0, 2).map((entry, index) => (
@@ -362,8 +397,8 @@ function SpeedSection({ speed }: { speed: ReportSpeed | null }) {
     return (
       <Section title="Speed performance (separate from the content grade)">
         <Line>
-          Timing data was unavailable for this run — no case recorded a time to first token or a
-          total response time; content grading is unaffected.
+          Timing data was unavailable for this run — no case recorded a time to
+          first token or a total response time; content grading is unaffected.
         </Line>
       </Section>
     );
@@ -388,30 +423,42 @@ function SpeedSection({ speed }: { speed: ReportSpeed | null }) {
             </tr>
           </thead>
           <tbody>
-            <SpeedRow aggregate={speed.metrics.ttft} fallbackLabel={SPEED_METRIC_LABELS.ttft} />
-            <SpeedRow aggregate={speed.metrics.total} fallbackLabel={SPEED_METRIC_LABELS.total} />
+            <SpeedRow
+              aggregate={speed.metrics.ttft}
+              fallbackLabel={SPEED_METRIC_LABELS.ttft}
+            />
+            <SpeedRow
+              aggregate={speed.metrics.total}
+              fallbackLabel={SPEED_METRIC_LABELS.total}
+            />
           </tbody>
         </table>
       </div>
       <Line>
         <span className="font-semibold text-slate-900">
           Speed Performance Score: {speed.avgScore}/100 (
-          <span className={SPEED_RATING_CLASSES[speed.rating]}>{speed.rating}</span>)
+          <span className={SPEED_RATING_CLASSES[speed.rating]}>
+            {speed.rating}
+          </span>
+          )
         </span>{' '}
-        — TTFT {weightPercent(speed.weights.ttft)}% / total {weightPercent(speed.weights.total)}%,
-        normalized to 0–100 before weighting{distribution ? `; ${distribution}` : ''}.
+        — TTFT {weightPercent(speed.weights.ttft)}% / total{' '}
+        {weightPercent(speed.weights.total)}%, normalized to 0–100 before
+        weighting{distribution ? `; ${distribution}` : ''}.
       </Line>
       <Line>
         <span className="font-semibold text-slate-900">Outliers:</span>{' '}
         {speed.metrics.ttft ? (
           <>
-            slowest to first token <Outliers entries={speed.metrics.ttft.slowest} unit={speed.unit} />
+            slowest to first token{' '}
+            <Outliers entries={speed.metrics.ttft.slowest} unit={speed.unit} />
           </>
         ) : null}
         {speed.metrics.ttft && speed.metrics.total ? '; ' : null}
         {speed.metrics.total ? (
           <>
-            slowest overall <Outliers entries={speed.metrics.total.slowest} unit={speed.unit} />
+            slowest overall{' '}
+            <Outliers entries={speed.metrics.total.slowest} unit={speed.unit} />
           </>
         ) : null}
         .
@@ -427,7 +474,8 @@ function SpeedSection({ speed }: { speed: ReportSpeed | null }) {
 function JudgedSection({ judged }: { judged: ReportJudged }) {
   const t = judged.thresholds;
   const hasExceptions =
-    judged.highSimilarityFailures.length > 0 || judged.lowSimilarityPasses.length > 0;
+    judged.highSimilarityFailures.length > 0 ||
+    judged.lowSimilarityPasses.length > 0;
 
   if (!judged.similarity && !judged.evalConfidence) return null;
 
@@ -435,23 +483,26 @@ function JudgedSection({ judged }: { judged: ReportJudged }) {
     <Section title="Judged metrics (reported separately, not part of the content grade)">
       {judged.similarity ? (
         <Line>
-          Similarity to the ideal answer averages {judged.similarity.avg} (median{' '}
-          {judged.similarity.median}, {judged.similarityBands.low} of {judged.similarity.n}{' '}
-          {plural(judged.similarity.n, 'case')} below {t.simLow}).
+          Similarity to the ideal answer averages {judged.similarity.avg}{' '}
+          (median {judged.similarity.median}, {judged.similarityBands.low} of{' '}
+          {judged.similarity.n} {plural(judged.similarity.n, 'case')} below{' '}
+          {t.simLow}).
           {judged.highSimilarityFailures.length > 0 ? (
             <span className="text-red-700">
               {' '}
               {judged.highSimilarityFailures.length}{' '}
-              {plural(judged.highSimilarityFailures.length, 'case')} closely matched the ideal and
-              still failed — <IdList ids={judged.highSimilarityFailures.map((c) => c.id)} />.
+              {plural(judged.highSimilarityFailures.length, 'case')} closely
+              matched the ideal and still failed —{' '}
+              <IdList ids={judged.highSimilarityFailures.map((c) => c.id)} />.
             </span>
           ) : null}
           {judged.lowSimilarityPasses.length > 0 ? (
             <>
               {' '}
               {judged.lowSimilarityPasses.length}{' '}
-              {plural(judged.lowSimilarityPasses.length, 'case')} passed while diverging from the
-              ideal — <IdList ids={judged.lowSimilarityPasses.map((c) => c.id)} />.
+              {plural(judged.lowSimilarityPasses.length, 'case')} passed while
+              diverging from the ideal —{' '}
+              <IdList ids={judged.lowSimilarityPasses.map((c) => c.id)} />.
             </>
           ) : null}
           {!hasExceptions && judged.similarityScoreCorrelation != null
@@ -461,10 +512,12 @@ function JudgedSection({ judged }: { judged: ReportJudged }) {
       ) : null}
       {judged.evalConfidence ? (
         <Line>
-          Evaluator confidence in these grades averages {judged.evalConfidence.avg}
+          Evaluator confidence in these grades averages{' '}
+          {judged.evalConfidence.avg}
           {judged.reviewQueue.length > 0 ? (
             <span className="text-amber-700">
-              ; {judged.reviewQueue.length} {plural(judged.reviewQueue.length, 'grade')} held at{' '}
+              ; {judged.reviewQueue.length}{' '}
+              {plural(judged.reviewQueue.length, 'grade')} held at{' '}
               {t.lowConfidence} or below and want an SME look —{' '}
               {judged.reviewQueue.map((entry, index) => (
                 <Fragment key={entry.id}>
@@ -501,14 +554,18 @@ function ConceptSection({
   const recurring = concepts.recurringMissing.slice(0, 3);
   const gateOn = rules.minimalGate.enabled;
   // Under the gate every mandatory miss is a gated case; with the gate off the miss is reported only.
-  const missingIds = gateOn ? concepts.gatedIds : concepts.missingMandatory.map((c) => c.id);
+  const missingIds = gateOn
+    ? concepts.gatedIds
+    : concepts.missingMandatory.map((c) => c.id);
   return (
     <Section title="Concept coverage">
       <Line>
         {concepts.mandatory.pct}% satisfied all mandatory concepts (
-        {concepts.mandatory.casesSatisfyingAll}/{concepts.mandatory.casesSpecifying});{' '}
-        {concepts.expected.pct}% satisfied all expected key concepts (
-        {concepts.expected.casesSatisfyingAll}/{concepts.expected.casesSpecifying}).
+        {concepts.mandatory.casesSatisfyingAll}/
+        {concepts.mandatory.casesSpecifying}); {concepts.expected.pct}%
+        satisfied all expected key concepts (
+        {concepts.expected.casesSatisfyingAll}/
+        {concepts.expected.casesSpecifying}).
       </Line>
       <Line>
         <span
@@ -532,7 +589,9 @@ function ConceptSection({
             <span
               className={cn(
                 'font-semibold',
-                concepts.preventedIds.length > 0 ? 'text-red-700' : 'text-slate-600',
+                concepts.preventedIds.length > 0
+                  ? 'text-red-700'
+                  : 'text-slate-600',
               )}
             >
               {concepts.preventedIds.length}
@@ -542,16 +601,26 @@ function ConceptSection({
         ) : (
           <> — reported only; the mandatory gate is off for this report.</>
         )}{' '}
-        <span className="font-semibold text-slate-900">{concepts.autoPassIds.length}</span>{' '}
+        <span className="font-semibold text-slate-900">
+          {concepts.autoPassIds.length}
+        </span>{' '}
         qualified for automatic Pass on full expected coverage
         {concepts.autoPassBlockedIds.length > 0 ? (
           <>
-            ; {concepts.autoPassBlockedIds.length} withheld over a material factual issue (
-            <IdList ids={concepts.autoPassBlockedIds} max={MISSING_MANDATORY_ID_CAP} />)
+            ; {concepts.autoPassBlockedIds.length} withheld over a material
+            factual issue (
+            <IdList
+              ids={concepts.autoPassBlockedIds}
+              max={MISSING_MANDATORY_ID_CAP}
+            />
+            )
           </>
         ) : null}
-        . {concepts.materialIssues.length} flagged with a material factual issue.{' '}
-        <span className="text-slate-600">{scoringRulesSentence(rules, gateFloor)}</span>
+        . {concepts.materialIssues.length} flagged with a material factual
+        issue.{' '}
+        <span className="text-slate-600">
+          {scoringRulesSentence(rules, gateFloor)}
+        </span>
       </Line>
       {recurring.length > 0 ? (
         <Line>
@@ -570,7 +639,11 @@ function ConceptSection({
 }
 
 /** B0-721 — one line. Omitted entirely for a single-pass run (`metrics.consistency` is null). */
-function ConsistencySection({ consistency }: { consistency: ReportConsistency }) {
+function ConsistencySection({
+  consistency,
+}: {
+  consistency: ReportConsistency;
+}) {
   const causeLabels = [
     ...new Set(consistency.queue.flatMap((entry) => entry.causes)),
   ].map((cause) => VARIANCE_CAUSE_LABELS[cause]);
@@ -581,7 +654,8 @@ function ConsistencySection({ consistency }: { consistency: ReportConsistency })
         each case graded {consistency.passes}×; headline is the median.{' '}
         {consistency.flagged > 0 ? (
           <span className="text-red-700">
-            {consistency.flagged} {plural(consistency.flagged, 'case')} flagged for human review
+            {consistency.flagged} {plural(consistency.flagged, 'case')} flagged
+            for human review
             {causeLabels.length > 0 ? ` (${causeLabels.join(', ')})` : ''}:{' '}
             <IdList ids={consistency.queue.map((entry) => entry.id)} />.
           </span>
@@ -599,7 +673,8 @@ function LabelledProse({ label, text }: { label: string; text: string }) {
   if (text.trim().length === 0) return null;
   return (
     <p className="mt-1 text-sm leading-6 text-slate-700">
-      <span className="font-semibold text-slate-900">{label}:</span> <Prose text={text} />
+      <span className="font-semibold text-slate-900">{label}:</span>{' '}
+      <Prose text={text} />
     </p>
   );
 }
@@ -640,7 +715,9 @@ export function RunExecSummaryView({
 
   // Mirrors `renderReportMarkdown`'s fallbacks and its cap of three, so the two say the same thing.
   const strongestAreas = (
-    synthesis.exec.strongestAreas.length ? synthesis.exec.strongestAreas : synthesis.strengths
+    synthesis.exec.strongestAreas.length
+      ? synthesis.exec.strongestAreas
+      : synthesis.strengths
   ).slice(0, 3);
   const improvementAreas = (
     synthesis.exec.improvementAreas.length
@@ -690,7 +767,7 @@ export function RunExecSummaryView({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button asChild size="sm" variant="outline">
-              <Link href={runHref}>Back to run</Link>
+              <Link href={runHref}>Back</Link>
             </Button>
             <Button
               disabled={pdfLoading}
@@ -703,7 +780,7 @@ export function RunExecSummaryView({
               ) : (
                 <FileDown className="size-4" />
               )}
-              Download PDF
+              PDF Download
             </Button>
           </div>
           {data.stale ? (
@@ -745,8 +822,9 @@ export function RunExecSummaryView({
               </Link>
             </p>
             <p className="mt-3 text-sm italic leading-6 text-slate-700">
-              Content quality: was the response correct and complete? • Speed performance: how
-              quickly did the agent begin, and finish, responding? The two are scored independently.
+              Content quality: was the response correct and complete? • Speed
+              performance: how quickly did the agent begin, and finish,
+              responding? The two are scored independently.
             </p>
             {config ? (
               <p className="mt-2 text-xs text-slate-500">
@@ -756,8 +834,15 @@ export function RunExecSummaryView({
           </section>
 
           {/* 2 — Scorecard */}
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-exec-section>
-            <ScoreTile caption="out of 100" label="Overall score" value={m.overall.avg ?? '—'} />
+          <section
+            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+            data-exec-section
+          >
+            <ScoreTile
+              caption="out of 100"
+              label="Overall score"
+              value={m.overall.avg ?? '—'}
+            />
             <ScoreTile
               label="Overall grade"
               value={m.overall.grade}
@@ -769,7 +854,11 @@ export function RunExecSummaryView({
               value={`${m.overall.passPct}%`}
             />
             <ScoreTile
-              caption={m.uteCount ? `${m.uteCount} unable to evaluate` : 'all evaluable'}
+              caption={
+                m.uteCount
+                  ? `${m.uteCount} unable to evaluate`
+                  : 'all evaluable'
+              }
               label="Questions"
               value={m.evaluated}
             />
@@ -782,7 +871,11 @@ export function RunExecSummaryView({
 
           {/* 4 — Category table, legend, strongest/weakest, pass mark */}
           <Section title="Performance by category">
-            <RateTable firstColumn="Category" markers={markers} rows={m.categories} />
+            <RateTable
+              firstColumn="Category"
+              markers={markers}
+              rows={m.categories}
+            />
             {anyMarker ? (
               /* B0-835 — written from the rules in force: cap, gate-only, or reported-only. */
               <p className="mt-2 text-xs leading-5 text-slate-600">
@@ -791,11 +884,12 @@ export function RunExecSummaryView({
               </p>
             ) : null}
             <Line className="italic">
-              Strongest: {m.strongestCategory ?? '—'} • Weakest: {m.weakestCategory ?? '—'}
+              Strongest: {m.strongestCategory ?? '—'} • Weakest:{' '}
+              {m.weakestCategory ?? '—'}
             </Line>
             <Line>
-              <span className="font-semibold text-slate-900">Pass mark:</span> {m.passMark} or
-              above
+              <span className="font-semibold text-slate-900">Pass mark:</span>{' '}
+              {m.passMark} or above
               {gradeBands
                 ? ` (${gradeBands.pass.join('/')} pass · ${gradeBands.fail.join('/')} fail)`
                 : ''}
@@ -803,8 +897,12 @@ export function RunExecSummaryView({
               {m.passOnlyUnderCurrentMark.length > 0 ? (
                 <span className="text-amber-700">
                   {m.passOnlyUnderCurrentMark.length}{' '}
-                  {plural(m.passOnlyUnderCurrentMark.length, 'case passes', 'cases pass')} only
-                  under this mark and would Fail at {m.strictPassMark}:{' '}
+                  {plural(
+                    m.passOnlyUnderCurrentMark.length,
+                    'case passes',
+                    'cases pass',
+                  )}{' '}
+                  only under this mark and would Fail at {m.strictPassMark}:{' '}
                   <IdList ids={m.passOnlyUnderCurrentMark} />.
                 </span>
               ) : (
@@ -821,17 +919,24 @@ export function RunExecSummaryView({
 
           {/* 7 — Concept coverage */}
           {m.concepts ? (
-            <ConceptSection concepts={m.concepts} gateFloor={m.gateFloor} rules={m.scoringRules} />
+            <ConceptSection
+              concepts={m.concepts}
+              gateFloor={m.gateFloor}
+              rules={m.scoringRules}
+            />
           ) : null}
 
           {/* 8 — Grading consistency */}
-          {m.consistency ? <ConsistencySection consistency={m.consistency} /> : null}
+          {m.consistency ? (
+            <ConsistencySection consistency={m.consistency} />
+          ) : null}
 
           {/* 9 — Top 3 */}
           <Section title="Top 3 recommended agent improvements">
             {top3.length === 0 ? (
               <Line className="text-slate-500">
-                This report&rsquo;s synthesis produced no prioritized improvements.
+                This report&rsquo;s synthesis produced no prioritized
+                improvements.
               </Line>
             ) : (
               <div className="mt-2 space-y-3">
@@ -854,12 +959,16 @@ export function RunExecSummaryView({
           {/* 10 — Executive assessment */}
           <Section title="Executive assessment">
             <Line>
-              <span className="font-semibold text-slate-900">Overall grade:</span>{' '}
-              <Grade grade={m.overall.grade} /> ({m.overall.avg ?? '—'}/100). Reflects calculated
-              performance; not adjusted.
+              <span className="font-semibold text-slate-900">
+                Overall grade:
+              </span>{' '}
+              <Grade grade={m.overall.grade} /> ({m.overall.avg ?? '—'}/100).
+              Reflects calculated performance; not adjusted.
             </Line>
             <Line>
-              <span className="font-semibold text-slate-900">Strongest areas:</span>{' '}
+              <span className="font-semibold text-slate-900">
+                Strongest areas:
+              </span>{' '}
               {strongestAreas.length > 0 ? (
                 <Prose text={strongestAreas.join(' • ')} />
               ) : (
@@ -867,7 +976,9 @@ export function RunExecSummaryView({
               )}
             </Line>
             <Line>
-              <span className="font-semibold text-slate-900">Areas needing improvement:</span>{' '}
+              <span className="font-semibold text-slate-900">
+                Areas needing improvement:
+              </span>{' '}
               {improvementAreas.length > 0 ? (
                 <Prose text={improvementAreas.join(' • ')} />
               ) : (
@@ -875,8 +986,14 @@ export function RunExecSummaryView({
               )}
             </Line>
             <Line>
-              <span className="font-semibold text-slate-900">Most significant failure pattern:</span>{' '}
-              {mostSignificantFailure ? <Prose text={mostSignificantFailure} /> : '—'}
+              <span className="font-semibold text-slate-900">
+                Most significant failure pattern:
+              </span>{' '}
+              {mostSignificantFailure ? (
+                <Prose text={mostSignificantFailure} />
+              ) : (
+                '—'
+              )}
             </Line>
             <LabelledProse label="Major risk" text={synthesis.exec.majorRisk} />
             <LabelledProse

@@ -95,11 +95,14 @@ export function RunExecutionProgress({
   const canPause = status === 'running' && completedItems > 0;
   const canResume = status === 'paused';
   const canCancel = !isTerminalStatus(status) && status !== 'cancelled';
-  const isStalled = status === 'running' && completedItems === 0 && totalItems > 0;
+  const isStalled =
+    status === 'running' && completedItems === 0 && totalItems > 0;
   const isActivelyRunning = status === 'running' || status === 'queued';
   const canRetryFailed = !isActivelyRunning && stats.erroredCount > 0;
 
-  const handleRunAction = async (action: 'pause' | 'resume' | 'cancel' | 'restart' | 'retry_failed') => {
+  const handleRunAction = async (
+    action: 'pause' | 'resume' | 'cancel' | 'restart' | 'retry_failed',
+  ) => {
     setActionPending(action);
     try {
       const response = await fetch(`/api/admin/tests/runs/${runId}`, {
@@ -123,10 +126,16 @@ export function RunExecutionProgress({
       if (payload.state === 'cancelled') {
         setStatus('cancelled');
       }
-      if (payload.state === 'restarted' || payload.state === 'queued_for_restart') {
+      if (
+        payload.state === 'restarted' ||
+        payload.state === 'queued_for_restart'
+      ) {
         setStatus('running');
       }
-      if (payload.state === 'retrying_failed' || payload.state === 'queued_for_retry') {
+      if (
+        payload.state === 'retrying_failed' ||
+        payload.state === 'queued_for_retry'
+      ) {
         setStatus('running');
       }
       router.refresh();
@@ -147,7 +156,7 @@ export function RunExecutionProgress({
         </p>
       </div>
       <p className="mt-2 text-sm text-slate-600">
-        Current prompt: {completedItems} of {totalItems} completed
+        Current prompt: {completedItems} of {totalItems}
       </p>
       <div className="mt-4 h-3 w-full overflow-hidden rounded-full bg-slate-100">
         <div
@@ -159,7 +168,7 @@ export function RunExecutionProgress({
         <span>Status: {status}</span>
         <span className="text-center leading-snug">
           <span className="block">
-            Elapsed / avg: {elapsedLabel} / {avgPromptLabel}
+            Elapsed: {elapsedLabel} / Prompt: {avgPromptLabel}
           </span>
         </span>
         <span className="text-right">{clampedPercent.toFixed(2)}% done</span>
@@ -175,7 +184,7 @@ export function RunExecutionProgress({
             size="sm"
             variant="outline"
           >
-            Restart stalled run
+            Restart
           </Button>
         )}
         {canRetryFailed && (
@@ -187,7 +196,9 @@ export function RunExecutionProgress({
             size="sm"
             variant="outline"
           >
-            {actionPending === 'retry_failed' ? 'Retrying…' : `Retry failed (${stats.erroredCount})`}
+            {actionPending === 'retry_failed'
+              ? 'Retrying…'
+              : `Retry failed (${stats.erroredCount})`}
           </Button>
         )}
         <Button
@@ -198,7 +209,7 @@ export function RunExecutionProgress({
           size="sm"
           variant="outline"
         >
-          Pause run
+          Pause
         </Button>
         <Button
           disabled={!canResume || actionPending !== null}
@@ -208,7 +219,7 @@ export function RunExecutionProgress({
           size="sm"
           variant="outline"
         >
-          Resume run
+          Resume
         </Button>
         <Button
           disabled={!canCancel || actionPending !== null}
@@ -218,7 +229,7 @@ export function RunExecutionProgress({
           size="sm"
           variant="destructive"
         >
-          Cancel run
+          Cancel
         </Button>
       </div>
     </section>
