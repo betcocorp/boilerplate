@@ -12,8 +12,8 @@
 -- Two parts:
 --   1. model_pricing rows for the three gpt-5.6 tiers, keyed to the TAG string — the B0-565 cost
 --      views join workflow_steps to model_pricing with an INNER lateral, so an unpriced model is
---      DROPPED from cost reporting, not zeroed. gpt-5.4-nano is deliberately NOT priced here (see
---      the TODO below).
+--      DROPPED from cost reporting, not zeroed. All four new tags are priced, plus a re-priced row
+--      for the gpt-5.6 alias (see part 1).
 --   2. allowed_values widened on every settings row that validates against BEX_MODEL_TAGS, with the
 --      four tags inserted right after 'gpt-5.6'. VALUES and descriptions are untouched — applying
 --      this migration changes no behaviour. allowed_values is advisory metadata POST
@@ -23,35 +23,31 @@
 --      it on purpose — it is what `preview` resolves to, B0-831), and TEST_ITEM_GRADING_MODEL keeps
 --      'run' first (B0-902).
 
--- 1. Pricing. Rates are OpenAI's published STANDARD API pricing for the three gpt-5.6 tiers, as
--- recorded in the gpt-5.6 row notes of 20260820160000_model_pricing_gpt55_gpt56.sql (verified
--- 2026-08-20 from OpenAI's pricing page): sol $5.00 / $0.50 / $30.00 (same as the existing gpt-5.6
--- alias row), terra $2.00 / $0.20 / $12.00, luna $0.20 / $0.02 / $1.20 (input / cached input /
--- output per Mtok). Transcribed exactly; not estimated. B0-564 convention: if OpenAI changes a rate,
--- INSERT a new (model_id, effective_date) row — never edit a historical one.
+-- 1. Pricing. Rates transcribed 2026-09-30 from the STANDARD tier table on
+-- developers.openai.com/api/docs/pricing (the page's own table data, columns Input / Cached input /
+-- Cache writes / Output per 1M tokens; the cache-writes column has no home in model_pricing and is
+-- not recorded). As printed: gpt-5.6-sol $4.00 / $0.40 / $20.00, gpt-5.6-terra $2.00 / $0.20 /
+-- $12.00, gpt-5.6-luna $0.20 / $0.02 / $1.20, gpt-5.4-nano $0.20 / $0.02 / $1.25 (input / cached
+-- input / output). The page notes "GPT-5.6 Sol's promotional pricing is available at least through
+-- November 21, 2026", so the sol rate is NOT the $5.00 / $0.50 / $30.00 the 2026-08-20 gpt-5.6 row
+-- recorded; per the B0-564 convention a new (model_id, effective_date) row is inserted for the
+-- gpt-5.6 alias too — it resolves to sol — and the historical row is left untouched. Transcribed
+-- exactly; not estimated. If OpenAI changes a rate, INSERT a new row — never edit a historical one.
 
 insert into public.model_pricing
   (model_id, input_cost_per_mtok, cached_input_cost_per_mtok, output_cost_per_mtok, effective_date, updated_by, notes)
 values
-  ('gpt-5.6-sol',   5.00, 0.50, 30.00, '2026-09-30', 'seed_migration',
-   'OpenAI published standard pricing as recorded in the gpt-5.6 row notes, verified 2026-08-20; live-verified servable 2026-09-30; B0-1118. Frontier gpt-5.6 tier; the id the gpt-5.6 alias resolves to, so same rate as that row.'),
+  ('gpt-5.6-sol',   4.00, 0.40, 20.00, '2026-09-30', 'seed_migration',
+   'OpenAI published standard pricing, read 2026-09-30 from developers.openai.com/api/docs/pricing (promotional through at least 2026-11-21 per the page); live-verified servable 2026-09-30; B0-1118. Frontier gpt-5.6 tier; the id the gpt-5.6 alias resolves to.'),
+  ('gpt-5.6',       4.00, 0.40, 20.00, '2026-09-30', 'seed_migration',
+   'Alias for gpt-5.6-sol; re-priced to the sol standard rate as read 2026-09-30 from developers.openai.com/api/docs/pricing (promotional through at least 2026-11-21). Supersedes the 2026-08-20 row from this date forward; B0-1118.'),
   ('gpt-5.6-terra', 2.00, 0.20, 12.00, '2026-09-30', 'seed_migration',
-   'OpenAI published standard pricing as recorded in the gpt-5.6 row notes, verified 2026-08-20; live-verified servable 2026-09-30; B0-1118. Balanced gpt-5.6 tier.'),
+   'OpenAI published standard pricing, read 2026-09-30 from developers.openai.com/api/docs/pricing; live-verified servable 2026-09-30; B0-1118. Balanced gpt-5.6 tier.'),
   ('gpt-5.6-luna',  0.20, 0.02,  1.20, '2026-09-30', 'seed_migration',
-   'OpenAI published standard pricing as recorded in the gpt-5.6 row notes, verified 2026-08-20; live-verified servable 2026-09-30; B0-1118. Cost-optimized gpt-5.6 tier.')
+   'OpenAI published standard pricing, read 2026-09-30 from developers.openai.com/api/docs/pricing; live-verified servable 2026-09-30; B0-1118. Cost-optimized gpt-5.6 tier.'),
+  ('gpt-5.4-nano',  0.20, 0.02,  1.25, '2026-09-30', 'seed_migration',
+   'OpenAI published standard pricing, read 2026-09-30 from developers.openai.com/api/docs/pricing; live-verified servable 2026-09-30 (Responses call echoed gpt-5.4-nano-2026-03-17); B0-1118. Cheapest OpenAI tier.')
 on conflict (model_id, effective_date) do nothing;
-
--- TODO(B0-1118): gpt-5.4-nano pricing row deliberately OMITTED. OpenAI's pricing page could not be
--- fetched on 2026-09-30, and rates are never guessed or estimated. Before any gpt-5.4-nano run is
--- cost-reported, transcribe input / cached input / output $ per Mtok exactly as printed on
--- developers.openai.com/api/docs/pricing (standard tier) into a new migration:
---   insert into public.model_pricing (model_id, input_cost_per_mtok, cached_input_cost_per_mtok,
---     output_cost_per_mtok, effective_date, updated_by, notes)
---   values ('gpt-5.4-nano', <input>, <cached>, <output>, '<read date>', 'seed_migration', '<source + date>')
---   on conflict (model_id, effective_date) do nothing;
--- Until then the B0-565 cost views (INNER join on model_pricing) DROP gpt-5.4-nano steps from cost
--- reporting entirely — they are not priced at zero. The tag is still selectable and runs fine; only
--- /admin/cost is blind to it.
 
 -- 2. Settings allowed_values. Rows with `preview` first (full BEX_MODEL_TAGS list).
 
