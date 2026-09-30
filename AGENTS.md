@@ -50,7 +50,9 @@ provider).
 flags/config that would otherwise live in `process.env`: `getBooleanSetting`/`getStringSetting`/
 `getNumberSetting` read a cached row, falling back to the caller's default on any failure, plus two
 typed-enum examples (`getRouterType`, `getLlmProvider`) showing how to validate a stored value
-against an allowed set rather than trusting it. No `settings` table is seeded here — add your own.
+against an allowed set rather than trusting it. The table itself is created by
+`src/supabase/migrations/20260930000000_create_settings_table.sql`; no rows are seeded — add your
+own via `insert into public.settings (...)`.
 
 ## Styling and UI
 
