@@ -14,7 +14,11 @@ export async function GoldenSetAndTierTargets() {
   ]);
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+    <section
+      className="scroll-mt-6 rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
+      data-settings-toc-label="Golden set & tier targets"
+      id="settings-golden-set"
+    >
       <h2 className="text-lg font-semibold text-slate-900">
         Golden set &amp; tier targets
       </h2>

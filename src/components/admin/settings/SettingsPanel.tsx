@@ -17,6 +17,15 @@ import { SettingRow, type SettingRecord } from './SettingRow';
 export const HIDDEN_UI_GROUP = 'hidden';
 const UNGROUPED_LABEL = 'Other';
 
+// Stable per-group anchor id, read by SettingsToc via `data-settings-toc-label`.
+export function settingsGroupId(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `settings-group-${slug}`;
+}
+
 export function groupSettings(settings: SettingRecord[]): Array<[string, SettingRecord[]]> {
   const groups = new Map<string, SettingRecord[]>();
   for (const setting of settings) {
@@ -100,7 +109,12 @@ export function SettingsPanel() {
   return (
     <div className="grid gap-6">
       {groups.map(([label, rows]) => (
-        <Card key={label}>
+        <Card
+          className="scroll-mt-6"
+          data-settings-toc-label={label}
+          id={settingsGroupId(label)}
+          key={label}
+        >
           <CardHeader>
             <CardTitle>{label}</CardTitle>
             <CardDescription>
