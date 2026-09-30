@@ -41,6 +41,10 @@ const MODEL_ENV_KEYS = [
   'BEX_MODEL_GPT41',
   'BEX_MODEL_GPT55',
   'BEX_MODEL_GPT56',
+  'BEX_MODEL_GPT56_SOL',
+  'BEX_MODEL_GPT56_TERRA',
+  'BEX_MODEL_GPT56_LUNA',
+  'BEX_MODEL_GPT54_NANO',
   ...ANTHROPIC_MODEL_TAGS.map(anthropicModelPinEnvKey),
 ];
 
@@ -98,6 +102,55 @@ describe('resolveResponsesModel — gpt-5.5 / gpt-5.6 (B0-598)', () => {
     expect(await resolveResponsesModel('preview')).toBe('gpt-4o');
     expect(await resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5');
     expect(await resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
+  });
+});
+
+describe('resolveResponsesModel — gpt-5.6 tiers and gpt-5.4-nano (B0-1118)', () => {
+  const tiers = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4-nano'] as const;
+
+  it('resolves each new tag to its own literal id by default', async () => {
+    // Live-verified 2026-09-30: all four are distinct ids in /v1/models and each completed a
+    // Responses call; the API echoes sol/terra/luna verbatim and returns the dated snapshot
+    // gpt-5.4-nano-2026-03-17 for the rolling nano alias. The stamped model stays the tag string.
+    for (const tag of tiers) {
+      expect(await resolveResponsesModel(tag)).toBe(tag);
+      expect(modelProviderFor(await resolveResponsesModel(tag))).toBe('openai');
+    }
+  });
+
+  it('honours the per-tier BEX_MODEL_GPT56_* / BEX_MODEL_GPT54_NANO overrides', async () => {
+    process.env.BEX_MODEL_GPT56_SOL = 'gpt-5.6-sol-2026-09-01';
+    process.env.BEX_MODEL_GPT56_TERRA = 'gpt-5.6-terra-2026-09-01';
+    process.env.BEX_MODEL_GPT56_LUNA = 'gpt-5.6-luna-2026-09-01';
+    process.env.BEX_MODEL_GPT54_NANO = 'gpt-5.4-nano-2026-03-17';
+
+    expect(await resolveResponsesModel('gpt-5.6-sol')).toBe('gpt-5.6-sol-2026-09-01');
+    expect(await resolveResponsesModel('gpt-5.6-terra')).toBe('gpt-5.6-terra-2026-09-01');
+    expect(await resolveResponsesModel('gpt-5.6-luna')).toBe('gpt-5.6-luna-2026-09-01');
+    expect(await resolveResponsesModel('gpt-5.4-nano')).toBe('gpt-5.4-nano-2026-03-17');
+  });
+
+  it('keeps the tier pins independent of each other and of the gpt-5.6 alias pin', async () => {
+    process.env.BEX_MODEL_GPT56 = 'gpt-5.6-terra';
+    process.env.BEX_MODEL_GPT56_LUNA = 'pinned-luna';
+
+    // The alias pin moves only `gpt-5.6`; naming a tier must still get that tier.
+    expect(await resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6-terra');
+    expect(await resolveResponsesModel('gpt-5.6-luna')).toBe('pinned-luna');
+    expect(await resolveResponsesModel('gpt-5.6-sol')).toBe('gpt-5.6-sol');
+    expect(await resolveResponsesModel('gpt-5.6-terra')).toBe('gpt-5.6-terra');
+    expect(await resolveResponsesModel('gpt-5.4-nano')).toBe('gpt-5.4-nano');
+    expect(await resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5');
+  });
+
+  it('accepts each new tag as the BEX_RESPONSES_MODEL preview default', async () => {
+    for (const tag of tiers) {
+      vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+        Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? tag : fallback),
+      );
+      expect(await resolveGenerationModelDefaultTag()).toBe(tag);
+      expect(await resolveResponsesModel('preview')).toBe(tag);
+    }
   });
 });
 

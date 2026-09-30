@@ -115,6 +115,30 @@ export async function resolveResponsesModel(modelTag: string | undefined): Promi
     return process.env.BEX_MODEL_GPT56 ?? 'gpt-5.6';
   }
 
+  /**
+   * B0-1118 — the explicit gpt-5.6 tiers and gpt-5.4-nano as first-class tags, each with the same
+   * env-pin escape hatch. All four are distinct ids in /v1/models and each completed a live
+   * Responses call on 2026-09-30; the API echoes sol/terra/luna back verbatim and returns the dated
+   * snapshot (gpt-5.4-nano-2026-03-17) for the rolling nano alias. Same COST CAVEAT as above: a pin
+   * to an id with no `model_pricing` row drops those steps from cost reporting, and gpt-5.4-nano
+   * itself has NO pricing row yet (rate not transcribed — see the B0-1118 migration TODO).
+   */
+  if (tag === 'gpt-5.6-sol') {
+    return process.env.BEX_MODEL_GPT56_SOL ?? 'gpt-5.6-sol';
+  }
+
+  if (tag === 'gpt-5.6-terra') {
+    return process.env.BEX_MODEL_GPT56_TERRA ?? 'gpt-5.6-terra';
+  }
+
+  if (tag === 'gpt-5.6-luna') {
+    return process.env.BEX_MODEL_GPT56_LUNA ?? 'gpt-5.6-luna';
+  }
+
+  if (tag === 'gpt-5.4-nano') {
+    return process.env.BEX_MODEL_GPT54_NANO ?? 'gpt-5.4-nano';
+  }
+
   if (tag === 'custom') {
     throw new Error(
       "Custom model tag is not configured; pass a concrete model name instead of 'custom'.",

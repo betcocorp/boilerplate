@@ -12,6 +12,7 @@
  *   gpt-5, gpt-5-mini ............. reject
  *   gpt-5.1, gpt-5.2, gpt-5.4 ..... ACCEPT
  *   gpt-5.4-mini .................. accept
+ *   gpt-5.4-nano .................. accept (verified 2026-09-30, B0-1118)
  *   gpt-5.5, gpt-5.6 .............. reject
  *   o3-mini ....................... reject
  *   every gpt-4.x ................. accept
