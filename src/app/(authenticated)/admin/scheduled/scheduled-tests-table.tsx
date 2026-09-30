@@ -13,79 +13,14 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { Badge } from '~/components/ui/badge';
+import { getStatusBadgeColor } from '~/components/admin/tests/sweep-status';
 import {
-  computeScheduledRunAggregates,
-  isTerminalScheduledItemStatus,
-  type ScheduledRunStatus,
+  formatRate,
+  getRunDisplayCounts,
+  getRunDisplayStatus,
   type ScheduledTestRunWithItems,
 } from '~/lib/observability/scheduled-test-types';
 import { formatDurationMs, formatEasternTimestamp } from '~/lib/utils/time';
-
-function getStatusBadgeColor(status: string): string {
-  switch (status) {
-    case 'queued':
-      return 'border-slate-400 bg-slate-100 text-slate-900';
-    case 'in_progress':
-    case 'claimed':
-    case 'running':
-      return 'border-blue-400 bg-blue-100 text-blue-900';
-    case 'completed':
-      return 'border-green-400 bg-green-100 text-green-900';
-    case 'failed':
-      return 'border-red-400 bg-red-100 text-red-900';
-    case 'timed_out':
-      return 'border-orange-400 bg-orange-100 text-orange-900';
-    default:
-      return 'border-slate-300 bg-slate-50 text-slate-600';
-  }
-}
-
-/**
- * The parent's stored status lags its children: the sweep writes it at dispatch time and only the
- * hourly reconciler closes it out, so a row can read `completed` while children are still running.
- * Children win unless the sweep itself failed.
- */
-function getRunDisplayStatus(run: ScheduledTestRunWithItems): ScheduledRunStatus {
-  if (run.status === 'failed') {
-    return 'failed';
-  }
-
-  const hasOpenItems = run.items.some(
-    (item) => !isTerminalScheduledItemStatus(item.status),
-  );
-
-  return hasOpenItems ? 'in_progress' : run.status;
-}
-
-/**
- * Counts lag for the same reason the status does, so they are derived from the children the page
- * already has rather than read off the parent — otherwise a sweep with a dispatch failure shows
- * 0 failed until the reconciler catches up. The stored columns are the fallback for a sweep whose
- * children were never written.
- */
-function getRunDisplayCounts(run: ScheduledTestRunWithItems) {
-  if (run.items.length === 0) {
-    return {
-      successful: run.successful_tests,
-      failed: run.failed_tests,
-      timedOut: run.timed_out_tests,
-      successRate: run.success_rate,
-    };
-  }
-
-  const derived = computeScheduledRunAggregates(run.items);
-  return {
-    successful: derived.successful_tests,
-    failed: derived.failed_tests,
-    timedOut: derived.timed_out_tests,
-    successRate: derived.success_rate,
-  };
-}
-
-function formatRate(rate: number | null): string {
-  // Null is "nothing terminal to measure yet" — never the same claim as 0%.
-  return rate === null ? '—' : `${Math.round(rate * 100)}%`;
-}
 
 type ScheduledTestRunRowProps = {
   run: ScheduledTestRunWithItems;

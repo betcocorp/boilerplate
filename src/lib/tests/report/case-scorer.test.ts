@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildGraderPayload,
@@ -14,9 +14,19 @@ import {
   toCaseScore,
   type CaseScoringInput,
   type GraderOutput,
-  type StructuredCompletion,
+  type StructuredCompletionWithUsage,
 } from './case-scorer';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
+
+// B0-1115 — recordGradingUsage talks to Supabase; stubbed so this stays a pure unit test.
+const { mockRecordGradingUsage } = vi.hoisted(() => ({
+  mockRecordGradingUsage: vi.fn(),
+}));
+vi.mock('~/lib/tests/grading-usage', () => ({
+  recordGradingUsage: mockRecordGradingUsage,
+}));
+
+const USAGE = { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedPromptTokens: 0 };
 
 /**
  * B0-808 / B0-810 — the grader contract. Everything with a model behind it is exercised through the
@@ -297,7 +307,7 @@ describe('scoreCase (B0-808)', () => {
       resolveModel: async (tag) => `resolved:${tag}`,
       complete: async (params) => {
         calls.push(params);
-        return JSON.stringify(output());
+        return { text: JSON.stringify(output()), usage: USAGE };
       },
     });
 
@@ -312,15 +322,56 @@ describe('scoreCase (B0-808)', () => {
     expect(score.evalConfidence).toBe(86);
   });
 
+  it('B0-1115 — records usage against the given context on a successful pass', async () => {
+    mockRecordGradingUsage.mockClear();
+    await scoreCase(
+      INPUT,
+      {
+        resolveModel: async (tag) => `resolved:${tag}`,
+        complete: async () => ({ text: JSON.stringify(output()), usage: USAGE }),
+      },
+      { testResultId: 'result-1', testItemId: 'item-1', passIndex: 1 },
+    );
+
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith({
+      context: { testResultId: 'result-1', testItemId: 'item-1', passIndex: 1 },
+      callSite: 'case_scorer',
+      provider: 'openai',
+      model: 'resolved:gpt-5.6',
+      usage: USAGE,
+    });
+  });
+
+  it('B0-1115 — records nothing when no context is given', async () => {
+    mockRecordGradingUsage.mockClear();
+    await scoreCase(INPUT, {
+      resolveModel: async (tag) => `resolved:${tag}`,
+      complete: async () => ({ text: JSON.stringify(output()), usage: USAGE }),
+    });
+
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
+  });
+
+  it('B0-1115 — records nothing for the hasNoConcepts short-circuit (no model call)', async () => {
+    mockRecordGradingUsage.mockClear();
+    await scoreCase(
+      { ...INPUT, mandatoryConcepts: [], expectedConcepts: [] },
+      { complete: async () => ({ text: '{}', usage: USAGE }) },
+      { testResultId: 'result-1', testItemId: 'item-1', passIndex: 0 },
+    );
+
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
+  });
+
   it('hands the seam the strict grader schema, the output cap, temperature 0 and the configured effort (B0-819)', async () => {
-    const calls: Array<Parameters<StructuredCompletion>[0]> = [];
+    const calls: Array<Parameters<StructuredCompletionWithUsage>[0]> = [];
     await scoreCase(
       { ...INPUT, modelTag: 'claude-opus-5', effort: 'xhigh' },
       {
         resolveModel: async (tag) => tag ?? '',
         complete: async (params) => {
           calls.push(params);
-          return JSON.stringify(output());
+          return { text: JSON.stringify(output()), usage: USAGE };
         },
       },
     );
@@ -335,12 +386,12 @@ describe('scoreCase (B0-808)', () => {
   });
 
   it('sends no effort when the input carries none, so OpenAI-graded reports are unchanged', async () => {
-    const calls: Array<Parameters<StructuredCompletion>[0]> = [];
+    const calls: Array<Parameters<StructuredCompletionWithUsage>[0]> = [];
     await scoreCase(INPUT, {
       resolveModel: async (tag) => tag ?? '',
       complete: async (params) => {
         calls.push(params);
-        return JSON.stringify(output());
+        return { text: JSON.stringify(output()), usage: USAGE };
       },
     });
     expect(calls[0]!.effort).toBeUndefined();
@@ -353,7 +404,7 @@ describe('scoreCase (B0-808)', () => {
       {
         complete: async () => {
           called = true;
-          return '{}';
+          return { text: '{}', usage: USAGE };
         },
       },
     );
@@ -365,7 +416,7 @@ describe('scoreCase (B0-808)', () => {
   it('turns a malformed model answer into an Unable-to-Evaluate score naming the failure', async () => {
     const score = await scoreCase(INPUT, {
       resolveModel: async () => 'm',
-      complete: async () => '{"not":"a grader output"}',
+      complete: async () => ({ text: '{"not":"a grader output"}', usage: USAGE }),
     });
     expect(score.unableToEvaluate).toBe(true);
     expect(score.uteReason).toContain('Grading call failed');

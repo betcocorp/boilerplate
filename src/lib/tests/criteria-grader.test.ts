@@ -6,9 +6,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * scripted model response, without a live API call. B0-908 — the seam is now the provider-neutral
  * `completeStructuredWithUsage`, not the OpenAI client.
  */
-const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+const { mockComplete, mockResolveModel, mockRecordGradingUsage } = vi.hoisted(() => ({
   mockComplete: vi.fn(),
   mockResolveModel: vi.fn(async () => 'gpt-test'),
+  mockRecordGradingUsage: vi.fn(),
 }));
 const USAGE = { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedPromptTokens: 0 };
 vi.mock('~/lib/llm/structured-completion', () => ({
@@ -16,6 +17,10 @@ vi.mock('~/lib/llm/structured-completion', () => ({
 }));
 vi.mock('~/lib/openai/client', () => ({
   resolveResponsesModel: mockResolveModel,
+}));
+// B0-1109 — recordGradingUsage talks to Supabase; stubbed so this stays a pure unit test.
+vi.mock('./grading-usage', () => ({
+  recordGradingUsage: mockRecordGradingUsage,
 }));
 vi.mock('~/lib/openai/transport-retry', () => ({
   resolveOpenAiRequestTimeoutMs: () => 1000,
@@ -230,6 +235,51 @@ describe('gradeWithCriteria — B0-832 exact verdict cannot be overwritten on in
     expect(request.system).toContain('You are grading a single AI assistant response');
     expect(request.user).toContain('0. says it is a floor cleaner');
     expect(outcome?.passed).toBe(true);
+  });
+
+  /**
+   * B0-1109 — when the caller supplies a usage context, a successful semantic-grading call
+   * records its token usage against that run + item; when it doesn't, nothing is recorded.
+   */
+  it('records grading usage against the run + item when a context is supplied', async () => {
+    mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ verdicts: [{ criterionIndex: 0, met: true, evidence: 'ok' }] }),
+      usage: USAGE,
+    });
+    mockRecordGradingUsage.mockClear();
+
+    await gradeWithCriteria({
+      prompt: 'What is this for?',
+      responseText: 'It is a neutral floor cleaner.',
+      criteria: [{ concept: 'says it is a floor cleaner', tier: 1, match: 'semantic' }],
+      modelTag: 'claude-sonnet-5',
+      context: { testResultId: 'tr-1', testItemId: 'ti-1' },
+    });
+
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith({
+      context: { testResultId: 'tr-1', testItemId: 'ti-1' },
+      callSite: 'criteria_grader',
+      provider: 'anthropic',
+      model: 'claude-sonnet-5',
+      usage: USAGE,
+    });
+  });
+
+  it('records nothing when no context is supplied', async () => {
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ verdicts: [{ criterionIndex: 0, met: true, evidence: 'ok' }] }),
+      usage: USAGE,
+    });
+    mockRecordGradingUsage.mockClear();
+
+    await gradeWithCriteria({
+      prompt: 'What is this for?',
+      responseText: 'It is a neutral floor cleaner.',
+      criteria: [{ concept: 'says it is a floor cleaner', tier: 1, match: 'semantic' }],
+    });
+
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
   });
 });
 

@@ -15,18 +15,26 @@ import {
   createNoBaselineRunComparison,
   getPreviousCompletedTestResult,
   getRunComparisonByResultId,
-  getTestItemsByTestId,
   getTestResultById,
   listAllResultItemsByResultId,
   saveRunComparisonFailed,
   saveRunComparisonReady,
 } from './repository';
+import { resolveRunItems } from './resolve-run-items';
 import { analyzeRunComparison } from './run-comparison-analysis';
 import { computeRunComparisonDiff, type ComparisonResultItem } from './run-comparison-diff';
 
 export type StartRunComparisonResult =
   | { started: true }
-  | { started: false; reason: 'already_exists' | 'no_baseline' };
+  | { started: false; reason: 'already_exists' | 'no_baseline' | 'partial_run' };
+
+/**
+ * B0-1110 — persisted on the `no_baseline` row of a partial run (`error_message`) so the run
+ * detail page can say why there is no diff. Kept as a plain note on the existing status rather than
+ * a new one: `test_result_comparisons_status_check` pins the status set in the database.
+ */
+export const PARTIAL_RUN_COMPARISON_NOTE =
+  'Partial runs are not compared: they re-run only a threshold-filtered subset of the dataset, so a pass-rate diff against a full run would not be like for like.';
 
 /**
  * Idempotent: relies on the `test_result_id` UNIQUE constraint (via
@@ -40,6 +48,15 @@ export async function startRunComparison(resultId: string): Promise<StartRunComp
   }
 
   const result = await getTestResultById(resultId);
+
+  // B0-1110 — a partial run covers a scoped subset, so it is never diffed against a full run (and
+  // never becomes a baseline: `getPreviousCompletedTestResult` is full-only). The `no_baseline`
+  // row is still written so the panel renders a state rather than nothing.
+  if (result.run_mode === 'partial') {
+    const inserted = await createNoBaselineRunComparison(resultId, PARTIAL_RUN_COMPARISON_NOTE);
+    return { started: false, reason: inserted.created ? 'partial_run' : 'already_exists' };
+  }
+
   const previous = await getPreviousCompletedTestResult(result.test_id, resultId);
 
   if (!previous) {
@@ -70,7 +87,7 @@ export async function runRunComparisonAnalysis(resultId: string): Promise<void> 
       getTestResultById(previousResultId),
       listAllResultItemsByResultId(resultId),
       listAllResultItemsByResultId(previousResultId),
-      getTestItemsByTestId(current.test_id),
+      resolveRunItems(current),
     ]);
 
     const promptByTestItemId = new Map(testItems.map((item) => [item.id, item.prompt]));
@@ -85,6 +102,9 @@ export async function runRunComparisonAnalysis(resultId: string): Promise<void> 
       diff,
       currentNotes: current.notes,
       previousNotes: previous.notes,
+      // B0-1114 — attribute this call's token usage to the current/triggering run only;
+      // `previousResultId` is read-only prompt context, never graded, so it gets no usage row.
+      testResultId: resultId,
     });
 
     if (!analysisResult.ok) {

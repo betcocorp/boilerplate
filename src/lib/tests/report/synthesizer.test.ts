@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { StructuredOutputTruncatedError, type StructuredCompletion } from '~/lib/llm/structured-completion';
+import { StructuredOutputTruncatedError } from '~/lib/llm/structured-completion';
 
 import type { EvaluatedCase, ReportMetrics } from './metrics';
 import type { CaseHarnessAside } from './render';
@@ -10,7 +10,18 @@ import {
   formatDigestsAsText,
   synthesizeReportFindings,
   type CaseFindings,
+  type StructuredCompletionWithUsage,
 } from './synthesizer';
+
+// B0-1116 — recordGradingUsage talks to Supabase; stubbed so this stays a pure unit test.
+const { mockRecordGradingUsage } = vi.hoisted(() => ({
+  mockRecordGradingUsage: vi.fn(),
+}));
+vi.mock('~/lib/tests/grading-usage', () => ({
+  recordGradingUsage: mockRecordGradingUsage,
+}));
+
+const USAGE = { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedPromptTokens: 0 };
 
 type CaseSummary = Parameters<typeof chunkCases>[0][number];
 
@@ -93,7 +104,10 @@ describe('digestChunkWithRetry', () => {
       if (ids.length > maxCasesOk) {
         throw new StructuredOutputTruncatedError();
       }
-      return JSON.stringify({ failurePatterns: [`fail:${ids.join(',')}`], strengths: [], weaknesses: [] });
+      return {
+        text: JSON.stringify({ failurePatterns: [`fail:${ids.join(',')}`], strengths: [], weaknesses: [] }),
+        usage: USAGE,
+      };
     }) as unknown as Parameters<typeof digestChunkWithRetry>[0];
   }
 
@@ -129,6 +143,38 @@ describe('digestChunkWithRetry', () => {
       expect(request.schemaName).toBe('batch_digest');
       expect(request.model).toBe('claude-opus-5');
     }
+  });
+
+  it('B0-1116 — records a synthesizer_digest row per successful call, including bisected retries, and nothing for a failed attempt', async () => {
+    mockRecordGradingUsage.mockClear();
+    const complete = fakeComplete(3); // a chunk of 6 overflows once and bisects into two of 3
+    const chunk = Array.from({ length: 6 }, (_, i) => fakeCase(String(i)));
+    const context = { testResultId: 'result-1' };
+
+    await digestChunkWithRetry(complete, 'claude-opus-5', chunk, 'label', 'xhigh', context);
+
+    // One failed attempt (the whole chunk of 6) recorded nothing; the two successful bisected
+    // halves (3 each) each recorded their own row.
+    expect(mockRecordGradingUsage).toHaveBeenCalledTimes(2);
+    for (const call of mockRecordGradingUsage.mock.calls) {
+      expect(call[0]).toMatchObject({
+        context: { testResultId: 'result-1' },
+        callSite: 'synthesizer_digest',
+        provider: 'anthropic',
+        model: 'claude-opus-5',
+        usage: USAGE,
+      });
+    }
+  });
+
+  it('B0-1116 — records nothing when no context is given', async () => {
+    mockRecordGradingUsage.mockClear();
+    const complete = fakeComplete(3);
+    const chunk = Array.from({ length: 3 }, (_, i) => fakeCase(String(i)));
+
+    await digestChunkWithRetry(complete, 'model', chunk, 'label');
+
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
   });
 });
 
@@ -169,19 +215,22 @@ describe('synthesizeReportFindings — harness provenance (B0-863)', () => {
     let capturedUser = '';
     const complete = vi.fn(async (request: { user: string }) => {
       capturedUser = request.user;
-      return JSON.stringify({
-        failurePatterns: [],
-        strengths: [],
-        weaknesses: [],
-        top3: TOP3,
-        exec: {
-          strongestAreas: [],
-          improvementAreas: [],
-          mostSignificantFailure: 'x',
-          majorRisk: 'x',
-          readiness: 'x',
-        },
-      });
+      return {
+        text: JSON.stringify({
+          failurePatterns: [],
+          strengths: [],
+          weaknesses: [],
+          top3: TOP3,
+          exec: {
+            strongestAreas: [],
+            improvementAreas: [],
+            mostSignificantFailure: 'x',
+            majorRisk: 'x',
+            readiness: 'x',
+          },
+        }),
+        usage: USAGE,
+      };
     });
     return { complete, getCapturedUser: () => capturedUser };
   }
@@ -213,8 +262,8 @@ describe('synthesizeReportFindings — harness provenance (B0-863)', () => {
 
     const { complete, getCapturedUser } = fakeSynthesisComplete();
 
-    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, undefined, undefined, {
-      complete: complete as unknown as StructuredCompletion,
+    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, 'result-1', undefined, undefined, {
+      complete: complete as unknown as StructuredCompletionWithUsage,
       resolveModel: async () => 'fake-model',
     });
 
@@ -242,11 +291,75 @@ describe('synthesizeReportFindings — harness provenance (B0-863)', () => {
 
     const { complete, getCapturedUser } = fakeSynthesisComplete();
 
-    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, undefined, undefined, {
-      complete: complete as unknown as StructuredCompletion,
+    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, 'result-1', undefined, undefined, {
+      complete: complete as unknown as StructuredCompletionWithUsage,
       resolveModel: async () => 'fake-model',
     });
 
     expect(getCapturedUser()).not.toContain('Harness provenance');
+  });
+
+  it('B0-1116 — records a synthesizer_final row on a successful Top-3/exec call', async () => {
+    mockRecordGradingUsage.mockClear();
+    const evaluated = {
+      id: 'case-3',
+      tier: 'Tier 1',
+      category: 'Dilution',
+      overall: 90,
+      grade: 'A',
+      status: 'Pass',
+    } as unknown as EvaluatedCase;
+    const findingsByCaseId = new Map<string, CaseFindings>([
+      ['case-3', { explanation: 'Fine.', missed: '', incorrect: '', harness: null }],
+    ]);
+    const { complete } = fakeSynthesisComplete();
+
+    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, 'result-2', 'claude-opus-5', undefined, {
+      complete: complete as unknown as StructuredCompletionWithUsage,
+      resolveModel: async () => 'claude-opus-5',
+    });
+
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith({
+      context: { testResultId: 'result-2' },
+      callSite: 'synthesizer_final',
+      provider: 'anthropic',
+      model: 'claude-opus-5',
+      usage: USAGE,
+    });
+  });
+
+  it('B0-1116 — records nothing for a final call that throws (overflow), only for the retry that succeeds', async () => {
+    mockRecordGradingUsage.mockClear();
+    const evaluated = {
+      id: 'case-4',
+      tier: 'Tier 1',
+      category: 'Dilution',
+      overall: 90,
+      grade: 'A',
+      status: 'Pass',
+    } as unknown as EvaluatedCase;
+    const findingsByCaseId = new Map<string, CaseFindings>([
+      ['case-4', { explanation: 'Fine.', missed: '', incorrect: '', harness: null }],
+    ]);
+    const { complete: succeedingComplete } = fakeSynthesisComplete();
+    let attempt = 0;
+    const flakyComplete = vi.fn(async (request: { user: string }) => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new StructuredOutputTruncatedError();
+      }
+      return (succeedingComplete as unknown as (r: { user: string }) => Promise<unknown>)(request);
+    });
+
+    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, 'result-3', undefined, undefined, {
+      complete: flakyComplete as unknown as StructuredCompletionWithUsage,
+      resolveModel: async () => 'fake-model',
+    });
+
+    expect(attempt).toBe(2);
+    expect(mockRecordGradingUsage).toHaveBeenCalledTimes(1);
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ callSite: 'synthesizer_final', context: { testResultId: 'result-3' } }),
+    );
   });
 });

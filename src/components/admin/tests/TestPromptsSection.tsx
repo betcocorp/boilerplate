@@ -27,6 +27,7 @@ import {
   formatSimilarityPercent,
 } from '~/lib/tests/format';
 import type { GoldenSetItemOrigin } from '~/lib/tests/golden-set';
+import type { TestPickerOption } from '~/lib/tests/repository';
 import { escapeCsvCell, sanitizeCsvFilename } from '~/lib/utils/csv';
 import type { Json } from '~/types/supabase.public';
 
@@ -290,6 +291,8 @@ type TestPromptsSectionProps = {
    * simply absent and render as unresolved.
    */
   documentTitlesById: Record<string, string>;
+  /** B0-1098 — active tests the selection can be appended to (the current test already excluded). */
+  mergeTargets: TestPickerOption[];
 };
 
 export function TestPromptsSection({
@@ -303,6 +306,7 @@ export function TestPromptsSection({
   suggestionLists,
   goldenOriginsByItemId,
   documentTitlesById,
+  mergeTargets,
 }: TestPromptsSectionProps) {
   const [query, setQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -501,6 +505,7 @@ export function TestPromptsSection({
             Select golden-set prompts ({goldenItemIds.length})
           </Button>
           <CreateTestFromPromptsDialog
+            existingTests={mergeTargets}
             returnPath={returnPath}
             selectedTestItemIds={orderedSelectedIds}
             sourceTestId={testId}

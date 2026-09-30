@@ -13,6 +13,7 @@ import {
 } from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
 
 import { conceptPhrases, type CriteriaGradingOutcome } from './criteria-schemas';
+import type { GradingUsageContext } from './grading-usage';
 import type { TestItemRecord } from './types';
 
 /**
@@ -515,6 +516,8 @@ export type SemanticDeclineChecker = (input: {
   /** B0-931/932 — the concept columns are `text[]`; one element per phrase, verbatim. */
   expectedConcepts: string[];
   minimumConcepts: string[];
+  /** B0-1109 — when present, the checker persists this call's token usage on success. */
+  context?: GradingUsageContext;
 }) => Promise<SemanticDeclineVerdict>;
 
 /** Extra context `gradeChatTestResponseAsync` can hand the semantic-decline checker. */
@@ -567,6 +570,8 @@ export async function gradeChatTestResponseAsync(params: {
   context: DeclineGradingContext;
   checkSemanticDecline: SemanticDeclineChecker;
   conceptGrading?: CriteriaGradingOutcome | null;
+  /** B0-1109 — when present, forwarded to `checkSemanticDecline` so its call's usage is persisted. */
+  gradingUsageContext?: GradingUsageContext;
 }): Promise<AsyncEvaluationOutcome> {
   const base = gradeChatTestResponse(params);
 
@@ -590,6 +595,7 @@ export async function gradeChatTestResponseAsync(params: {
       idealResponse: params.context.idealResponse ?? null,
       expectedConcepts: [...(params.context.expectedConcepts ?? [])],
       minimumConcepts: [...(params.context.minimumConcepts ?? [])],
+      context: params.gradingUsageContext,
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

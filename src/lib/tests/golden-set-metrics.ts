@@ -52,8 +52,8 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
 
   const goldenTestIds = goldenTests.map((t) => t.id);
 
-  // Every completed, full-mode run of every golden test — used only to resolve, per test, its
-  // latest run (pass %, elapsed, TTFT). Never aggregated over directly.
+  // Every completed, metric-eligible run of every golden test — used only to resolve, per test,
+  // its latest run (pass %, elapsed, TTFT). Never aggregated over directly.
   const runs = await listGoldenCandidateRuns(goldenTestIds);
 
   if (runs.length === 0) {
@@ -65,10 +65,11 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
   const supabase = getSupabaseServiceRoleClient();
 
   // Failing prompts: sum of `latest_run_failed_items` (B0-896) — the same field the "Test sets"
-  // table's Fails column renders, resolved from each test's true latest completed run regardless
-  // of run_mode. Must NOT be resolved via the full-mode-only `listGoldenCandidateRuns()` above, or
-  // this total silently diverges from the visible Fails column whenever a golden test's real
-  // latest completed run isn't run_mode = 'full'.
+  // table's Fails column renders, resolved by `listTests` from each test's latest reported run.
+  // B0-1105 invariant: `listTests` and `listGoldenCandidateRuns` are both scoped by
+  // `onlyMetricEligibleRuns` (`~/lib/tests/run-mode.ts`), so a `partial` run can never be the
+  // "latest" run here or anywhere else; the total is read from `listTests` rather than the run
+  // list above only so it stays the same number the visible Fails column shows.
   const totalFailingPrompts = goldenTests.reduce(
     (sum, t) => sum + (t.latest_run_failed_items ?? 0),
     0,

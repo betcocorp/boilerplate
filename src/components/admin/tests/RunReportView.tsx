@@ -295,7 +295,7 @@ export function RunReportView({
    */
   const [reportData, setReportData] = useState<ReportDataReady | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
-  const [copyLabel, setCopyLabel] = useState('Copy markdown');
+  const [copyLabel, setCopyLabel] = useState('Copy');
   const [needsManualContinue, setNeedsManualContinue] = useState(false);
 
   const inFlightRef = useRef(false);
@@ -477,10 +477,10 @@ export function RunReportView({
     try {
       await navigator.clipboard.writeText(markdown);
       setCopyLabel('Copied!');
-      window.setTimeout(() => setCopyLabel('Copy markdown'), 2000);
+      window.setTimeout(() => setCopyLabel('Copy'), 2000);
     } catch {
       setCopyLabel('Copy failed');
-      window.setTimeout(() => setCopyLabel('Copy markdown'), 2000);
+      window.setTimeout(() => setCopyLabel('Copy'), 2000);
     }
   }, [markdown]);
 
@@ -559,7 +559,7 @@ export function RunReportView({
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-                Agent evaluation report
+                Evaluation report
               </p>
               {isGolden && (
                 <span className="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-semibold text-yellow-900">
@@ -579,9 +579,7 @@ export function RunReportView({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button asChild size="sm" variant="outline">
-              <Link href={`/admin/tests/${testId}/runs/${runId}`}>
-                Back to run
-              </Link>
+              <Link href={`/admin/tests/${testId}/runs/${runId}`}>Back</Link>
             </Button>
             {status === 'completed' && markdown ? (
               <>

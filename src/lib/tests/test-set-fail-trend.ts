@@ -2,6 +2,7 @@ import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import type { FailTrendRunRow } from './report-fail-trend';
+import { onlyMetricEligibleRuns } from './run-mode';
 
 /**
  * B0-1015 — fail-count history for the trend card above "Test sets" on `/admin/tests`.
@@ -13,10 +14,11 @@ import type { FailTrendRunRow } from './report-fail-trend';
  * whole history as ONE query over `test_results`, projecting only the five fields the fold reads.
  *
  * ## Which runs are plotted
- * Exactly the population the "Fails" column reads (`listTests`): non-archived datasets, and runs
- * whose `report_state.status` is `completed`. That equality is the point — the last point of a
- * series is the same number as that dataset's "Fails" cell in the table directly below the chart,
- * so the two can never appear to disagree.
+ * Exactly the population the "Fails" column reads (`listTests`): non-archived datasets, runs
+ * whose `report_state.status` is `completed`, and only metric-eligible run modes
+ * (`onlyMetricEligibleRuns`, B0-1103 — a `partial` run is never a point). That equality is the
+ * point — the last point of a series is the same number as that dataset's "Fails" cell in the
+ * table directly below the chart, so the two can never appear to disagree.
  *
  * `started_at` is the X value (matching `ReportRunRow.startedAt`), while `listTests` orders its
  * latest-run lookup by `created_at`. The two differ only by the queue-to-start gap, and never
@@ -43,9 +45,11 @@ export async function listTestSetFailTrendRuns(options?: {
 
   // Paged so a growing history can never be silently truncated at PostgREST's 1000-row cap.
   for (let from = 0; ; from += FAIL_TREND_PAGE_SIZE) {
-    let query = supabase
-      .from('test_results')
-      .select('id, test_id, started_at, failed_items, tests!inner(name, is_archived, is_golden)')
+    let query = onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select('id, test_id, started_at, failed_items, tests!inner(name, is_archived, is_golden)'),
+    )
       .eq('report_state->>status', 'completed')
       .eq('tests.is_archived', false)
       .order('started_at', { ascending: false })

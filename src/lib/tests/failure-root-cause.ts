@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { replaceAiSuggestions } from '~/lib/ai-suggestions/repository';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { modelProviderFor } from '~/lib/constants/models';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -10,6 +11,7 @@ import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-outp
 import { logWarn } from '~/lib/observability/logger';
 
 import type { CriteriaGradingOutcome } from './criteria-schemas';
+import { recordGradingUsage } from './grading-usage';
 import { resolveItemGradingConfig } from './item-grading-model';
 
 /**
@@ -83,6 +85,9 @@ export async function resolveFailureRootCauseModel(modelTag?: string): Promise<s
 
 export type FailureRootCauseInput = {
   testResultItemId: string;
+  /** B0-1109 — the run and source test_item, so this call's token usage can be attributed. */
+  testResultId: string;
+  testItemId: string;
   testName: string;
   prompt: string;
   /**
@@ -163,7 +168,7 @@ async function callRootCauseGrader(
   const grading = await resolveItemGradingConfig(input.modelTag);
 
   try {
-    const { text } = await retryTransportFaults(
+    const { text, usage } = await retryTransportFaults(
       () =>
         completeStructuredWithUsage({
           model: grading.model,
@@ -178,6 +183,15 @@ async function callRootCauseGrader(
         }),
       { runtime: 'responses', label: 'failure-root-cause.create' },
     );
+
+    // B0-1109 — success path only, same as the other two graders.
+    recordGradingUsage({
+      context: { testResultId: input.testResultId, testItemId: input.testItemId },
+      callSite: 'failure_root_cause',
+      provider: modelProviderFor(grading.model),
+      model: grading.model,
+      usage,
+    });
 
     return { result: rootCauseResultSchema.parse(JSON.parse(text)), model: grading.model };
   } catch (error) {

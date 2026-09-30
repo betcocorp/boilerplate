@@ -45,6 +45,7 @@ import {
   getTestItemsByTestId,
   listAllResultItemsByResultIds,
   listSearchResultsByTestId,
+  listTestPickerOptions,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import {
@@ -275,13 +276,17 @@ export default async function AdminTestDetailsPage({
     searchResults,
     globalSuggestionRows,
     legacyProductLines,
+    pickerOptions,
   ] = await Promise.all([
     getTestItemsByTestId(testId),
     listTestResultsByTestId(testId, 20),
     listSearchResultsByTestId(testId, 10),
     getGlobalTestItemSuggestionRows(),
     getLegacyProductLineSuggestionMeta(),
+    listTestPickerOptions(),
   ]);
+  // B0-1098 — destinations for "Add to existing test set"; never offer the page's own test.
+  const mergeTargets = pickerOptions.filter((option) => option.id !== test.id);
   const trendRuns = [...results].reverse();
   /** One IN-query for every result item across every recent run feeds the Recent runs metrics and the per-prompt aggregation. */
   const [allRecentResultItems, searchRunItems, goldenOrigins] =
@@ -915,6 +920,7 @@ export default async function AdminTestDetailsPage({
             datasetName={test.name}
             documentTitlesById={documentTitlesById}
             goldenOriginsByItemId={goldenOriginsByItemId}
+            mergeTargets={mergeTargets}
             items={items.map((item) => ({
               id: item.id,
               row_index: item.row_index,

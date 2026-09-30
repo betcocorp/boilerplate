@@ -5,15 +5,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * `completeStructuredWithUsage`, so a `claude-*` id resolved from `BEX_RESPONSES_MODEL` / the run's
  * `modelTag` reaches it unchanged with the same prompt + schema bytes and transport knobs.
  */
-const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+const { mockComplete, mockResolveModel, mockRecordGradingUsage } = vi.hoisted(() => ({
   mockComplete: vi.fn(),
   mockResolveModel: vi.fn(async () => 'gpt-test'),
+  mockRecordGradingUsage: vi.fn(),
 }));
 vi.mock('~/lib/llm/structured-completion', () => ({
   completeStructuredWithUsage: mockComplete,
 }));
 vi.mock('~/lib/openai/client', () => ({
   resolveResponsesModel: mockResolveModel,
+}));
+// B0-1109 — recordGradingUsage talks to Supabase; stubbed so this stays a pure unit test.
+vi.mock('./grading-usage', () => ({
+  recordGradingUsage: mockRecordGradingUsage,
 }));
 vi.mock('~/lib/openai/transport-retry', () => ({
   resolveOpenAiRequestTimeoutMs: () => 1000,
@@ -88,5 +93,54 @@ describe('gradeSemanticDecline (B0-755 / B0-908)', () => {
         minimumConcepts: [],
       }),
     ).rejects.toThrow('output truncated');
+  });
+
+  /**
+   * B0-1109 — when the caller supplies a usage context, a successful call records its token usage
+   * against that run + item; a thrown call (refusal/truncation/transport) never reaches that line.
+   */
+  it('records grading usage against the run + item when a context is supplied', async () => {
+    mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ isDecline: true, rationale: 'ok' }),
+      usage: USAGE,
+    });
+    mockRecordGradingUsage.mockClear();
+
+    await gradeSemanticDecline({
+      prompt: 'p',
+      responseText: 'r',
+      idealResponse: null,
+      expectedConcepts: [],
+      minimumConcepts: [],
+      modelTag: 'claude-sonnet-5',
+      context: { testResultId: 'tr-1', testItemId: 'ti-1' },
+    });
+
+    expect(mockRecordGradingUsage).toHaveBeenCalledWith({
+      context: { testResultId: 'tr-1', testItemId: 'ti-1' },
+      callSite: 'decline_grader',
+      provider: 'anthropic',
+      model: 'claude-sonnet-5',
+      usage: USAGE,
+    });
+  });
+
+  it('records nothing when the helper throws', async () => {
+    mockComplete.mockRejectedValue(new Error('output truncated at max_output_tokens'));
+    mockRecordGradingUsage.mockClear();
+
+    await expect(
+      gradeSemanticDecline({
+        prompt: 'p',
+        responseText: 'r',
+        idealResponse: null,
+        expectedConcepts: [],
+        minimumConcepts: [],
+        context: { testResultId: 'tr-1', testItemId: 'ti-1' },
+      }),
+    ).rejects.toThrow();
+
+    expect(mockRecordGradingUsage).not.toHaveBeenCalled();
   });
 });

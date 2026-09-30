@@ -14,8 +14,10 @@ import {
   StructuredOutputRefusedError,
   StructuredOutputTruncatedError,
 } from '~/lib/llm/structured-completion';
+import { modelProviderFor } from '~/lib/constants/models';
 import { resolveHarnessInsightsModel } from '~/lib/tests/harness-insights-model';
 
+import { recordGradingUsage } from './grading-usage';
 import type { RunComparisonDiff } from './run-comparison-diff';
 import type { RunComparisonVerdict } from './types';
 
@@ -176,11 +178,16 @@ function deterministicVerdict(diff: RunComparisonDiff): { verdict: RunComparison
  * B0-908 — the model call goes through `completeStructuredWithUsage`, which routes on the resolved
  * model id (`claude-*` → Anthropic, otherwise OpenAI Responses). A truncated or refused answer is
  * reported as `parse_error`, the same outcome an unparseable body produced before.
+ *
+ * B0-1114 — `params.testResultId` is the current/triggering run only (never the previous run being
+ * compared against, which is read-only prompt context, not something this call grades); it is used
+ * solely to attribute this call's token usage via `recordGradingUsage` on the success path.
  */
 export async function analyzeRunComparison(params: {
   diff: RunComparisonDiff;
   currentNotes: string | null;
   previousNotes: string | null;
+  testResultId: string;
 }): Promise<AnalyzeRunComparisonResult> {
   const { diff } = params;
 
@@ -196,17 +203,26 @@ export async function analyzeRunComparison(params: {
 
   let raw: string;
   try {
-    raw = (
-      await completeStructuredWithUsage({
-        model,
-        system: SYSTEM_PROMPT,
-        user: userContent,
-        schemaName: 'run_comparison_analysis',
-        schema: RUN_COMPARISON_ANALYSIS_JSON_SCHEMA,
-        maxOutputTokens: ANALYSIS_MAX_OUTPUT_TOKENS,
-        temperature: 0.2,
-      })
-    ).text;
+    const { text, usage } = await completeStructuredWithUsage({
+      model,
+      system: SYSTEM_PROMPT,
+      user: userContent,
+      schemaName: 'run_comparison_analysis',
+      schema: RUN_COMPARISON_ANALYSIS_JSON_SCHEMA,
+      maxOutputTokens: ANALYSIS_MAX_OUTPUT_TOKENS,
+      temperature: 0.2,
+    });
+    raw = text;
+
+    // B0-1114 — success path only. Attributed to the current/triggering run (`params.testResultId`)
+    // ONLY: the previous run being compared against is read-only prompt context, not graded here.
+    recordGradingUsage({
+      context: { testResultId: params.testResultId },
+      callSite: 'run_comparison_analysis',
+      provider: modelProviderFor(model),
+      model,
+      usage,
+    });
   } catch (error) {
     if (
       error instanceof StructuredOutputTruncatedError ||

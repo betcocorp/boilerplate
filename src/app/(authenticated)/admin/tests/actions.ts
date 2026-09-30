@@ -15,10 +15,22 @@ import { writeAuditLog } from '~/lib/audit/audit-log';
 import { authOptions } from '~/lib/auth';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logError, logWarn } from '~/lib/observability/logger';
+import {
+  closeManualSweepLedger,
+  openManualSweepLedger,
+  recordManualSweepRunCreated,
+  recordManualSweepTestSkipped,
+} from '~/lib/observability/manual-golden-sweep-ledger';
+import type { SweepRunMode } from '~/lib/observability/scheduled-test-types';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePermission } from '~/lib/permissions/require-permission';
 import { executeQueuedTestRun } from '~/lib/tests/execute-queued-run';
 import { GOLDEN_TIERS, listGoldenTests, type GoldenTier } from '~/lib/tests/golden-set';
+import { getLatestItemScores } from '~/lib/tests/latest-item-scores';
+import {
+  parseScoreThresholdField,
+  selectThresholdWorkingSet,
+} from '~/lib/tests/threshold-working-set';
 import { updateTierTarget } from '~/lib/tests/tier-targets';
 import supportedModels from '~/lib/constants/models';
 import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -36,6 +48,7 @@ import {
   buildEditedTestItemPayload,
   buildManualAddTestItemPayload,
 } from '~/lib/tests/manual-add-payload';
+import { planPromptMerge } from '~/lib/tests/merge-prompts';
 import {
   buildTestItemsFromScenarioSet,
   parseMultiTurnScenarioSetJson,
@@ -62,6 +75,7 @@ import {
 import { buildTestRunOptions } from '~/lib/tests/run-config';
 import { uploadTestCsvToS3 } from '~/lib/tests/storage';
 import { runCreatedRecordOrCleanup } from '~/lib/tests/upload-cleanup';
+import type { Json } from '~/types/supabase.public';
 
 function normalizeReturnPath(value: FormDataEntryValue | null, fallback: string) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -761,6 +775,19 @@ export async function runTestAction(formData: FormData) {
  * `admin/tests/page.tsx`); a run whose execution is cut off by that budget is left `running` and
  * recovered by the existing hourly `/api/v1/observability/sweep-stalled-runs` cron — there is
  * deliberately no second recovery mechanism here.
+ *
+ * B0-1102 — the dialog's optional `scoreThreshold` (0–100). Blank is today's path exactly: one
+ * `run_mode='full'` run of every item per set. Set, each active set is narrowed to the items whose
+ * latest displayed score (`getLatestItemScores`, B0-1101, across full AND partial history) is
+ * strictly below it, plus never-run / Unable-to-Evaluate items; a set with nothing qualifying gets
+ * no `test_results` row at all, and one that qualifies is created `run_mode='partial'` with
+ * `partial_score_threshold` + `item_scope`. A set with no graded run at all therefore re-runs every
+ * item — still as `partial`, never auto-promoted to `full`: partial runs never feed golden metrics.
+ *
+ * B0-1106 — the whole fan-out is recorded in the `scheduled_test_runs` ledger under
+ * `sweep_name='manual_golden_sweep'` (`~/lib/observability/manual-golden-sweep-ledger`): one child
+ * per active set, linked to its run at creation or closed `skipped` with the reason. Every ledger
+ * write is best-effort — a ledger failure is logged and never blocks a run.
  */
 export async function runGoldenTestsAction(formData: FormData) {
   const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
@@ -780,6 +807,14 @@ export async function runGoldenTestsAction(formData: FormData) {
   const { modelTag, useValidator, routerType, agentMode } =
     parseTestRunOptionFields(formData);
 
+  // B0-1102 — blank/absent → undefined (full run); anything else must be a 0–100 integer.
+  const thresholdField = parseScoreThresholdField(formData.get('scoreThreshold'));
+  if (!thresholdField.ok) {
+    redirect(encodeMessage(returnPath, 'error', thresholdField.error));
+  }
+  const scoreThreshold = thresholdField.threshold;
+  const runMode: SweepRunMode = scoreThreshold === undefined ? 'full' : 'partial';
+
   const goldenTests = await listGoldenTests({ includeArchived: false });
   if (goldenTests.length === 0) {
     redirect(
@@ -791,20 +826,57 @@ export async function runGoldenTestsAction(formData: FormData) {
   const runOptions = buildTestRunOptions({ modelTag, useValidator, agentMode, routerType });
   const createdRunIds: string[] = [];
   const skippedEmpty: string[] = [];
+  const skippedNoQualifying: string[] = [];
+
+  // B0-1106 — parent + one `running` child per set, written before anything is created. Null when
+  // the write failed (already logged); every record* call below is then a no-op.
+  const ledger = await openManualSweepLedger({
+    goldenTests: goldenTests.map((test) => ({ id: test.id, name: test.name })),
+    runMode,
+    partialScoreThreshold: scoreThreshold ?? null,
+    triggeredBy,
+    metadata: { model_tag: modelTag },
+  });
 
   for (const test of goldenTests) {
     const items = await getTestItemsByTestId(test.id);
     if (items.length === 0) {
       // A run needs total_items > 0; an empty set is skipped and reported, never a hard failure.
       skippedEmpty.push(test.name);
+      await recordManualSweepTestSkipped(ledger, test.id, {
+        code: 'empty_set',
+        message: 'This golden set has no items.',
+      });
       continue;
+    }
+
+    // B0-1102 — with a threshold the run is scoped to the qualifying items only. A set with no
+    // graded history has no scores at all, so every item qualifies — still a partial run.
+    let workingSet = items;
+    if (scoreThreshold !== undefined) {
+      const latestScores = await getLatestItemScores(test.id);
+      workingSet = selectThresholdWorkingSet(items, latestScores, scoreThreshold);
+      if (workingSet.length === 0) {
+        skippedNoQualifying.push(test.name);
+        await recordManualSweepTestSkipped(ledger, test.id, {
+          code: 'no_qualifying_items',
+          message: `No items scored below ${scoreThreshold} on their latest graded run.`,
+        });
+        continue;
+      }
     }
 
     const testResult = await createTestResult({
       test_id: test.id,
       status: 'queued',
-      run_mode: 'full',
-      total_items: items.length,
+      run_mode: runMode,
+      ...(scoreThreshold !== undefined
+        ? {
+            partial_score_threshold: scoreThreshold,
+            item_scope: workingSet.map((item) => item.id),
+          }
+        : {}),
+      total_items: workingSet.length,
       passed_items: 0,
       failed_items: 0,
       started_at: new Date().toISOString(),
@@ -813,14 +885,18 @@ export async function runGoldenTestsAction(formData: FormData) {
       triggered_by: triggeredBy,
       summary: {
         completed_items: 0,
-        total_items: items.length,
+        total_items: workingSet.length,
         progress_percent: 0,
         runner_state: 'queued',
       },
     });
     await updateTestRecord(test.id, { status: 'running' });
     createdRunIds.push(testResult.id);
+    await recordManualSweepRunCreated(ledger, test.id, testResult.id);
   }
+
+  // Parent stays `in_progress` while runs execute; the hourly reconciler closes it.
+  await closeManualSweepLedger(ledger);
 
   if (createdRunIds.length > 0) {
     after(async () => {
@@ -856,13 +932,23 @@ export async function runGoldenTestsAction(formData: FormData) {
     skippedEmpty.length > 0
       ? ` Skipped ${skippedEmpty.length} empty set${skippedEmpty.length === 1 ? '' : 's'}: ${skippedEmpty.join(', ')}.`
       : '';
+  const noQualifyingNote =
+    skippedNoQualifying.length > 0
+      ? ` Skipped ${skippedNoQualifying.length} set${skippedNoQualifying.length === 1 ? '' : 's'} with nothing below ${scoreThreshold}: ${skippedNoQualifying.join(', ')}.`
+      : '';
+  const runLabel =
+    scoreThreshold === undefined
+      ? `golden run${started === 1 ? '' : 's'}`
+      : `partial golden run${started === 1 ? '' : 's'} (items scoring below ${scoreThreshold})`;
   redirect(
     encodeMessage(
       returnPath,
       started > 0 ? 'success' : 'error',
       started > 0
-        ? `Started ${started} golden run${started === 1 ? '' : 's'} (${modelTag}). Archived golden sets were skipped.${skippedNote}`
-        : `No golden runs started — every active golden set is empty.${skippedNote}`,
+        ? `Started ${started} ${runLabel} (${modelTag}). Archived golden sets were skipped.${skippedNote}${noQualifyingNote}`
+        : scoreThreshold === undefined
+          ? `No golden runs started — every active golden set is empty.${skippedNote}`
+          : `No partial golden runs started — no active golden set has items scoring below ${scoreThreshold}.${skippedNote}${noQualifyingNote}`,
     ),
   );
 }
@@ -1068,6 +1154,197 @@ export async function createTestFromPromptsAction(formData: FormData) {
       `Created "${name}" with ${newItems.length} prompt${
         newItems.length === 1 ? '' : 's'
       } from ${sourceTest.name}.`,
+    ),
+  );
+}
+
+/** Existing `tests.metadata` when it is a plain object, else a fresh object — keeps `Json` typing. */
+function readMetadataObject(metadata: Json): { [key: string]: Json | undefined } {
+  if (metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)) {
+    return { ...metadata };
+  }
+  return {};
+}
+
+/**
+ * B0-1098 — copy the selected prompts of one test into an EXISTING test set. Prompts whose
+ * normalized text already lives in the target (or repeats within the selection) are skipped;
+ * the source is never modified. Selection order and copied columns mirror
+ * `createTestFromPromptsAction`; the dedupe/row_index rules live in `planPromptMerge`.
+ */
+export async function addPromptsToTestAction(formData: FormData) {
+  const sourceTestIdRaw = formData.get('sourceTestId');
+  const sourceTestId =
+    typeof sourceTestIdRaw === 'string' && sourceTestIdRaw.trim()
+      ? sourceTestIdRaw.trim()
+      : null;
+  const sourceReturnPath = sourceTestId
+    ? `/admin/tests/${sourceTestId}`
+    : '/admin/tests';
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    sourceReturnPath,
+  );
+
+  if (!sourceTestId) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing source test id.'));
+  }
+
+  const targetTestIdRaw = formData.get('targetTestId');
+  const targetTestId =
+    typeof targetTestIdRaw === 'string' && targetTestIdRaw.trim()
+      ? targetTestIdRaw.trim()
+      : null;
+  if (!targetTestId) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'Choose a test set to add the prompts to.',
+      ),
+    );
+  }
+
+  if (targetTestId === sourceTestId) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'Choose a different test set — these prompts are already in this one.',
+      ),
+    );
+  }
+
+  const rawIds = formData.getAll('testItemId');
+  const selectedIds = Array.from(
+    new Set(
+      rawIds
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0),
+    ),
+  );
+
+  if (selectedIds.length === 0) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'Select at least one prompt to add.'),
+    );
+  }
+
+  let sourceTest;
+  try {
+    sourceTest = await getTestById(sourceTestId);
+  } catch {
+    redirect(encodeMessage(returnPath, 'error', 'Source test not found.'));
+  }
+
+  let targetTest;
+  try {
+    targetTest = await getTestById(targetTestId);
+  } catch {
+    redirect(encodeMessage(returnPath, 'error', 'Target test not found.'));
+  }
+
+  if (targetTest.is_archived) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'That test set is archived. Unarchive it first or choose another.',
+      ),
+    );
+  }
+
+  const [sourceItems, targetItems, maxRowIndex] = await Promise.all([
+    getTestItemsByTestId(sourceTestId),
+    getTestItemsByTestId(targetTestId),
+    getMaxRowIndexForTest(targetTestId),
+  ]);
+
+  const plan = planPromptMerge({
+    selectedIds,
+    sourceItems,
+    targetItems,
+    nextRowIndex: maxRowIndex + 1,
+  });
+
+  if (plan.missingCount === selectedIds.length) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'None of the selected prompts belong to this dataset.',
+      ),
+    );
+  }
+
+  if (plan.toInsert.length === 0) {
+    const consideredCount = selectedIds.length - plan.missingCount;
+    redirect(
+      encodeMessage(
+        `/admin/tests/${targetTestId}`,
+        'success',
+        `All ${consideredCount} selected prompt${
+          consideredCount === 1 ? '' : 's'
+        } already exist in ${targetTest.name}; nothing was added.`,
+      ),
+    );
+  }
+
+  const rows = plan.toInsert.map(({ item, row_index }) => ({
+    test_id: targetTestId,
+    row_index,
+    prompt: item.prompt,
+    expected_canonical_products: item.expected_canonical_products,
+    expected_reason_code: item.expected_reason_code,
+    source: item.source,
+    priority: item.priority,
+    ideal_response: item.ideal_response,
+    expected_concepts: item.expected_concepts,
+    minimum_concepts: item.minimum_concepts,
+    expected_sources: item.expected_sources,
+    should_cite: item.should_cite,
+    input_payload: item.input_payload,
+    metadata: item.metadata,
+  }));
+
+  await insertTestItems(rows);
+
+  const existingMetadata = readMetadataObject(targetTest.metadata);
+  const priorMerges = Array.isArray(existingMetadata.merged_from)
+    ? existingMetadata.merged_from
+    : [];
+  const mergedFrom: Json[] = [
+    ...priorMerges,
+    {
+      test_id: sourceTestId,
+      test_name: sourceTest.name,
+      item_count: rows.length,
+      merged_at: new Date().toISOString(),
+    },
+  ];
+  const metadata: Json = { ...existingMetadata, merged_from: mergedFrom };
+
+  await updateTestRecord(targetTestId, {
+    row_count: targetItems.length + rows.length,
+    metadata,
+  });
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${sourceTestId}`);
+  revalidatePath(`/admin/tests/${targetTestId}`);
+  redirect(
+    encodeMessage(
+      `/admin/tests/${targetTestId}`,
+      'success',
+      `Added ${rows.length} prompt${rows.length === 1 ? '' : 's'} from ${
+        sourceTest.name
+      } to ${targetTest.name}.${
+        plan.skippedDuplicateCount > 0
+          ? ` Skipped ${plan.skippedDuplicateCount} duplicate${
+              plan.skippedDuplicateCount === 1 ? '' : 's'
+            }.`
+          : ''
+      }`,
     ),
   );
 }

@@ -132,6 +132,22 @@ describe('pendingPasses (B0-719)', () => {
   });
 });
 
+describe('pendingPasses over a scoped item list (B0-1110)', () => {
+  it('owes grading calls only for the run-scoped items, never for un-run dataset rows', () => {
+    // A partial run over 2 of the 3 dataset items: `generateReport` sizes the state to the scope
+    // and hands `pendingPasses` only the resolved items, so the third row is never graded and can
+    // never surface as an Unable to Evaluate placeholder.
+    const scoped = [ITEMS[0], ITEMS[2]];
+    const s: ReportState = { ...emptyReportState('gpt-4.1', scoped.length, 1), casePassScores: {} };
+
+    expect(s.totalCases).toBe(2);
+    expect(pendingPasses(scoped, s)).toEqual([
+      { item: scoped[0], passIndex: 0 },
+      { item: scoped[1], passIndex: 0 },
+    ]);
+  });
+});
+
 describe('hydrateLegacyPassScores (B0-719)', () => {
   it('seeds pass 1 from a report graded before per-pass scores existed', () => {
     const legacy = state(1);

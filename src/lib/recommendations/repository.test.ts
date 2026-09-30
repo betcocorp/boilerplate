@@ -11,10 +11,12 @@ import {
   fromRecommendationRow,
   toCandidateInsertRows,
   toRecommendationInsertRow,
+  updateRecommendationCompetitor,
 } from '~/lib/recommendations/repository';
 import {
   addRecommendationCandidateInputSchema,
   createRecommendationInputSchema,
+  updateRecommendationCompetitorInputSchema,
   updateRecommendationStatusInputSchema,
 } from '~/lib/recommendations/recommendation-schemas';
 
@@ -440,5 +442,252 @@ describe('createRecommendation dedupe (B0-1055)', () => {
     const verifiedRow = fake.recommendations.find((r) => r.id === verifiedId);
     expect(verifiedRow?.status).toBe('verified');
     expect(verifiedRow?.overall_confidence).toBe(0.9);
+  });
+});
+
+/**
+ * B0-1072 — reviewer edit of a recommendation's competitor identity. The engine persists a row
+ * with no brand for an unbranded prompt, and `promoteRecommendationToOverride` refuses to write the
+ * fast-path mapping without one, so the queue needs a way to add/change it. These cover the input
+ * contract, the happy path, the decided-row lock, and both identity-collision branches (pre-check
+ * and the 23505 race) against a minimal in-memory fake of the two `rag.*` tables.
+ */
+describe('updateRecommendationCompetitor (B0-1072)', () => {
+  type Row = Record<string, unknown>;
+
+  const REVIEWED = new Set(['verified', 'rejected']);
+  const normPart = (v: unknown): string => (typeof v === 'string' ? v.trim().toLowerCase() : '');
+  const fakeUuid = (n: number): string =>
+    `${n.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`;
+
+  function baseRow(overrides: Row): Row {
+    return {
+      competitor_brand: null,
+      competitor_product: 'pH7Q',
+      status: 'answered',
+      overall_confidence: 0.9,
+      threshold_used: 0.8,
+      answer_given: true,
+      decline_reason: null,
+      evidence: { source: 'web' },
+      normalized_input: {},
+      created_by: null,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  function withNormColumns(row: Row): Row {
+    return {
+      ...row,
+      competitor_brand_norm: normPart((row.competitor_brand as string | null) ?? ''),
+      competitor_product_norm: normPart(row.competitor_product as string),
+    };
+  }
+
+  /** `raceInsert`: a row injected between the pre-check and the update, to simulate the 23505 race. */
+  function createFakeSupabase(seed: Row[], opts: { raceInsert?: Row } = {}) {
+    const recommendations: Row[] = seed.map((r) => withNormColumns({ ...r }));
+    const updates: Row[] = [];
+
+    function fromRecommendations() {
+      return {
+        select: () => {
+          let filtered = [...recommendations];
+          const chain = {
+            eq(col: string, val: unknown) {
+              filtered = filtered.filter((r) => r[col] === val);
+              return chain;
+            },
+            not(col: string, _op: string, val: string) {
+              const excluded = val.replace(/^\(/, '').replace(/\)$/, '').split(',');
+              filtered = filtered.filter((r) => !excluded.includes(String(r[col])));
+              return chain;
+            },
+            order() {
+              return chain;
+            },
+            limit(n: number) {
+              filtered = filtered.slice(0, n);
+              return {
+                async maybeSingle() {
+                  return { data: filtered[0] ? { ...filtered[0] } : null, error: null };
+                },
+              };
+            },
+            async maybeSingle() {
+              return { data: filtered[0] ? { ...filtered[0] } : null, error: null };
+            },
+          };
+          return chain;
+        },
+        update: (patch: Row) => ({
+          eq: (col: string, val: unknown) => ({
+            select: () => ({
+              async single() {
+                if (opts.raceInsert) {
+                  recommendations.push(withNormColumns({ ...opts.raceInsert }));
+                  opts.raceInsert = undefined;
+                }
+                const row = recommendations.find((r) => r[col] === val);
+                if (!row) return { data: null, error: { message: 'not found' } };
+                const next = withNormColumns({ ...row, ...patch });
+                const dup = recommendations.find(
+                  (r) =>
+                    r.id !== row.id &&
+                    !REVIEWED.has(String(r.status)) &&
+                    !REVIEWED.has(String(next.status)) &&
+                    r.competitor_brand_norm === next.competitor_brand_norm &&
+                    r.competitor_product_norm === next.competitor_product_norm,
+                );
+                if (dup) {
+                  return {
+                    data: null,
+                    error: {
+                      message:
+                        'duplicate key value violates unique constraint "cross_reference_recommendations_identity_unreviewed_uq"',
+                      code: '23505',
+                    },
+                  };
+                }
+                Object.assign(row, next);
+                updates.push(patch);
+                return { data: { ...row }, error: null };
+              },
+            }),
+          }),
+        }),
+      };
+    }
+
+    function fromCandidates() {
+      return {
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({ data: [], error: null }),
+          }),
+        }),
+      };
+    }
+
+    const client = {
+      schema() {
+        return {
+          from(table: string) {
+            if (table === 'cross_reference_recommendations') return fromRecommendations();
+            if (table === 'cross_reference_recommendation_candidates') return fromCandidates();
+            throw new Error(`unexpected table ${table}`);
+          },
+        };
+      },
+    };
+
+    return { client, recommendations, updates };
+  }
+
+  it('requires a non-blank brand and never blanks the product name', () => {
+    expect(updateRecommendationCompetitorInputSchema.safeParse({ competitorBrand: '' }).success).toBe(false);
+    expect(updateRecommendationCompetitorInputSchema.safeParse({ competitorBrand: '   ' }).success).toBe(false);
+    expect(
+      updateRecommendationCompetitorInputSchema.safeParse({ competitorBrand: 'Spartan', competitorProduct: ' ' })
+        .success,
+    ).toBe(false);
+    const parsed = updateRecommendationCompetitorInputSchema.parse({ competitorBrand: '  Spartan  ' });
+    expect(parsed.competitorBrand).toBe('Spartan');
+    expect(parsed.competitorProduct).toBeUndefined();
+  });
+
+  it('adds a brand to a brandless open row, keeps the product, and records the previous identity', async () => {
+    const id = fakeUuid(1);
+    const fake = createFakeSupabase([baseRow({ id })]);
+    vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fake.client as never);
+
+    const result = await updateRecommendationCompetitor(id, { competitorBrand: 'Spartan' }, 'tb@betco.com');
+
+    expect(result.competitorBrand).toBe('Spartan');
+    expect(result.competitorProduct).toBe('pH7Q');
+    expect(result.status).toBe('answered');
+    expect(result.evidence).toMatchObject({
+      source: 'web',
+      competitorEdit: { editor: 'tb@betco.com', previousBrand: null, previousProduct: 'pH7Q' },
+    });
+    expect(fake.updates[0]).toMatchObject({ competitor_brand: 'Spartan', competitor_product: 'pH7Q' });
+    // Identity edit must not touch the queue ordering (created_at) or the status.
+    expect(fake.updates[0]).not.toHaveProperty('created_at');
+    expect(fake.updates[0]).not.toHaveProperty('status');
+  });
+
+  it('changes brand and product together', async () => {
+    const id = fakeUuid(1);
+    const fake = createFakeSupabase([baseRow({ id, competitor_brand: 'Spartan' })]);
+    vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fake.client as never);
+
+    const result = await updateRecommendationCompetitor(id, {
+      competitorBrand: 'Diversey',
+      competitorProduct: 'Virex II 256',
+    });
+
+    expect(result.competitorBrand).toBe('Diversey');
+    expect(result.competitorProduct).toBe('Virex II 256');
+  });
+
+  it('refuses to edit a verified or rejected row with a typed "decided" error', async () => {
+    const id = fakeUuid(1);
+    const fake = createFakeSupabase([baseRow({ id, status: 'verified', competitor_brand: 'Spartan' })]);
+    vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fake.client as never);
+
+    await expect(updateRecommendationCompetitor(id, { competitorBrand: 'Diversey' })).rejects.toMatchObject({
+      name: 'RecommendationCompetitorEditError',
+      code: 'decided',
+    });
+    expect(fake.updates).toHaveLength(0);
+  });
+
+  it('throws a typed "not_found" error for an unknown id', async () => {
+    const fake = createFakeSupabase([]);
+    vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fake.client as never);
+
+    await expect(
+      updateRecommendationCompetitor(fakeUuid(9), { competitorBrand: 'Diversey' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('rejects an identity that collides with another open recommendation (pre-check, case-insensitive)', async () => {
+    const id = fakeUuid(1);
+    const fake = createFakeSupabase([
+      baseRow({ id }),
+      baseRow({ id: fakeUuid(2), competitor_brand: 'Spartan', competitor_product: 'ph7q', status: 'pending' }),
+    ]);
+    vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fake.client as never);
+
+    await expect(updateRecommendationCompetitor(id, { competitorBrand: ' SPARTAN ' })).rejects.toMatchObject({
+      code: 'identity_conflict',
+    });
+    expect(fake.updates).toHaveLength(0);
+  });
+
+  it('does not treat a verified row with the same identity as a collision', async () => {
+    const id = fakeUuid(1);
+    const fake = createFakeSupabase([
+      baseRow({ id }),
+      baseRow({ id: fakeUuid(2), competitor_brand: 'Spartan', competitor_product: 'pH7Q', status: 'verified' }),
+    ]);
+    vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fake.client as never);
+
+    const result = await updateRecommendationCompetitor(id, { competitorBrand: 'Spartan' });
+    expect(result.competitorBrand).toBe('Spartan');
+  });
+
+  it('maps a 23505 from a concurrent insert to the same typed conflict error', async () => {
+    const id = fakeUuid(1);
+    const fake = createFakeSupabase([baseRow({ id })], {
+      raceInsert: baseRow({ id: fakeUuid(3), competitor_brand: 'Spartan', competitor_product: 'pH7Q' }),
+    });
+    vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fake.client as never);
+
+    await expect(updateRecommendationCompetitor(id, { competitorBrand: 'Spartan' })).rejects.toMatchObject({
+      code: 'identity_conflict',
+    });
   });
 });

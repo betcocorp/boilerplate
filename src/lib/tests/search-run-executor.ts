@@ -239,6 +239,8 @@ export async function executeSearchRun(testResultId: string) {
       const similarities = matches.map((m) => m.similarity).filter((s): s is number => typeof s === 'number');
       await analyzeAndPersistFailureRootCause({
         testResultItemId: insertedItem.id,
+        testResultId: testResult.id,
+        testItemId: item.id,
         testName: test.name,
         prompt: item.prompt,
         mandatoryConcepts: mandatoryConceptPhrases(item),

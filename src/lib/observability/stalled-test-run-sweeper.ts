@@ -139,8 +139,9 @@ export type StalledTestRunCandidate = {
 
 export type StalledTestRunSweeperPort = {
   /**
-   * Chat-mode (`run_mode = 'full'`) runs that are `running`, plus `queued` runs whose
-   * `runner_state` is in {@link REARMABLE_QUEUED_RUNNER_STATES}, oldest first.
+   * Chat-mode runs (`run_mode` in `CHAT_RUN_MODES`, i.e. `full` or `partial` — B0-1110) that are
+   * `running`, plus `queued` runs whose `runner_state` is in
+   * {@link REARMABLE_QUEUED_RUNNER_STATES}, oldest first.
    */
   listCandidates(limit: number): Promise<StalledTestRunCandidate[]>;
   /**

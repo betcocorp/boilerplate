@@ -19,12 +19,10 @@ import {
   type SweepStalledTestRunsInput,
   type SweepStalledTestRunsResult,
 } from '~/lib/observability/stalled-test-run-sweeper';
+import { CHAT_RUN_MODES } from '~/lib/tests/run-mode';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import type { Json } from '~/types/supabase.public';
-
-/** Only the chat runner yields/resumes; search evals are seconds long and never stall this way. */
-const CHAT_RUN_MODE = 'full';
 
 /**
  * Over-fetch: `queued` rows can only be filtered on `summary.runner_state` after the read, and a
@@ -55,7 +53,9 @@ export async function listStalledTestRunCandidates(
   const { data, error } = await supabase
     .from('test_results')
     .select('id,test_id,status,created_at,started_at,summary')
-    .eq('run_mode', CHAT_RUN_MODE)
+    // B0-1110 — only the chat runner (`full` and `partial`) yields/resumes; search evals are seconds
+    // long and never stall this way, so they stay excluded.
+    .in('run_mode', [...CHAT_RUN_MODES])
     .in('status', ['running', 'queued'])
     .order('created_at', { ascending: true })
     .limit(limit * CANDIDATE_FETCH_MULTIPLIER);

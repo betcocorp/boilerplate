@@ -1,8 +1,12 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '~/components/ui/button';
+import {
+  isTerminalStatus,
+  useRunProgress,
+} from '~/components/admin/tests/useRunProgress';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 type RunExecutionProgressProps = {
@@ -17,26 +21,6 @@ type RunExecutionProgressProps = {
   };
 };
 
-type RunStatusResponse = {
-  ok: boolean;
-  runId: string;
-  status: string;
-  completedItems: number;
-  totalItems: number;
-  progressPercent: number;
-  elapsedMs: number;
-};
-
-function isTerminalStatus(status: string) {
-  return (
-    status === 'completed' ||
-    status === 'completed_with_failures' ||
-    status === 'failed' ||
-    status === 'technical_error' ||
-    status === 'cancelled'
-  );
-}
-
 export function RunExecutionProgress({
   runId,
   initialStatus,
@@ -46,29 +30,35 @@ export function RunExecutionProgress({
   stats,
 }: RunExecutionProgressProps) {
   const router = useRouter();
-  const [status, setStatus] = useState(initialStatus);
-  const [completedItems, setCompletedItems] = useState(initialCompletedItems);
-  const [totalItems, setTotalItems] = useState(initialTotalItems);
-  const [elapsedMs, setElapsedMs] = useState(initialElapsedMs);
-  const [progressPercent, setProgressPercent] = useState(
-    initialTotalItems > 0
-      ? Number(((initialCompletedItems / initialTotalItems) * 100).toFixed(2))
-      : 0,
+  const {
+    status,
+    completedItems,
+    totalItems,
+    elapsedMs,
+    progressPercent,
+    setStatus,
+  } = useRunProgress(
+    runId,
+    {
+      status: initialStatus,
+      completedItems: initialCompletedItems,
+      totalItems: initialTotalItems,
+      elapsedMs: initialElapsedMs,
+    },
+    {
+      onPoll: (_snapshot, meta) => {
+        if (meta.hasChanged) {
+          router.refresh();
+        }
+        if (meta.isTerminal) {
+          router.refresh();
+        }
+      },
+    },
   );
   const [actionPending, setActionPending] = useState<
     null | 'pause' | 'resume' | 'cancel' | 'restart' | 'retry_failed'
   >(null);
-  const latestSnapshot = useRef({
-    status: initialStatus,
-    completedItems: initialCompletedItems,
-    totalItems: initialTotalItems,
-    elapsedMs: initialElapsedMs,
-    progressPercent:
-      initialTotalItems > 0
-        ? Number(((initialCompletedItems / initialTotalItems) * 100).toFixed(2))
-        : 0,
-  });
-
   useEffect(() => {
     if (initialStatus !== 'queued') {
       return;
@@ -82,86 +72,6 @@ export function RunExecutionProgress({
 
     void startRun();
   }, [initialStatus, runId]);
-
-  useEffect(() => {
-    if (isTerminalStatus(status)) {
-      return;
-    }
-
-    const poll = async () => {
-      try {
-        const response = await fetch(`/api/admin/tests/runs/${runId}`, {
-          method: 'GET',
-          cache: 'no-store',
-        });
-        if (!response.ok) {
-          return;
-        }
-
-        const data = (await response.json()) as RunStatusResponse;
-        const nextTotalItems = Math.max(
-          latestSnapshot.current.totalItems,
-          data.totalItems,
-        );
-        const nextCompletedItemsRaw = Math.max(
-          latestSnapshot.current.completedItems,
-          data.completedItems,
-        );
-        const nextCompletedItems =
-          nextTotalItems > 0
-            ? Math.min(nextTotalItems, nextCompletedItemsRaw)
-            : nextCompletedItemsRaw;
-        const nextProgressPercent =
-          nextTotalItems > 0
-            ? Number(((nextCompletedItems / nextTotalItems) * 100).toFixed(2))
-            : Math.max(
-                latestSnapshot.current.progressPercent,
-                data.progressPercent,
-              );
-        const nextElapsedMs = isTerminalStatus(data.status)
-          ? data.elapsedMs
-          : Math.max(latestSnapshot.current.elapsedMs, data.elapsedMs);
-        const hasChanged =
-          data.status !== latestSnapshot.current.status ||
-          nextCompletedItems !== latestSnapshot.current.completedItems ||
-          nextTotalItems !== latestSnapshot.current.totalItems ||
-          nextElapsedMs !== latestSnapshot.current.elapsedMs ||
-          nextProgressPercent !== latestSnapshot.current.progressPercent;
-
-        setStatus(data.status);
-        setCompletedItems(nextCompletedItems);
-        setTotalItems(nextTotalItems);
-        setElapsedMs(nextElapsedMs);
-        setProgressPercent(nextProgressPercent);
-        latestSnapshot.current = {
-          status: data.status,
-          completedItems: nextCompletedItems,
-          totalItems: nextTotalItems,
-          elapsedMs: nextElapsedMs,
-          progressPercent: nextProgressPercent,
-        };
-
-        if (hasChanged) {
-          router.refresh();
-        }
-
-        if (isTerminalStatus(data.status)) {
-          router.refresh();
-        }
-      } catch {
-        // Keep polling; transient failures are expected in long runs.
-      }
-    };
-
-    void poll();
-    const intervalId = window.setInterval(() => {
-      void poll();
-    }, 10000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [runId, router, status]);
 
   const clampedPercent = useMemo(() => {
     if (Number.isNaN(progressPercent)) {
@@ -185,11 +95,14 @@ export function RunExecutionProgress({
   const canPause = status === 'running' && completedItems > 0;
   const canResume = status === 'paused';
   const canCancel = !isTerminalStatus(status) && status !== 'cancelled';
-  const isStalled = status === 'running' && completedItems === 0 && totalItems > 0;
+  const isStalled =
+    status === 'running' && completedItems === 0 && totalItems > 0;
   const isActivelyRunning = status === 'running' || status === 'queued';
   const canRetryFailed = !isActivelyRunning && stats.erroredCount > 0;
 
-  const handleRunAction = async (action: 'pause' | 'resume' | 'cancel' | 'restart' | 'retry_failed') => {
+  const handleRunAction = async (
+    action: 'pause' | 'resume' | 'cancel' | 'restart' | 'retry_failed',
+  ) => {
     setActionPending(action);
     try {
       const response = await fetch(`/api/admin/tests/runs/${runId}`, {
@@ -213,10 +126,16 @@ export function RunExecutionProgress({
       if (payload.state === 'cancelled') {
         setStatus('cancelled');
       }
-      if (payload.state === 'restarted' || payload.state === 'queued_for_restart') {
+      if (
+        payload.state === 'restarted' ||
+        payload.state === 'queued_for_restart'
+      ) {
         setStatus('running');
       }
-      if (payload.state === 'retrying_failed' || payload.state === 'queued_for_retry') {
+      if (
+        payload.state === 'retrying_failed' ||
+        payload.state === 'queued_for_retry'
+      ) {
         setStatus('running');
       }
       router.refresh();
@@ -237,7 +156,7 @@ export function RunExecutionProgress({
         </p>
       </div>
       <p className="mt-2 text-sm text-slate-600">
-        Current prompt: {completedItems} of {totalItems} completed
+        Current prompt: {completedItems} of {totalItems}
       </p>
       <div className="mt-4 h-3 w-full overflow-hidden rounded-full bg-slate-100">
         <div
@@ -249,7 +168,7 @@ export function RunExecutionProgress({
         <span>Status: {status}</span>
         <span className="text-center leading-snug">
           <span className="block">
-            Elapsed / avg: {elapsedLabel} / {avgPromptLabel}
+            Elapsed: {elapsedLabel} / Prompt: {avgPromptLabel}
           </span>
         </span>
         <span className="text-right">{clampedPercent.toFixed(2)}% done</span>
@@ -265,7 +184,7 @@ export function RunExecutionProgress({
             size="sm"
             variant="outline"
           >
-            Restart stalled run
+            Restart
           </Button>
         )}
         {canRetryFailed && (
@@ -277,7 +196,9 @@ export function RunExecutionProgress({
             size="sm"
             variant="outline"
           >
-            {actionPending === 'retry_failed' ? 'Retrying…' : `Retry failed (${stats.erroredCount})`}
+            {actionPending === 'retry_failed'
+              ? 'Retrying…'
+              : `Retry failed (${stats.erroredCount})`}
           </Button>
         )}
         <Button
@@ -288,7 +209,7 @@ export function RunExecutionProgress({
           size="sm"
           variant="outline"
         >
-          Pause run
+          Pause
         </Button>
         <Button
           disabled={!canResume || actionPending !== null}
@@ -298,7 +219,7 @@ export function RunExecutionProgress({
           size="sm"
           variant="outline"
         >
-          Resume run
+          Resume
         </Button>
         <Button
           disabled={!canCancel || actionPending !== null}
@@ -308,7 +229,7 @@ export function RunExecutionProgress({
           size="sm"
           variant="destructive"
         >
-          Cancel run
+          Cancel
         </Button>
       </div>
     </section>

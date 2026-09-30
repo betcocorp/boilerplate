@@ -10,6 +10,7 @@ import {
 } from '~/components/admin/tests/ReportDatasetFilter';
 import { ReportFailTrendChart } from '~/components/admin/tests/ReportFailTrendChart';
 import { ReportFiltersToggle } from '~/components/admin/tests/ReportFiltersToggle';
+import { ReportGoldenArchiveFilter } from '~/components/admin/tests/ReportGoldenArchiveFilter';
 import { ReportMetricTrendChart } from '~/components/admin/tests/ReportMetricTrendChart';
 import {
   ReportModelFilter,
@@ -134,6 +135,11 @@ function buildModelOptions(rows: readonly ReportRunRow[]): ReportModelOption[] {
   return options;
 }
 
+/** Caps a label at `maxLength` characters, appending a single ellipsis when it overflows. */
+function truncateLabel(value: string, maxLength = 15): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+}
+
 /**
  * Score cell text. A report that hasn't finished scoring has no score to show, so it shows its
  * state instead of an em-dash that would read as "scored zero" or "never reported". `avg` is
@@ -142,7 +148,7 @@ function buildModelOptions(rows: readonly ReportRunRow[]): ReportModelOption[] {
  */
 function describeScore(row: ReportRunRow): string {
   if (row.score !== null) {
-    return `${row.score}/100 (${row.grade})`;
+    return `${row.score} (${row.grade})`;
   }
   switch (row.reportStatus) {
     case 'scoring':
@@ -226,14 +232,14 @@ function ReportChangeCell({
       className="flex flex-col items-start"
       title={`Previous scored run: ${change.previousScore}/100`}
     >
+      <span className="text-xs tabular-nums text-slate-500">
+        {formatChangePoints(change)}
+      </span>
       <span
         className={`inline-flex items-center gap-1 font-medium tabular-nums ${tone}`}
       >
         <Icon aria-hidden className="size-3.5" />
         {formatChangePercent(change)}
-      </span>
-      <span className="text-xs tabular-nums text-slate-500">
-        {formatChangePoints(change)}
       </span>
     </span>
   );
@@ -252,7 +258,11 @@ export default async function AdminTestReportsPage({
   const success = typeof params.success === 'string' ? params.success : null;
   const error = typeof params.error === 'string' ? params.error : null;
 
-  const allReports = await listAllReportRuns();
+  // Off by default (absent or anything other than "true") — golden+archived is an explicit opt-in.
+  const allGoldenParam = readSearchParam(params.allGolden).trim();
+  const showAllGolden = allGoldenParam === 'true';
+
+  const allReports = await listAllReportRuns({ onlyGolden: showAllGolden });
   const datasetOptions = buildDatasetOptions(allReports);
   const runByOptions = buildRunByOptions(allReports);
   const modelOptions = buildModelOptions(allReports);
@@ -371,6 +381,7 @@ export default async function AdminTestReportsPage({
                 options={modelOptions}
                 selectedModel={selectedModel}
               />
+              <ReportGoldenArchiveFilter allGolden={showAllGolden} />
               {selectedTestId || selectedRunBy || selectedModel ? (
                 <Link
                   className="shrink-0 text-sm text-sky-700 underline-offset-2 hover:underline"
@@ -441,7 +452,7 @@ export default async function AdminTestReportsPage({
                           href={`/admin/tests/${row.testId}/runs/${row.runId}`}
                           title={row.testName}
                         >
-                          {row.testName}
+                          {truncateLabel(row.testName)}
                         </Link>
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-slate-600">
@@ -511,7 +522,7 @@ export default async function AdminTestReportsPage({
                         className="max-w-[220px] truncate text-slate-600"
                         title={row.triggeredBy ?? 'Not recorded for this run'}
                       >
-                        {row.triggeredBy ?? '—'}
+                        {row.triggeredBy ? truncateLabel(row.triggeredBy) : '—'}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">

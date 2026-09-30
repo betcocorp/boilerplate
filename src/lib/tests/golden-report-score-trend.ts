@@ -1,5 +1,6 @@
 import { listGoldenTests } from './golden-set';
 import { parseReportState } from './report/schemas';
+import { onlyMetricEligibleRuns } from './run-mode';
 import { COMPLETED_RUN_STATUSES } from './types';
 import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -148,7 +149,10 @@ export function buildGoldenReportScoreDailySeries(input: {
 // Data access
 // ---------------------------------------------------------------------------
 
-/** Completed full-mode golden runs with a non-null `report_state`, window-filtered on `created_at`. */
+/**
+ * Completed, metric-eligible (`onlyMetricEligibleRuns`, B0-1105) golden runs with a non-null
+ * `report_state`, window-filtered on `created_at`.
+ */
 async function listGoldenReportScoreRuns(
   testIds: string[],
   window: { from: string; to: string },
@@ -158,11 +162,12 @@ async function listGoldenReportScoreRuns(
   const all: GoldenReportScoreRunRow[] = [];
   for (let page = 0; page < MAX_SCAN_PAGES; page += 1) {
     const start = page * SCAN_PAGE_SIZE;
-    const result = await supabase
-      .from('test_results')
-      .select('id, test_id, app_version, created_at, report_state')
-      .in('test_id', testIds)
-      .eq('run_mode', 'full')
+    const result = await onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select('id, test_id, app_version, created_at, report_state')
+        .in('test_id', testIds),
+    )
       .in('status', [...COMPLETED_RUN_STATUSES])
       .not('report_state', 'is', null)
       .gte('created_at', window.from)

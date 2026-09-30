@@ -94,10 +94,12 @@ export function RunComparisonPanel({ comparison }: Props) {
   }
 
   if (comparison.status === 'no_baseline') {
+    // B0-1110 — a partial run's row carries the reason it was skipped in `errorMessage`.
     return (
       <Section title="Run comparison">
         <p className="mt-4 text-sm text-slate-500">
-          No earlier completed run on this dataset to compare against — nothing to diff yet.
+          {comparison.errorMessage ??
+            'No earlier completed run on this dataset to compare against — nothing to diff yet.'}
         </p>
       </Section>
     );

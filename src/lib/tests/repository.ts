@@ -8,6 +8,7 @@ import {
   extractSearchRunMaxSimilarity,
 } from './response-payload';
 import { parseReportState } from './report/schemas';
+import { onlyMetricEligibleRuns } from './run-mode';
 import type { RunRoutingHealthInput } from './run-health';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
@@ -115,23 +116,25 @@ export async function listTests(includeArchived = false) {
   // Both roll-ups are single, whole-table queries folded in memory — never a per-test fan-out
   // (B0-585 decommissioned that). The score query projects only the scalar JSON path so the heavy
   // `report_state.caseScores` prose stays in Postgres.
+  //
+  // B0-1103 — every roll-up is scoped by `onlyMetricEligibleRuns` so a `partial` run (a
+  // threshold-filtered re-run of only the failing items, B0-1099) can never become a test's
+  // Avg score, its latest-run score/Fails/model, or its completed-run count.
   const [completionCounts, reportScores, latestRunScores] = await Promise.all([
-    supabase
-      .from('test_results')
-      .select('test_id')
-      .in(
-        'status',
-        COMPLETED_RUN_STATUSES as unknown as string[],
-      ),
-    supabase
-      .from('test_results')
-      .select('test_id, overall_avg:report_state->overall->>avg')
-      .eq('report_state->>status', 'completed'),
-    supabase
-      .from('test_results')
-      .select(
-        'test_id, overall_avg:report_state->overall->>avg, failed_items, model_tag:run_options->>modelTag, created_at',
-      )
+    onlyMetricEligibleRuns(supabase.from('test_results').select('test_id')).in(
+      'status',
+      COMPLETED_RUN_STATUSES as unknown as string[],
+    ),
+    onlyMetricEligibleRuns(
+      supabase.from('test_results').select('test_id, overall_avg:report_state->overall->>avg'),
+    ).eq('report_state->>status', 'completed'),
+    onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select(
+          'test_id, overall_avg:report_state->overall->>avg, failed_items, model_tag:run_options->>modelTag, created_at',
+        ),
+    )
       .eq('report_state->>status', 'completed')
       .order('created_at', { ascending: false }),
   ]);
@@ -242,6 +245,28 @@ export async function getTestById(testId: string) {
     .single();
 
   return assertNoError(result) as TestRecord;
+}
+
+/** Lean row for the "Add to existing test set" target picker (B0-1098). */
+export type TestPickerOption = Pick<
+  TestRecord,
+  'id' | 'name' | 'is_golden' | 'row_count' | 'uploaded_at'
+>;
+
+/**
+ * Active (non-archived) tests, newest first, projected to the handful of columns a picker
+ * needs. Deliberately NOT `listTests`, whose completion/score rollups are far too heavy for a
+ * combobox that renders on every test detail page.
+ */
+export async function listTestPickerOptions(): Promise<TestPickerOption[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('tests')
+    .select('id, name, is_golden, row_count, uploaded_at')
+    .eq('is_archived', false)
+    .order('uploaded_at', { ascending: false });
+
+  return (assertNoError(result) || []) as TestPickerOption[];
 }
 
 const TEST_ITEMS_PAGE_SIZE = 1000;
@@ -581,15 +606,20 @@ export async function createGeneratingRunComparison(
   return { created: true, row: result.data as TestResultComparisonRecord };
 }
 
-/** Same insert-not-upsert idempotency as `createGeneratingRunComparison`, for the no-baseline case. */
+/**
+ * Same insert-not-upsert idempotency as `createGeneratingRunComparison`, for the no-baseline case.
+ * B0-1110 — `note` (persisted in `error_message`) lets a partial run say why it was not compared.
+ */
 export async function createNoBaselineRunComparison(
   resultId: string,
+  note: string | null = null,
 ): Promise<{ created: true } | { created: false }> {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase.from('test_result_comparisons').insert({
     test_result_id: resultId,
     previous_test_result_id: null,
     status: 'no_baseline',
+    error_message: note,
   });
 
   if (result.error) {
@@ -698,11 +728,9 @@ export async function insertTestResultItems(items: NewTestResultItemRecord[]) {
 
 export async function listTestResultsByTestId(testId: string, limit = 10) {
   const supabase = getSupabaseServiceRoleClient();
-  const result = await supabase
-    .from('test_results')
-    .select('*')
-    .eq('test_id', testId)
-    .eq('run_mode', 'full')
+  const result = await onlyMetricEligibleRuns(
+    supabase.from('test_results').select('*').eq('test_id', testId),
+  )
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -711,7 +739,8 @@ export async function listTestResultsByTestId(testId: string, limit = 10) {
 
 /**
  * B0-313 — the run immediately preceding `currentResultId` for post-mortem comparison: the most
- * recent OTHER completed run (`completed`/`completed_with_failures`, `run_mode='full'`) on the same
+ * recent OTHER completed run (`completed`/`completed_with_failures`, metric-eligible `run_mode`
+ * via `onlyMetricEligibleRuns`) on the same
  * test, strictly older than the current run's `created_at`. Returns null when none exists — a
  * "no baseline" run (e.g. the first-ever run of a dataset) is a normal, clean outcome, not an error.
  */
@@ -722,11 +751,9 @@ export async function getPreviousCompletedTestResult(
   const supabase = getSupabaseServiceRoleClient();
   const current = await getTestResultById(currentResultId);
 
-  const result = await supabase
-    .from('test_results')
-    .select('*')
-    .eq('test_id', testId)
-    .eq('run_mode', 'full')
+  const result = await onlyMetricEligibleRuns(
+    supabase.from('test_results').select('*').eq('test_id', testId),
+  )
     .in('status', [...COMPLETED_RUN_STATUSES])
     .neq('id', currentResultId)
     .lt('created_at', current.created_at)
@@ -759,6 +786,20 @@ export async function getTestResultById(testResultId: string) {
     .single();
 
   return assertNoError(result) as TestResultRecord;
+}
+
+/** B0-1108 — the runs a sweep's ledger children point at, by id only (no test-level aggregate). */
+export async function listTestResultsByIds(testResultIds: string[]) {
+  if (testResultIds.length === 0) {
+    return [] as TestResultRecord[];
+  }
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_results')
+    .select('*')
+    .in('id', testResultIds);
+
+  return (assertNoError(result) || []) as TestResultRecord[];
 }
 
 /** One row of the cross-dataset report index (B0-687). */
@@ -802,16 +843,21 @@ const REPORT_RUN_ITEM_METRICS_PAGE_SIZE = 1000;
  * would hide them entirely. Score/grade come from the persisted `report_state.overall` (B0-609),
  * never recomputed from per-item data, so this page and `/admin/tests/[testId]` can't disagree.
  *
- * B0-688 — archived datasets are EXCLUDED: an archived test set disappears from this index the
- * same way it disappears from `/admin/tests`. The filter rides on the existing `tests!inner`
- * embed, so it is a join predicate applied in Postgres rather than a post-fetch filter in JS —
- * which also keeps the paging honest (a client-side filter would make each page's row count
- * mean something different from the rows returned).
+ * B0-688 — archived datasets are EXCLUDED by default: an archived test set disappears from this
+ * index the same way it disappears from `/admin/tests`. The filter rides on the existing
+ * `tests!inner` embed, so it is a join predicate applied in Postgres rather than a post-fetch
+ * filter in JS — which also keeps the paging honest (a client-side filter would make each page's
+ * row count mean something different from the rows returned).
+ *
+ * B0-1096 — `options.onlyGolden` switches to the opposite mode: golden test sets only, INCLUDING
+ * archived ones, so a golden set that was later archived stays reachable. This is a separate
+ * Postgres predicate on the same join, not a post-fetch filter, for the same paging reason above.
  */
-export async function listAllReportRuns(): Promise<ReportRunRow[]> {
+export async function listAllReportRuns(options?: { onlyGolden?: boolean }): Promise<ReportRunRow[]> {
   const supabase = getSupabaseServiceRoleClient();
+  const onlyGolden = options?.onlyGolden ?? false;
 
-  type EmbeddedTest = { id: string; name: string; is_archived: boolean };
+  type EmbeddedTest = { id: string; name: string; is_archived: boolean; is_golden: boolean };
   type RawRow = {
     id: string;
     test_id: string;
@@ -829,16 +875,21 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
 
   // Paged rather than a bare select so a growing history can never be silently truncated at
   // PostgREST's 1000-row cap (there are ~40 reported runs today).
+  //
+  // B0-1103 — scoped by `onlyMetricEligibleRuns`: a `partial` run's report must never appear in
+  // this index or in the score/fail/metric trend charts folded from it.
   const rows = await fetchAllPages<RawRow>(REPORT_RUNS_PAGE_SIZE, async (from, to) => {
-    const result = await supabase
-      .from('test_results')
-      .select(
-        'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived)',
-      )
-      .not('report_state', 'is', null)
-      .eq('tests.is_archived', false)
-      .order('started_at', { ascending: false })
-      .range(from, to);
+    let query = onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select(
+          'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived, is_golden)',
+        ),
+    ).not('report_state', 'is', null);
+
+    query = onlyGolden ? query.eq('tests.is_golden', true) : query.eq('tests.is_archived', false);
+
+    const result = await query.order('started_at', { ascending: false }).range(from, to);
 
     return (assertNoError(result) || []) as unknown as RawRow[];
   });
@@ -924,9 +975,6 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
 }
 
 const RESULT_ITEMS_PAGE_SIZE = 500;
-const TEST_CASE_METRICS_PAGE_SIZE = 1000;
-const TEST_RUNS_PAGE_SIZE = 500;
-const COMPLETED_TEST_RUN_STATUSES = COMPLETED_RUN_STATUSES;
 
 export async function listResultItemsByResultId(testResultId: string, limit = 200) {
   const supabase = getSupabaseServiceRoleClient();
@@ -974,183 +1022,6 @@ export async function listAllResultItemsByResultId(testResultId: string) {
       .range(from, to)
       .then((r) => (assertNoError(r) || []) as TestResultItemRecord[]),
   );
-}
-
-export async function getGlobalTestCaseMetrics() {
-  const supabase = getSupabaseServiceRoleClient();
-  const completedRunRows = await fetchAllPages<{ id: string }>(TEST_RUNS_PAGE_SIZE, (from, to) =>
-    supabase
-      .from('test_results')
-      .select('id')
-      .in('status', [...COMPLETED_TEST_RUN_STATUSES])
-      .order('created_at', { ascending: true })
-      .range(from, to)
-      .then((r) => (assertNoError(r) || []) as Array<{ id: string }>),
-  );
-  const completedRunIds = completedRunRows.map((run) => run.id);
-
-  if (completedRunIds.length === 0) {
-    return {
-      totalCases: 0,
-      passedCases: 0,
-      failedCases: 0,
-      passRate: 0,
-      failRate: 0,
-      avgElapsedMs: 0,
-      avgSimilarity: null,
-      similaritySampleSize: 0,
-    };
-  }
-
-  let from = 0;
-  let totalCases = 0;
-  let passedCases = 0;
-  let failedCases = 0;
-  let elapsedSumMs = 0;
-  let similaritySum = 0;
-  let similarityCount = 0;
-
-  while (true) {
-    const result = await supabase
-      .from('test_result_items')
-      .select('passed, elapsed_ms, response_payload, status, test_result_id')
-      .in('status', ['completed', 'failed'])
-      .in('test_result_id', completedRunIds)
-      .order('created_at', { ascending: true })
-      .range(from, from + TEST_CASE_METRICS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as Array<{
-      passed: boolean;
-      elapsed_ms: number;
-      response_payload: unknown;
-      status: string;
-      test_result_id: string;
-    }>;
-
-    if (page.length === 0) {
-      break;
-    }
-
-    for (const item of page) {
-      totalCases += 1;
-      elapsedSumMs += Math.max(0, item.elapsed_ms || 0);
-      if (item.passed) {
-        passedCases += 1;
-      } else {
-        failedCases += 1;
-      }
-
-      const similarity = extractItemSimilarityScore(item.response_payload);
-      if (typeof similarity === 'number') {
-        similaritySum += similarity;
-        similarityCount += 1;
-      }
-    }
-
-    if (page.length < TEST_CASE_METRICS_PAGE_SIZE) {
-      break;
-    }
-    from += TEST_CASE_METRICS_PAGE_SIZE;
-  }
-
-  return {
-    totalCases,
-    passedCases,
-    failedCases,
-    passRate: totalCases > 0 ? passedCases / totalCases : 0,
-    failRate: totalCases > 0 ? failedCases / totalCases : 0,
-    avgElapsedMs: totalCases > 0 ? elapsedSumMs / totalCases : 0,
-    avgSimilarity: similarityCount > 0 ? similaritySum / similarityCount : null,
-    similaritySampleSize: similarityCount,
-  };
-}
-
-type RunSimilarityAccumulator = {
-  similaritySum: number;
-  similarityCount: number;
-};
-
-export async function getGlobalSimilarityFailRateTrend(options?: { maxRuns?: number }) {
-  const maxRuns = Math.min(Math.max(options?.maxRuns ?? 30, 2), 200);
-  const supabase = getSupabaseServiceRoleClient();
-
-  const runsResult = await supabase
-    .from('test_results')
-    .select('id, created_at, failed_items, total_items')
-    .in('status', [...COMPLETED_TEST_RUN_STATUSES])
-    .order('created_at', { ascending: false })
-    .limit(maxRuns);
-
-  const runs = (assertNoError(runsResult) || []) as Array<{
-    id: string;
-    created_at: string;
-    failed_items: number;
-    total_items: number;
-  }>;
-
-  if (runs.length === 0) {
-    return [];
-  }
-
-  const orderedRuns = [...runs].reverse();
-  const runIds = orderedRuns.map((run) => run.id);
-  const similarityByRunId = new Map<string, RunSimilarityAccumulator>(
-    runIds.map((id) => [id, { similaritySum: 0, similarityCount: 0 }]),
-  );
-
-  let from = 0;
-
-  while (true) {
-    const result = await supabase
-      .from('test_result_items')
-      .select('test_result_id, response_payload, status')
-      .in('status', ['completed', 'failed'])
-      .in('test_result_id', runIds)
-      .order('created_at', { ascending: true })
-      .range(from, from + TEST_CASE_METRICS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as Array<{
-      test_result_id: string;
-      response_payload: unknown;
-      status: string;
-    }>;
-
-    if (page.length === 0) {
-      break;
-    }
-
-    for (const item of page) {
-      const accumulator = similarityByRunId.get(item.test_result_id);
-      if (!accumulator) {
-        continue;
-      }
-
-      const similarity = extractItemSimilarityScore(item.response_payload);
-      if (typeof similarity === 'number') {
-        accumulator.similaritySum += similarity;
-        accumulator.similarityCount += 1;
-      }
-    }
-
-    if (page.length < TEST_CASE_METRICS_PAGE_SIZE) {
-      break;
-    }
-    from += TEST_CASE_METRICS_PAGE_SIZE;
-  }
-
-  return orderedRuns.map((run, index) => {
-    const similarity = similarityByRunId.get(run.id);
-    return {
-      label: `Run ${index + 1}`,
-      runCreatedAt: run.created_at,
-      avgSimilarity:
-        similarity && similarity.similarityCount > 0
-          ? similarity.similaritySum / similarity.similarityCount
-          : null,
-      failRate: run.total_items > 0 ? run.failed_items / run.total_items : 0,
-      totalCases: run.total_items,
-    };
-  });
 }
 
 export async function listResultItemsByTestItemId(testItemId: string, limit = 500) {

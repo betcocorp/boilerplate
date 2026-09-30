@@ -174,6 +174,7 @@ async function runSingleTurnTestItem(
       responseText,
       criteria,
       modelTag: options?.modelTag,
+      context: { testResultId, testItemId: testItem.id },
     }).catch(() => null);
 
     /**
@@ -194,6 +195,7 @@ async function runSingleTurnTestItem(
         minimumConcepts: testItem.minimum_concepts,
       },
       checkSemanticDecline: gradeSemanticDecline,
+      gradingUsageContext: { testResultId, testItemId: testItem.id },
     });
 
     // Loose `any` (matching the original `JSON.parse(JSON.stringify(result))` call this
@@ -342,6 +344,9 @@ async function runMultiTurnTestItem(
         responseText: turnResponseText,
         criteria: turnCriteria,
         modelTag: options?.modelTag,
+        // B0-1109 — multiple turns of one scenario all attribute to the same test_item_id, which
+        // is correct: one test_item can produce several grading calls across turns.
+        context: { testResultId, testItemId: testItem.id },
       }).catch(() => null);
 
       executedTurns.push({
@@ -398,6 +403,7 @@ async function runMultiTurnTestItem(
           responseText: finalTurn.responseText,
           criteria,
           modelTag: options?.modelTag,
+          context: { testResultId, testItemId: testItem.id },
         }).catch(() => null)
       : null;
 

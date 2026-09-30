@@ -132,3 +132,18 @@ export const updateRecommendationCandidateInputSchema = z.object({
 export type UpdateRecommendationCandidateInput = z.infer<
   typeof updateRecommendationCandidateInputSchema
 >;
+
+/**
+ * B0-1072 — reviewer edit of a recommendation's own competitor identity (brand, and optionally
+ * the product name). Brand is REQUIRED because the only reason to edit it is to make the row
+ * promotable: `promoteRecommendationToOverride` refuses a blank brand, so clearing it here would
+ * just recreate the un-approvable state this exists to fix. Product name is optional (unchanged
+ * when omitted) but cannot be blanked either — `competitor_product` is NOT NULL.
+ */
+export const updateRecommendationCompetitorInputSchema = z.object({
+  competitorBrand: z.string().trim().min(1, 'A competitor brand is required.'),
+  competitorProduct: z.string().trim().min(1, 'A competitor product name is required.').optional(),
+});
+export type UpdateRecommendationCompetitorInput = z.infer<
+  typeof updateRecommendationCompetitorInputSchema
+>;

@@ -22,8 +22,10 @@ import {
   StructuredOutputRefusedError,
   StructuredOutputTruncatedError,
 } from '~/lib/llm/structured-completion';
+import { modelProviderFor } from '~/lib/constants/models';
 import { resolveHarnessInsightsModel } from '~/lib/tests/harness-insights-model';
 
+import { recordGradingUsage } from './grading-usage';
 import {
   getTestItemsByTestId,
   getTestResultById,
@@ -230,17 +232,26 @@ export async function generateAndSaveRunInsights(
 
   let raw: string;
   try {
-    raw = (
-      await completeStructuredWithUsage({
-        model,
-        system: INSIGHT_SYSTEM_PROMPT,
-        user: userContent,
-        schemaName: 'run_insights',
-        schema: RUN_INSIGHTS_JSON_SCHEMA,
-        maxOutputTokens: 1200,
-        temperature: 0.3,
-      })
-    ).text;
+    const completion = await completeStructuredWithUsage({
+      model,
+      system: INSIGHT_SYSTEM_PROMPT,
+      user: userContent,
+      schemaName: 'run_insights',
+      schema: RUN_INSIGHTS_JSON_SCHEMA,
+      maxOutputTokens: 1200,
+      temperature: 0.3,
+    });
+    raw = completion.text;
+
+    // B0-1113 — success path only, same convention as the other grading call sites: a
+    // thrown/refused/truncated call never returns usage in the first place.
+    recordGradingUsage({
+      context: { testResultId: run.id },
+      callSite: 'run_insights',
+      provider: modelProviderFor(model),
+      model,
+      usage: completion.usage,
+    });
   } catch (error) {
     // A truncated or refused answer is not an insight set; surface it the same way an unparseable
     // one already was, so the caller keeps its existing two failure branches.

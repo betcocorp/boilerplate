@@ -1,4 +1,5 @@
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { modelProviderFor } from '~/lib/constants/models';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -10,6 +11,7 @@ import {
   semanticDeclineVerdictSchema,
   type SemanticDeclineGrading,
 } from './decline-schemas';
+import { recordGradingUsage, type GradingUsageContext } from './grading-usage';
 import { resolveItemGradingConfig } from './item-grading-model';
 
 /**
@@ -81,6 +83,8 @@ export type SemanticDeclineCheckInput = {
   expectedConcepts: readonly string[];
   minimumConcepts: readonly string[];
   modelTag?: string;
+  /** B0-1109 — when present, this call's token usage is persisted on success. */
+  context?: GradingUsageContext;
 };
 
 /**
@@ -96,7 +100,7 @@ export async function gradeSemanticDecline(
 ): Promise<SemanticDeclineGrading> {
   const grading = await resolveItemGradingConfig(input.modelTag);
 
-  const { text } = await retryTransportFaults(
+  const { text, usage } = await retryTransportFaults(
     () =>
       completeStructuredWithUsage({
         model: grading.model,
@@ -117,6 +121,18 @@ export async function gradeSemanticDecline(
       }),
     { runtime: 'responses', label: 'decline-grader.create' },
   );
+
+  // B0-1109 — success path only, same as the criteria grader: a refusal/truncation/transport
+  // failure throws above before any usage is read.
+  if (input.context) {
+    recordGradingUsage({
+      context: input.context,
+      callSite: 'decline_grader',
+      provider: modelProviderFor(grading.model),
+      model: grading.model,
+      usage,
+    });
+  }
 
   const parsedJson = JSON.parse(text) as unknown;
   return {

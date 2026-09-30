@@ -8,6 +8,7 @@ import { GoldenSetMetricsCards } from '~/components/admin/tests/GoldenSetMetrics
 import { OnlyGoldenToggle } from '~/components/admin/tests/OnlyGoldenToggle';
 import { PromptSearchDialog } from '~/components/admin/tests/PromptSearchDialog';
 import { RunGoldenTestsDialog } from '~/components/admin/tests/RunGoldenTestsDialog';
+import { SweepsTable } from '~/components/admin/tests/SweepsTable';
 import { Button } from '~/components/ui/button';
 import {
   Table,
@@ -18,6 +19,11 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
+import { listRecentScheduledTestRuns } from '~/lib/observability/scheduled-test-repository';
+import type {
+  ScheduledTestRunWithItems,
+  SweepRunMode,
+} from '~/lib/observability/scheduled-test-types';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { formatScoreDelta } from '~/lib/tests/format';
@@ -49,6 +55,36 @@ type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
+/** Newest-first cap for each of the two sweep sections (B0-1107). */
+const SWEEP_SECTION_LIMIT = 10;
+
+type SweepSectionData = {
+  runs: ScheduledTestRunWithItems[];
+  loadError: string | null;
+};
+
+/**
+ * B0-1107 — reads the sweep ledger only (never a golden-metric aggregate). A ledger failure must
+ * surface inline in its own section rather than take the whole page down with it.
+ */
+async function loadSweepSection(runMode: SweepRunMode): Promise<SweepSectionData> {
+  try {
+    const runs = await listRecentScheduledTestRuns({
+      runMode,
+      limit: SWEEP_SECTION_LIMIT,
+    });
+    return { runs, loadError: null };
+  } catch (error) {
+    return {
+      runs: [],
+      loadError:
+        error instanceof Error
+          ? error.message
+          : 'Unable to load sweeps. If this persists, check the Supabase service-role configuration.',
+    };
+  }
+}
+
 export default async function AdminTestsPage({ searchParams }: PageProps) {
   await requirePagePermission(
     PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
@@ -64,15 +100,25 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   // B0-585 — the per-test latest-result and cross-run similarity roll-up that used to fan out
   // over 20 runs per test on every load is decommissioned: run-level figures live on
   // /admin/tests/[testId], golden-set health on /admin/bex/health.
-  const [allTests, archivedTests, goldenSetMetrics, failTrendRuns] =
-    await Promise.all([
-      listTests(),
-      listArchivedTests(),
-      calculateGoldenSetMetrics(),
-      // B0-1015 — takes the same `onlyGolden` reading as the table, so the chart's series and the
-      // rows beneath it are always the same set of datasets.
-      listTestSetFailTrendRuns({ onlyGolden }),
-    ]);
+  const [
+    allTests,
+    archivedTests,
+    goldenSetMetrics,
+    failTrendRuns,
+    fullSweeps,
+    partialSweeps,
+  ] = await Promise.all([
+    listTests(),
+    listArchivedTests(),
+    calculateGoldenSetMetrics(),
+    // B0-1015 — takes the same `onlyGolden` reading as the table, so the chart's series and the
+    // rows beneath it are always the same set of datasets.
+    listTestSetFailTrendRuns({ onlyGolden }),
+    // B0-1107 — full and partial sweeps are listed separately: partial (threshold-filtered) runs
+    // never mix with full-run history.
+    loadSweepSection('full'),
+    loadSweepSection('partial'),
+  ]);
   const tests = onlyGolden
     ? allTests.filter((test) => test.is_golden)
     : allTests;
@@ -325,6 +371,21 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             </TableBody>
           </Table>
         </section>
+
+        <SweepsTable
+          emptyMessage="No sweeps yet — the nightly cron runs at 00:00 UTC, or use Run Golden."
+          loadError={fullSweeps.loadError}
+          runs={fullSweeps.runs}
+          title="Sweeps"
+        />
+
+        <SweepsTable
+          emptyMessage="No partial sweeps yet — set a threshold in Run Golden."
+          loadError={partialSweeps.loadError}
+          runs={partialSweeps.runs}
+          showThreshold
+          title="Partial sweeps"
+        />
 
         {/* B0-1015 — the "Fails" column shows only each dataset's latest run, which cannot
             distinguish a real regression from one bad sweep (an OpenAI billing outage spiked every

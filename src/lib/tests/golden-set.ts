@@ -1,6 +1,7 @@
 import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
+import { onlyMetricEligibleRuns } from './run-mode';
 import { COMPLETED_RUN_STATUSES } from './types';
 
 /**
@@ -433,7 +434,12 @@ export async function listGoldenItems(testIds: string[]): Promise<GoldenItemRow[
   );
 }
 
-/** Completed full-mode runs of the golden tests, optionally window-filtered. */
+/**
+ * Completed, metric-eligible runs of the golden tests, optionally window-filtered. The run_mode
+ * predicate comes from `onlyMetricEligibleRuns` (B0-1105) — this is the reader behind every
+ * golden metric, tier rollup, trend, run series and alert, so a `partial` run can never enter any
+ * of them.
+ */
 export async function listGoldenCandidateRuns(
   testIds: string[],
   window?: { from: string; to: string },
@@ -441,11 +447,12 @@ export async function listGoldenCandidateRuns(
   if (testIds.length === 0) return [];
   const supabase = getSupabaseServiceRoleClient();
   return fetchAllPages<GoldenRunRow>((from, to) => {
-    let query = supabase
-      .from('test_results')
-      .select('id, test_id, app_version, created_at')
-      .in('test_id', testIds)
-      .eq('run_mode', 'full')
+    let query = onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select('id, test_id, app_version, created_at')
+        .in('test_id', testIds),
+    )
       .in('status', [...COMPLETED_RUN_STATUSES])
       .order('created_at', { ascending: false });
     if (window) {

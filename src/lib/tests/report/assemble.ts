@@ -1,9 +1,9 @@
 import {
   getTestById,
-  getTestItemsByTestId,
   getTestResultById,
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
+import { resolveRunItems } from '~/lib/tests/resolve-run-items';
 import {
   extractDraftAnswer,
   extractFiredGates,
@@ -432,9 +432,10 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
     return toNotGeneratedPayload(runId, state);
   }
 
+  // B0-1110 — same scope the grader used, so a partial run's report shows only its scoped cases.
   const [test, items, resultItems] = await Promise.all([
     getTestById(run.test_id),
-    getTestItemsByTestId(run.test_id),
+    resolveRunItems(run),
     listAllResultItemsByResultId(run.id),
   ]);
 

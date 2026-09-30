@@ -19,17 +19,14 @@
  */
 
 import { connection } from 'next/server';
-import { z } from 'zod';
 
 import {
-  scheduledTestItemSchema,
-  scheduledTestRunSchema,
-  type ScheduledTestItem,
-  type ScheduledTestRunWithItems,
-} from '~/lib/observability/scheduled-test-types';
+  DEFAULT_SWEEP_NAME,
+  listRecentScheduledTestRuns,
+} from '~/lib/observability/scheduled-test-repository';
+import type { ScheduledTestRunWithItems } from '~/lib/observability/scheduled-test-types';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
-import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import { ScheduledTestsTable } from './scheduled-tests-table';
 
@@ -39,110 +36,6 @@ export const metadata = {
 };
 
 const PAGE_SIZE = 50;
-
-type UnknownRowsResult = {
-  data: unknown[] | null;
-  error: { message: string } | null;
-};
-
-/**
- * The narrowest shape this page needs from PostgREST. `scheduled_test_runs` /
- * `scheduled_test_items` exist in Postgres but are absent from the generated Supabase types
- * (B0-941) because regenerating them needs CLI auth that is not available here — so one cast is
- * unavoidable. Keeping it to this interface means rows arrive as `unknown` and must go through
- * the Zod schemas below rather than being blind-cast. Re-running `pnpm types:supabase:public`
- * puts the tables in `Database['public']` and this whole escape hatch can be deleted.
- */
-type ScheduledTablesReader = {
-  from: (table: 'scheduled_test_runs' | 'scheduled_test_items') => {
-    select: (columns: string) => {
-      order: (
-        column: string,
-        options: { ascending: boolean },
-      ) => {
-        limit: (count: number) => PromiseLike<UnknownRowsResult>;
-      };
-      in: (column: string, values: string[]) => PromiseLike<UnknownRowsResult>;
-    };
-  };
-};
-
-function getScheduledTablesReader(): ScheduledTablesReader {
-  return getSupabaseServiceRoleClient() as unknown as ScheduledTablesReader;
-}
-
-function parseRows<T>(
-  schema: z.ZodType<T>,
-  rows: unknown[],
-  label: string,
-): T[] {
-  const parsed = z.array(schema).safeParse(rows);
-
-  if (!parsed.success) {
-    throw new Error(
-      `Unexpected ${label} row shape: ${z.prettifyError(parsed.error)}`,
-    );
-  }
-
-  return parsed.data;
-}
-
-async function getRecentScheduledRuns(
-  limit: number = PAGE_SIZE,
-): Promise<ScheduledTestRunWithItems[]> {
-  const client = getScheduledTablesReader();
-
-  const { data: runRows, error: runsError } = await client
-    .from('scheduled_test_runs')
-    .select('*')
-    .order('sweep_triggered_at', { ascending: false })
-    .limit(limit);
-
-  if (runsError) {
-    throw new Error(`Failed to fetch scheduled test runs: ${runsError.message}`);
-  }
-
-  if (!runRows || runRows.length === 0) {
-    return [];
-  }
-
-  const runs = parseRows(scheduledTestRunSchema, runRows, 'scheduled test run');
-
-  const { data: itemRows, error: itemsError } = await client
-    .from('scheduled_test_items')
-    .select('*')
-    .in(
-      'scheduled_run_id',
-      runs.map((run) => run.id),
-    );
-
-  if (itemsError) {
-    throw new Error(
-      `Failed to fetch scheduled test items: ${itemsError.message}`,
-    );
-  }
-
-  const items = parseRows(
-    scheduledTestItemSchema,
-    itemRows ?? [],
-    'scheduled test item',
-  );
-
-  const itemsByRunId = new Map<string, ScheduledTestItem[]>();
-  for (const item of items) {
-    const existing = itemsByRunId.get(item.scheduled_run_id);
-    if (existing) {
-      existing.push(item);
-    } else {
-      itemsByRunId.set(item.scheduled_run_id, [item]);
-    }
-  }
-
-  return runs.map((run) => ({
-    ...run,
-    items: itemsByRunId.get(run.id) ?? [],
-  }));
-}
 
 export default async function AdminScheduledTestsPage() {
   await requirePagePermission(
@@ -155,7 +48,12 @@ export default async function AdminScheduledTestsPage() {
   let loadError: string | null = null;
 
   try {
-    runs = await getRecentScheduledRuns(PAGE_SIZE);
+    // B0-1106 — cron-only by decision: manual and partial Run Golden sweeps are listed under the
+    // Sweeps / Partial sweeps sections on /admin/tests, so this page's title stays true.
+    runs = await listRecentScheduledTestRuns({
+      sweepName: DEFAULT_SWEEP_NAME,
+      limit: PAGE_SIZE,
+    });
   } catch (error) {
     loadError =
       error instanceof Error
