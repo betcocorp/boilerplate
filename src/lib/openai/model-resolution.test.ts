@@ -195,10 +195,11 @@ describe('resolveResponsesModel — pre-existing behaviour is unchanged', () => 
   });
 });
 
-describe('BEX_MODEL_TAGS (B0-599 / B0-908)', () => {
-  it('includes both new gpt tags and every Anthropic tag', () => {
-    expect(BEX_MODEL_TAGS).toContain('gpt-5.5');
-    expect(BEX_MODEL_TAGS).toContain('gpt-5.6');
+describe('BEX_MODEL_TAGS', () => {
+  it('includes every OpenAI tag and every Anthropic tag', () => {
+    for (const tag of OPENAI_MODEL_TAGS) {
+      expect(BEX_MODEL_TAGS).toContain(tag);
+    }
     for (const tag of ANTHROPIC_MODEL_TAGS) {
       expect(BEX_MODEL_TAGS).toContain(tag);
     }

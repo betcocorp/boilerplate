@@ -1,73 +1,65 @@
-# Bex 2.0
+# Betco Boilerplate
 
-Next.js admin app for Betco RAG tooling and the **Bex** product-support assistant. Chat uses the **OpenAI Responses API** (not Assistants), **server-side function tools**, and **Supabase** for RAG plus durable conversation/workflow storage.
+A generic starter for Betco engineering projects: Next.js 16 (App Router), Supabase, the
+Vercel AI SDK, and shadcn/ui.
 
-## Quick start
+## Stack
+
+- **Next.js 16** (App Router), **React 19**, **TypeScript** (strict)
+- **Tailwind CSS v4** + **shadcn/ui** components (`src/components/ui`)
+- **Supabase** (`@supabase/supabase-js`) — client/server/service-role clients in
+  `src/supabase/clients`
+- **Vercel AI SDK v6** (`ai`, `@ai-sdk/react`, `@ai-sdk/openai`, `@ai-sdk/anthropic`) — see
+  `src/app/api/chat/route.ts` and `src/components/ChatExample.tsx` for a minimal streaming chat
+  example, and `src/lib/llm/resolve-model.ts` / `src/lib/constants/models.ts` for a
+  vendor-neutral model-tag resolution pattern
+- **NextAuth** (Azure AD provider configured in `src/lib/auth.ts`) — swap in your own provider(s)
+- **Vitest** for tests, **ESLint 9** (flat config)
+
+## Getting started
 
 ```bash
 pnpm install
+cp .env.example .env.local   # fill in your own values
 pnpm dev
 ```
 
-Open [http://localhost:3000/admin/bex](http://localhost:3000/admin/bex).
+### Environment variables
 
-## Environment variables
+| Variable | Used for |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase clients |
+| `AZURE_AD_CLIENT_ID`, `AZURE_AD_CLIENT_SECRET`, `AZURE_AD_TENANT_ID`, `NEXTAUTH_SECRET` | NextAuth |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | AI SDK providers |
+| `NEXT_PUBLIC_SENTRY_DSN` | Sentry (leave unset to disable) |
 
-| Variable | Purpose |
-|----------|---------|
-| `OPENAI_API_KEY` | OpenAI API (Responses + embeddings for RAG search). |
-| `ANTHROPIC_API_KEY` | Anthropic API — run-report grading when the `REPORT_GRADING_MODEL` settings row names a `claude-*` tag (B0-806). A secret, so env rather than settings; nothing else calls Anthropic. |
-| `BEX_RESPONSES_MODEL` | **No longer an env var** — a `public.settings` row (B0-757) holding the `BEX_MODEL_TAGS` tag that `preview` and a missing `modelTag` resolve to. A select at `/admin/settings`, validated like `BEX_ROUTER_MODEL` (B0-831). Default `gpt-4.1-mini`. |
-| `BEX_MODEL_GPT4O` / `BEX_MODEL_GPT41` | Overrides for UI tags `gpt-4o` / `gpt-4.1`. |
-| `BEX_VALIDATOR_MODEL` | Optional separate model for the validator pass. |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role (server-only) for RAG + agent tables. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key for server client where used. |
-| `API_TOKEN` (per client) | `/api/v1/*` uses per-client tokens from the project/app/token registry (`Authorization: Bearer bex_<env>_…`); no shared key. Local dev uses the seeded "Local Dev" token in `.env.local`. |
-| `BEX_PERMISSIONS_ENFORCED` | The single switch for the permission system (epic B0-401). **No longer an env var** — B0-638 moved it to a `public.settings` row, toggled at `/admin/settings` and read by `isPermissionsEnforced()`; setting an env var of this name does nothing. Anything but `true` = **shadow mode**: verdicts are logged (`permission.verdict`) and would-be denials recorded in `audit_logs` as `permission.shadow_verdict`, but nothing is denied — no nav is hidden, no route returns 403, no sign-in is rejected, no session is cleared. `true` enforces. Currently `false`, and **NO-GO** to flip: see `src/docs/permissions-enforcement-cutover.md` for the evidence, blockers and runbook. |
-| `AUTH_SESSION_MAX_AGE_SECONDS` | Session lifetime shared by the NextAuth JWT/session and the auth-user cookie. Defaults to `604800` (7 days); non-numeric or `<= 0` keeps the default. |
+### Database
 
-## Database migrations
+`src/supabase/migrations/` starts empty — add your own migrations (`supabase migration new <name>`)
+and apply them locally with the Supabase CLI, or via an MCP `apply_migration` call if you're working
+with Claude Code. Regenerate `src/types/supabase.public.ts` against your schema with:
 
-Apply SQL under `src/supabase/migrations` in your Supabase project (including `20260408120000_agent_platform_tables.sql` for `agent_conversations`, `agent_messages`, `workflow_runs`, `workflow_steps`, `review_tasks`, `audit_logs`).
+```bash
+pnpm run types:supabase
+```
 
-Regenerate types when possible:
+## Directory layout
 
-- `pnpm run types:supabase:legacy`
-- `pnpm run types:supabase:rag`
+| Area | Location |
+| --- | --- |
+| Routes | `src/app/**` — keep route files thin (`page.tsx`, `layout.tsx`); put feature UI under `src/components/` |
+| Feature UI | `src/components/<feature>/` |
+| Domain logic | `src/lib/<domain>/` |
+| Shared types | `src/types/` |
+| API handlers | `src/app/api/**/route.ts` |
+| Server Actions | `src/lib/**` with `'use server'` |
 
-`src/types/supabase.public.ts` includes the new **public** agent tables; `rag` / `legacy` are described loosely so `.schema('rag')` and RPCs type-check until you regenerate.
+Import from `~/...` only (maps to `./src/*`, see `tsconfig.json`) — avoid long `../../` paths.
 
-## Architecture (Bex)
+## Quick checks
 
-1. **UI** (`BexChatApp`) calls **`POST /api/bex/chat/stream`** (via `apiPostBexChatStream()`) with optional `conversationId`, `message`, and `model`. The streaming route uses the **Vercel AI SDK** (`createUIMessageStream`) and is gated by the `BEX_AI_SDK_STREAMING_*` flags. The old `POST /api/bex/chat` is **deprecated and returns HTTP 410**.
-2. **`runBexChatTurn`** persists the user message, then **`runProductSupportWorkflow`**:
-   - Keyword **orchestrator hint** from `routeUserMessageToSme` (planner context only).
-   - **Generation runtime**: by default the **OpenAI Responses API** loop (`src/lib/openai/responses-runtime.ts`); when `BEX_AI_SDK_GENERATION_ENABLED=true`, the **Vercel AI SDK** `streamText` loop (`src/lib/bex/ai-sdk-runtime.ts`) runs instead — same result shape, tools, and streaming, but replays conversation history (`priorMessages`) rather than `previous_response_id` chaining. Both use the same **function tools** (`src/lib/tools/definitions.ts`) executed on the server (`execute-tool-call.ts` → `product-tools.ts`).
-   - Tools wrap **`searchProductChunks`** and related retrieval (`src/lib/retrieval/*`) — transitional **RAG corpus** adapter, not a single mega-tool.
-   - **Validator** pass (`validator.ts`) with structured JSON output; failed answers get a safe fallback + optional **review task**.
-3. **Persistence**: `latest_openai_response_id` on `agent_conversations` chains turns via `previous_response_id`; developer instructions are resent each turn.
-4. **Observability**: structured logs (`src/lib/observability/logger.ts`) and **`audit_logs`** rows for lifecycle and tool events.
-
-Legacy **`POST /api/v1/orchestrator`** still accepts `bex-chat` and now runs the same pipeline, returning **`productSupport`** in the JSON (plus `routing` / `steps`).
-
-## API routes
-
-| Method | Path | Notes |
-|--------|------|--------|
-| POST | `/api/bex/chat/stream` | Main chat (AI SDK streaming); same auth pattern as v1 orchestrator for POST (bearer or non-empty message in dev). Gated by `BEX_AI_SDK_STREAMING_ENABLED`. |
-| POST | `/api/bex/chat` | **Deprecated** — returns HTTP 410. Use `/api/bex/chat/stream`. |
-| GET/POST | `/api/bex/conversations` | List / create conversations. |
-| GET/DELETE | `/api/bex/conversations/[id]` | Load or delete thread + messages. |
-| GET | `/api/bex/workflow-runs/[id]` | Run, steps, audit rows. |
-
-## Tests
-
-`src/lib/openai/response-item-parsing.test.ts` targets pure parsers; route contracts are covered under `src/app/api/bex/chat/**/route.test.ts`. **Vitest** is already a dev dependency — run `pnpm exec vitest` (see `vitest.config.ts`). Test files are excluded from `next build` typecheck via `tsconfig.json`.
-
-## Follow-ups
-
-- Replace RAG transitional adapters with structured product/surface tables where available.
-- Tighten **RLS** on agent tables if exposing Supabase to clients; today routes use the **service role** on the server.
-- Add real auth for admin and pass `user_id` / `workspace_id` into conversations.
-- Regenerate **`supabase.legacy.ts`** so legacy admin pages regain strict typings.
+```bash
+pnpm exec tsc --noEmit
+pnpm lint
+pnpm exec vitest run
+```

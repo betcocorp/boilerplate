@@ -9,16 +9,15 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
-  serverExternalPackages: ["@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner", "pdfjs-dist"],
 };
 
 export default withSentryConfig(nextConfig, {
   // For all available options, see:
   // https://www.npmjs.com/package/@sentry/webpack-plugin#options
 
-  org: "betco",
+  org: "<your-sentry-org>",
 
-  project: "bex",
+  project: "<your-sentry-project>",
 
   // Only print logs for uploading source maps in CI
   silent: !process.env.CI,
