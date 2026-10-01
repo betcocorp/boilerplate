@@ -3,13 +3,13 @@ import Anthropic from '@anthropic-ai/sdk';
 let cached: Anthropic | null = null;
 
 /**
- * The one Anthropic client, mirroring `getOpenAIClient`. `ANTHROPIC_API_KEY` is a secret, so it
- * lives in env rather than a `settings` table row.
+ * B0-819 — the one Anthropic client, mirroring `getOpenAIClient`. `ANTHROPIC_API_KEY` is a secret,
+ * so it is the one piece of this provider that lives in env rather than `public.settings` (B0-638).
  *
- * Any single-shot call site reaches this client through `~/lib/llm/structured-completion.ts`
- * whenever its model tag is `claude-*` (`modelProviderFor`); a streaming chat loop built on
- * `@ai-sdk/anthropic` instead reads the same `ANTHROPIC_API_KEY` env var directly, not through
- * this SDK instance.
+ * B0-908 — no longer grader-only. Every single-shot call site (run-report grader, router,
+ * validator, …) reaches this client through `~/lib/llm/structured-completion.ts` whenever its model
+ * tag is `claude-*` (`modelProviderFor`), and the Bex chat AI SDK loop uses `@ai-sdk/anthropic`,
+ * which reads the same `ANTHROPIC_API_KEY` env var directly rather than this SDK instance.
  */
 export function getAnthropicClient(): Anthropic {
   if (cached) {

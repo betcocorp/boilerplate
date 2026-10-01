@@ -1,0 +1,1338 @@
+import {
+  retrieveApprovedUsage,
+  retrieveCompatibility,
+  retrieveSafetyConstraints,
+  retrieveSurfacesLists,
+} from '~/lib/retrieval/product-guidance';
+import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
+import {
+  buildFactsBlock,
+  fetchEntityTitle,
+  fetchFactsForProduct,
+  fetchFactsForProductBatch,
+  type ProductLineFacts,
+} from '~/lib/retrieval/product-facts';
+import {
+  fetchCurrentEfficacyLabReport,
+  renderEfficacyLabReportCitation,
+  type EfficacyLabReportCitation,
+} from '~/lib/retrieval/efficacy-lab-report';
+import {
+  fetchFastDrawDilution,
+  type FastDrawDilutionLookup,
+} from '~/lib/retrieval/fastdraw-dilution';
+import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
+import { createWebSearchService } from '~/lib/websearch/web-search-service';
+import {
+  resolveProductEntityByName,
+  type ProductEntityResolutionMode,
+  type ProductEntityResolutionResult,
+  type ProductEntityResolutionSource,
+  type ResolveProductEntityOptions,
+} from '~/lib/rag/entity-context';
+import type { AnswerShape } from '~/lib/orchestrator/signals/signals-schemas';
+import {
+  inferSectionTypeFromQuery,
+  inferSectionTypeFromToolName,
+} from '~/lib/rag/section-type-inference';
+import { writeAuditLog, type AuditContext } from '~/lib/audit/audit-log';
+
+import {
+  buildKnowledgeAssetQuery,
+  KNOWLEDGE_ASSET_ADAPTER_TAG,
+  retrieveKnowledgeAssets,
+} from '~/lib/retrieval/knowledge-assets';
+
+import {
+  EFFICACY_BATCH_MAX_PRODUCTS,
+  findProductsByCategoryInputSchema,
+  getApprovedUsageGuidanceInputSchema,
+  getCompatibilityRulesInputSchema,
+  getDispenserAssetInputSchema,
+  getEfficacyDataInputSchema,
+  getEscalationPolicyInputSchema,
+  getFloorAssetInputSchema,
+  getProductCategoryInputSchema,
+  getProductSpecInputSchema,
+  getProductsInCategoryInputSchema,
+  getSafetyConstraintsInputSchema,
+  listAllowedSurfacesInputSchema,
+  listDisallowedUsesInputSchema,
+  lookupCrossReferenceInputSchema,
+  recommendCrossReferenceInputSchema,
+  searchProductDocsInputSchema,
+  webSearchToolInputSchema,
+  type ProductToolName,
+} from '~/lib/tools/tool-schemas';
+import { lookupCrossReferenceDeduped } from '~/lib/recommendations/legacy-lookup-cache';
+import { detectCategorySearchTerms } from '~/lib/tools/category-search-terms';
+import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
+import { routeCategoryQuery } from '~/lib/category/category-router';
+import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
+import { isImplausibleCompetitorProductText } from '~/lib/recommendations/extract-competitor-product';
+import { isBetcoBrand, splitBetcoLinePrefix } from '~/lib/recommendations/competitor-self-reference';
+import { buildUnresolvedCompetitorDecline } from '~/lib/recommendations/recommend-cross-reference';
+
+const ADAPTER_TAG = 'rag_corpus_full_document' as const;
+
+/**
+ * B0-780 — category-binding: `vct` and `sportszone` are mutually exclusive floor-care domains in
+ * the `knowledge` corpus (resilient tile vs. wood sport floors — see `deriveKnowledgeCategoryFromS3Key`
+ * in `~/lib/rag/search.ts`), and `restroom` is out of scope for either. A wood-sport-floor question
+ * must never ground on a VCT procedure document (and vice versa), and a bathroom-specialist question
+ * must never ground on floor-care content at all.
+ *
+ * B0-746 — the single `floor` specialist that used to guess the domain from query wording
+ * (`WOOD_FLOOR_QUERY_PATTERN`/`VCT_FLOOR_QUERY_PATTERN`) was split into four substrate specialists.
+ * The specialist id ITSELF now resolves the domain — routing already decided which substrate this
+ * turn is — so the query-text regex guessing is gone; each floor specialist unconditionally
+ * excludes the categories it does not own. `floor_concrete` and `floor_stg` have no dedicated
+ * ingest folder of their own (see `~/app/(authenticated)/admin/knowledge/manifest.ts`), so they
+ * exclude BOTH foreign folders, same as bathroom.
+ */
+const BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES = ['vct', 'sportszone'] as const;
+
+/**
+ * B0-780/B0-746 — resolves which `knowledge` document categories (see
+ * `deriveKnowledgeCategoryFromS3Key`) to exclude from retrieval for this call, from the specialist
+ * policy actually running (`auditCtx.specialistId`, threaded from
+ * `run-product-support-workflow.ts`'s `effectivePromptId` via `wfCtx`).
+ *
+ * `queryText` is kept in the signature for compatibility with every call site, but is no longer
+ * consulted: post-B0-746 the specialist id alone resolves the substrate domain (see the doc
+ * comment above).
+ *
+ * `dilution-control` and `product` are cross-cutting categories and are never excluded here, for
+ * any specialist.
+ */
+export function resolveKnowledgeCategoryExclusions(
+  specialistId: string | null | undefined,
+  _queryText: string,
+): string[] {
+  if (specialistId === 'bathroom' || specialistId === 'floor_concrete' || specialistId === 'floor_stg') {
+    return [...BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES];
+  }
+  if (specialistId === 'floor_wood_sport') {
+    return ['vct'];
+  }
+  if (specialistId === 'floor_vct') {
+    return ['sportszone'];
+  }
+  return [];
+}
+
+/**
+ * B0-488 — the eval-harness / audit-log outcome taxonomy for `rag.product_alias` resolution,
+ * distinct from `ProductEntityResolutionSource` (which also names the non-alias legacy fallback
+ * tiers, `prod_line_id`/`title_exact`/`title_fuzzy`). `alias_fuzzy` here covers BOTH the tokenized
+ * (`alias_fuzzy`) and trigram-RPC (`alias_fuzzy_trgm`) tiers — the ticket's outcome categories
+ * don't split those further.
+ */
+export type AliasResolutionOutcome = 'alias_exact' | 'alias_fuzzy' | 'no_alias_match' | 'ambiguous_alias';
+
+/**
+ * Per-call alias-resolution telemetry, attached near the front of every product-tool's JSON
+ * payload (see `resolveProductEntityWithAliasTelemetry` below) so it survives the 4,000-char
+ * `outputPreview` truncation applied when the call is persisted onto the workflow's tool trace
+ * (`~/lib/tools/execute-tool-call.ts`) — `~/lib/tests/alias-routing.ts` reads it back from there
+ * for the `/admin/tests` hit-rate metric.
+ */
+export type AliasResolutionTelemetry = {
+  /** False when the caller passed an empty/whitespace-only name — nothing was attempted. */
+  attempted: boolean;
+  /** Null only when `attempted` is false. */
+  outcome: AliasResolutionOutcome | null;
+  /**
+   * B0-479: which resolution mode produced `outcome` — `'name'` for a model-asserted product
+   * name/code, `'freeform'` for a precise-tiers-only attempt against raw `freeformQuery` text.
+   * `computeAliasResolutionReport` (`~/lib/tests/alias-routing.ts`) intentionally ignores this and
+   * pools both modes into one hit rate; it's carried so a trace can still be read back per-mode
+   * (freeform attempts are expected to miss far more often — most freeform queries name no product).
+   */
+  mode: ProductEntityResolutionMode;
+  /**
+   * B0-700 follow-up: the resolved entity's real `rag.entity.title`, straight off
+   * `ProductEntityResolutionResult.matchedTitle` — null unless `outcome` is `alias_exact` or
+   * `alias_fuzzy`. This is the only reliable "what did we actually match?" display name for an
+   * alias hit (the tool call's own `productId`/`name` argument is the RAW string the model/user
+   * asked for, which is exactly the wrong thing to show back as the resolved product on a fuzzy
+   * hit). Used by `maybeDiscloseAliasFuzzyMatch` (`~/lib/workflows/product-support/run-product-support-workflow.ts`)
+   * to deterministically disclose a fuzzy-alias correction — never invent/reformat this value.
+   */
+  matchedTitle: string | null;
+};
+
+function classifyAliasResolutionOutcome(
+  resolution: Pick<ProductEntityResolutionResult, 'resolutionSource' | 'ambiguousAlias'>,
+): AliasResolutionOutcome {
+  if (
+    resolution.resolutionSource === 'alias_exact' ||
+    resolution.resolutionSource === 'alias_exact_freeform'
+  ) {
+    return 'alias_exact';
+  }
+  if (
+    resolution.resolutionSource === 'alias_fuzzy' ||
+    resolution.resolutionSource === 'alias_fuzzy_freeform' ||
+    resolution.resolutionSource === 'alias_fuzzy_trgm'
+  ) {
+    return 'alias_fuzzy';
+  }
+  if (resolution.ambiguousAlias) {
+    return 'ambiguous_alias';
+  }
+  return 'no_alias_match';
+}
+
+/**
+ * B0-488 — wraps `resolveProductEntityByName` for every product-tool call site: attaches the
+ * `AliasResolutionTelemetry` returned to the model/harness, and — on an actual alias hit (exact or
+ * fuzzy) — writes an `audit_logs` row via the existing `writeAuditLog` helper.
+ *
+ * Logged here, not inside `~/lib/rag/entity-context.ts`: that module is a low-level DB helper with
+ * no `AuditContext` (traceId/workflowRunId) in scope, called from several places. This call site
+ * (reached via `executeToolCall` <- the `executeTool` closure in
+ * `~/lib/workflows/product-support/run-product-support-workflow.ts`) does have one, threaded down
+ * as `auditCtx`.
+ *
+ * Uses the immediate `writeAuditLog` helper rather than that workflow's `AuditLogQueue`: the queue
+ * instance lives inside the workflow's closure and isn't threaded this far down, and an alias hit
+ * is relatively rare (most tool calls carry no explicit product name at all), so the extra insert
+ * latency only lands on that minority hit path, not on every tool call.
+ */
+async function resolveProductEntityWithAliasTelemetry(
+  nameOrId: string,
+  toolName: string,
+  auditCtx: AuditContext | undefined,
+  /** B0-479: `{ mode: 'freeform' }` for a precise-tiers-only attempt against raw user text. */
+  options: ResolveProductEntityOptions = { mode: 'name' },
+): Promise<ProductEntityResolutionResult & { aliasResolution: AliasResolutionTelemetry }> {
+  const mode: ProductEntityResolutionMode = options.mode ?? 'name';
+  const resolution = await resolveProductEntityByName(nameOrId, options);
+  const attempted = nameOrId.trim().length > 0;
+  const outcome = attempted ? classifyAliasResolutionOutcome(resolution) : null;
+
+  if (attempted && auditCtx && (outcome === 'alias_exact' || outcome === 'alias_fuzzy')) {
+    await writeAuditLog(
+      'alias_resolution_hit',
+      {
+        query: nameOrId,
+        resolution_source: resolution.resolutionSource,
+        matched_alias_id: resolution.matchedAliasId,
+        matched_alias_confidence: resolution.matchedAliasConfidence,
+        product_line_key: resolution.productLineKey,
+        product_key: resolution.productKey,
+      },
+      { ...auditCtx, toolName },
+    );
+  }
+
+  return {
+    ...resolution,
+    aliasResolution: { attempted, outcome, mode, matchedTitle: resolution.matchedTitle },
+  };
+}
+
+/**
+ * Each "source" is a full document (assembled from all its chunks). The model is
+ * expected to read `documentBody` for grounding and use `snippet` only as a
+ * preview / citation hint.
+ *
+ * B0-548: no longer also emits `matchedChunkText` — it duplicated content already in
+ * `documentBody` (or, when body assembly fell back to the single matched chunk, was
+ * byte-identical to it) and had no downstream reader, so it was pure token/storage waste on
+ * the persisted payload (`toolOutputLog`, `outputPreview`). `documentBody` (full grounding
+ * text) and `snippet` (bounded preview persisted for UI citations by
+ * `collectSourcesFromToolOutputs`/`collectSourceMetaFromToolOutputs`) remain distinct and
+ * both still have real consumers.
+ */
+function sourcePayload(
+  result: Awaited<ReturnType<typeof ragQueryForProductKnowledgeWithMeta>>,
+) {
+  const docs = result.sources.map((s) => ({
+    documentId: s.documentId,
+    chunkId: s.chunkId,
+    title: s.title,
+    snippet: s.snippet,
+    documentBody: s.documentBody,
+    documentBodyChars: s.documentBodyChars,
+    documentBodyChunkCount: s.documentBodyChunkCount,
+    documentBodyTruncated: s.documentBodyTruncated,
+    documentBodyTokenEstimate: s.documentBodyTokenEstimate,
+    // B0-13: full list of chunk ids assembled into documentBody, so a retrieval can be
+    // audited after the fact (e.g. confirming a specific label section reached the model
+    // vs. was dropped by the per-document truncation cap in assembleDocumentBodies()).
+    documentBodyChunkIds: s.documentBodyChunkIds,
+    // B0-490 — `similarity` is the unambiguous key (the raw pgvector/hybrid score for the
+    // surviving match); `confidence` is kept alongside it for back-compat with any reader still
+    // keying off the old name, but is never the field a NEW reader should source from.
+    similarity: s.similarity,
+    confidence: s.similarity,
+    // B0-XXX — the cross-encoder's score and position for this chunk under this call's query.
+    // `similarity` above is the PRE-rerank cosine; these are the only record of what reranking
+    // actually did, and `sources[]` order here is cosine order, not reranked order.
+    rerankScore: s.rerankScore,
+    rerankRank: s.rerankRank,
+    documentKind: s.documentKind,
+    productLineKey: s.productLineKey,
+    productKey: s.productKey,
+    // B0-257: raw S3 location of the source PDF/markdown, so label/SDS-derived answers
+    // (directions, hazards, first aid, dilution) can cite the exact source document.
+    s3Key: s.s3Key,
+    sourceUri: s.sourceUri,
+    // B0-1075: derived betco.com product-page URL (rag.product_line_web_url, B0-1074); matches
+    // sourceRefSchema's `url` field name so it survives persistence unchanged.
+    url: s.productPageUrl ?? undefined,
+    freshness: null as null,
+  }));
+
+  // B0-196: surface structured facts as a first-class grounded source so both the
+  // model and the validator's evidence summary (built from sources[].documentBody)
+  // treat verified dilution/efficacy values as citable evidence.
+  if (result.factsBlock) {
+    docs.unshift({
+      documentId: VERIFIED_FACTS_SOURCE_ID,
+      chunkId: VERIFIED_FACTS_SOURCE_ID,
+      title: 'Verified Product Facts (structured)',
+      snippet: result.factsBlock.slice(0, 900),
+      documentBody: result.factsBlock,
+      documentBodyChars: result.factsBlock.length,
+      documentBodyChunkCount: 1,
+      documentBodyTruncated: false,
+      documentBodyTokenEstimate: null,
+      documentBodyChunkIds: [VERIFIED_FACTS_SOURCE_ID],
+      similarity: 1,
+      confidence: 1,
+      // Synthetic source — never went through retrieval, so it has no rerank verdict. Null, not 0:
+      // a 0 would read as "the cross-encoder scored this lowest".
+      rerankScore: null,
+      rerankRank: null,
+      documentKind: 'facts',
+      productLineKey: null,
+      productKey: null,
+      s3Key: null,
+      sourceUri: null,
+      // B0-1075: never a betco.com page for the synthetic structured-facts source.
+      url: undefined,
+      freshness: null as null,
+    });
+  }
+
+  return docs;
+}
+
+/**
+ * B0-636 — citation entry for a FastDraw-dispenser dilution/yield chunk, pushed onto `sources[]`
+ * the same way `get_efficacy_data` already cites "Verified Product Facts (structured)" and the
+ * efficacy lab report — a distinctly titled entry so the model can tell the two dilution contexts
+ * apart rather than treating them as one value.
+ */
+function fastDrawDilutionSourceEntry(lookup: FastDrawDilutionLookup) {
+  return {
+    documentId: lookup.documentId,
+    chunkId: lookup.chunkId,
+    title: 'FastDraw Dispenser Dilution (structured)',
+    snippet: lookup.documentBody.slice(0, 900),
+    documentBody: lookup.documentBody,
+    documentKind: 'fastdraw_dilution',
+    similarity: 1,
+    confidence: 1,
+  };
+}
+
+const ESCALATION_MAP: Record<string, { summary: string; steps: string[] }> = {
+  default: {
+    summary: 'Standard product-support escalation.',
+    steps: [
+      'Capture exact product name/SKU and surface/material.',
+      'If safety-critical or unclear from approved docs, route to human product specialist.',
+      'Do not speculate on off-label use.',
+    ],
+  },
+  safety: {
+    summary: 'Safety or exposure concern.',
+    steps: [
+      'Refer to SDS and label; recommend medical advice for health incidents.',
+      'Escalate to EHS / safety contact per account rules.',
+    ],
+  },
+  compatibility: {
+    summary: 'Surface or material compatibility uncertain.',
+    steps: [
+      'Verify with approved documentation only; if absent, recommend spot test per label or escalate.',
+    ],
+  },
+};
+
+function escalationForIssueType(raw: string) {
+  const key = raw.trim().toLowerCase();
+  if (
+    key.includes('safety') ||
+    key.includes('exposure') ||
+    key.includes('sds')
+  ) {
+    return ESCALATION_MAP.safety;
+  }
+  if (
+    key.includes('compat') ||
+    key.includes('surface') ||
+    key.includes('material')
+  ) {
+    return ESCALATION_MAP.compatibility;
+  }
+  return ESCALATION_MAP.default;
+}
+
+/**
+ * B0-759 — question shapes whose answer is an enumeration or a procedure: a maintenance
+ * schedule, a list of failure causes, a dry/recoat window. These need DEPTH from one procedural
+ * document, which is the opposite of what the default gives them.
+ *
+ * Matched against the raw query, so keep every pattern anchored on an interrogative opener rather
+ * than a bare noun — `\bmaintenance\b` alone would fire on "what dilution does the maintenance
+ * cleaner use", a single-value lookup that is well served by the default breadth.
+ */
+const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
+  /\bwhat\s+(factors|causes|kinds?\s+of|types?\s+of|sorts?\s+of)\b/,
+  /\b(what|which)\b[^.?!]{0,16}\bsteps\b/,
+  /\bwhat\s+maintenance\b/,
+  /\bmaintenance\s+(schedule|checklist|routine|plan|interval)\b/,
+  /\bhow\s+(often|long|soon)\b/,
+  /\bstep[-\s]by[-\s]step\b/,
+  /\bchecklist\b/,
+  /**
+   * B0-759 follow-up — "which X get missed most often" is an enumeration ask wearing a question
+   * word: the graded answer is a list of fixtures, not a single fact.
+   *
+   * B0-781 — added the adjectival "most common" alongside the adverbial "most often/most
+   * commonly": RST-016 ("What are the most common mistakes staff make when cleaning restrooms?",
+   * 9-concept golden answer) used the adjectival form and matched none of the original four.
+   */
+  /\b(which|what)\b[^.?!]{0,40}\b(most often|most commonly|commonly|typically|most common)\b/,
+  /**
+   * A hard superlative ("strongest stripper you have") cannot be answered by naming one product —
+   * Betco publishes no performance ranking, so the answer has to enumerate the labeled options and
+   * decline to rank them, which needs several of them retrieved. Deliberately excludes "best",
+   * which appears in already-passing single-product asks like "what is the best glass cleaner".
+   */
+  /\b(strongest|toughest|most\s+aggressive|most\s+powerful|heaviest[-\s]duty)\b/,
+  /**
+   * B0-781 — troubleshooting-cause phrasing: "why didn't/doesn't/wasn't X" asks for the set of
+   * possible causes of an observed failure, not one fact (VCT-003: "Why didn't all the finish come
+   * off when I stripped the VCT floor?", 7 documented causes in one procedural document).
+   */
+  /\bwhy\s+(?:didn'?t|doesn'?t|wasn'?t|isn'?t|hasn'?t|won'?t)\b/,
+  /**
+   * B0-784 — a compound-subject verification question ("do/does X AND Y both/actually work...")
+   * names two distinct product categories and needs a document that covers both, not the single
+   * narrowest-matching product doc. VCT-087 ("Do green-certified finishes and strippers actually
+   * work as well on VCT?") has an exact-topic answer in one knowledge document ("VCT Green
+   * Certified"), but at the default breadth the narrower per-product stripper docs (much stronger
+   * lexical overlap on "stripper") crowded it out of the returned set entirely — this widens the
+   * candidate pool so the actually-relevant generic document has a chance to surface.
+   */
+  /\b(?:do|does|did)\b[^.?!]{0,40}\band\b[^.?!]{0,60}\b(?:work|perform|hold up|clean(?:s)?\s+as\s+well|last(?:s)?\s+as\s+long)\b/,
+  /**
+   * B0-974 — reopening/timing questions phrased with "when" rather than "how soon/long" ("when
+   * can carts go back on the floor", "when is it safe to walk on it"). The answer is a schedule
+   * (light foot traffic / normal traffic / rolling loads each with its own window), not one value,
+   * and the document holding it ("VCT Reopening to Traffic") only surfaces at the widened width.
+   */
+  /\bwhen\s+(?:can|is\s+it\s+(?:safe|ok|okay))\b[^.?!]{0,60}\b(?:walk|walking|reopen|re-open|traffic|carts?)\b/,
+];
+
+/**
+ * B0-201: derive curation knobs from query intent. Single-product deep-dives get more facets
+ * of one line; comparisons surface several distinct lines. Undefined fields = pipeline defaults.
+ */
+/** Exported only so the B0-759 regression test can pin which shapes do and do not widen. */
+export function classifyRetrievalIntent(
+  query: string,
+  productName?: string,
+  /**
+   * B0-786 — the consolidated signals call's `answerShape`. When supplied it REPLACES both regex
+   * branches below (the comparison test and `PROCEDURAL_DEPTH_PATTERNS`); when omitted — every
+   * standalone caller, and every turn whose signals call degraded or never ran — the regexes decide
+   * exactly as they did before B0-786. The tunings themselves are unchanged either way.
+   */
+  answerShape?: AnswerShape,
+): {
+  limit?: number;
+  maxPerDocument?: number;
+  requiredDocumentKinds?: string[];
+  /**
+   * B0-873/B0-874 — true for the procedural/enumeration shape below. Threaded to
+   * `runProductKnowledgeQuery` as `proceduralIntent`, where it (a) merges an UNLOCKED
+   * `knowledge`-kind search into a line-filtered retrieval so a product-line lock can no longer
+   * starve the knowledge documents that answer "how long / how often / what steps" questions, and
+   * (b) widens the single best knowledge source to its sibling chunks. Neither raises
+   * `maxPerDocument` — the B0-759 finding below stands.
+   */
+  procedural?: boolean;
+} {
+  const q = query.toLowerCase();
+  if (
+    answerShape === 'comparison' ||
+    (answerShape === undefined && /\bvs\.?\b|\bversus\b|\bcompare\b|\bdifference between\b/.test(q))
+  ) {
+    return { limit: 5, maxPerDocument: 1, requiredDocumentKinds: ['product_line_profile'] };
+  }
+  if (productName && productName.trim()) {
+    return { limit: 4, maxPerDocument: 2 };
+  }
+  /**
+   * B0-759 — deliberately AFTER the product-name branch, so a named product keeps the tuning it
+   * has today and this only affects queries that would otherwise inherit the bare 3x1 default.
+   *
+   * WIDTH ONLY — `maxPerDocument` is deliberately NOT raised, and this was measured, not assumed.
+   * The first version returned `maxPerDocument: 3` on the theory that a fifteen-step schedule
+   * needs several excerpts of the one document holding it. Run f08f12a0 (the first run where it
+   * actually reached retrieval) refuted that: letting one document claim three of the six slots
+   * crowds the others out, and answers that span several documents lost badly —
+   * "what factors can throw off dilution accuracy", whose graded answer covers four distinct
+   * areas, fell 67 -> 50, and the recoat-window question fell 69 -> 58 on 30,667 characters of
+   * evidence, more than twice what it had when it scored higher. Only the single-document
+   * enumeration gained ("which high-touch points get missed most often", 68 -> 96/99), and that
+   * gain came from the width increase, which it had never had before.
+   *
+   * Net: `limit 6` with the default `maxPerDocument` graded 79.6 with no F; adding depth graded
+   * 79.1 with two. Raise width here; do not raise depth without evidence for the specific shape.
+   */
+  /**
+   * B0-974 — `single_value` no longer bypasses the depth regexes for a PRODUCT-LESS question (a
+   * named product already returned above, so everything here is product-less). The signals call
+   * labelled "how soon can people walk on the VCT floor after the last coat?" and "How often should
+   * a wood sport floor be recoated?" `single_value`, which collapsed both to `limit 3`: the first's
+   * answer is a traffic schedule at raw rank 6, the second's only "annual recoats" sentence sat at
+   * raw rank 2 behind a reserved profile slot. `procedure`/`enumeration` still widen without any
+   * phrasing, and a `single_value` question with no depth phrasing keeps the default breadth.
+   */
+  if (
+    answerShape === undefined || answerShape === 'single_value'
+      ? PROCEDURAL_DEPTH_PATTERNS.some((pattern) => pattern.test(q))
+      : answerShape === 'procedure' || answerShape === 'enumeration'
+  ) {
+    return { limit: 6, procedural: true };
+  }
+  return {};
+}
+
+/**
+ * B0-549 — resolves a batch `get_efficacy_data` call's product set to a flat list of
+ * name/code identifiers, each still resolved individually via `resolveProductEntityWithAliasTelemetry`
+ * (same alias/fuzzy resolution every other product-tool call goes through — a category lookup only
+ * replaces how the identifier LIST is produced, not how each one is resolved to a product line).
+ */
+async function resolveBatchProductIdentifiers(p: {
+  productIds?: string[];
+  category?: string;
+  categoryLevel?: 'prod_type' | 'sub_prod_type' | 'sub_child_prod_type' | 'prod_class' | 'any';
+}): Promise<string[]> {
+  if (p.productIds && p.productIds.length > 0) {
+    return p.productIds;
+  }
+  if (p.category?.trim()) {
+    const categoryResult = await getProductsInCategory({
+      categoryName: p.category,
+      categoryLevel: p.categoryLevel,
+      maxResults: EFFICACY_BATCH_MAX_PRODUCTS,
+    });
+    return categoryResult.products
+      .map((product) => product.productLineName?.trim() || product.productLineId?.trim() || '')
+      .filter((identifier): identifier is string => identifier.length > 0);
+  }
+  return [];
+}
+
+/**
+ * B0-549 — batch variant of the `get_efficacy_data` single-product path below: collapses what
+ * would otherwise be N sequential `get_efficacy_data` tool calls (worst observed case: 27 in one
+ * turn) into one call. Facts are fetched for every resolved product in a SINGLE batched query
+ * (`fetchFactsForProductBatch`, B0-792 — pinned per-product, not merged across every entity sharing
+ * a possibly-bogus `product_line_key`); lab-report citations still require one lookup per product
+ * line (no batched RPC exists for that yet) but those lookups run concurrently via `Promise.all`
+ * rather than sequentially, so wall-clock time tracks the slowest single lookup, not their sum.
+ */
+async function executeBatchEfficacyData(
+  p: {
+    productIds?: string[];
+    category?: string;
+    categoryLevel?: 'prod_type' | 'sub_prod_type' | 'sub_child_prod_type' | 'prod_class' | 'any';
+    organism?: string;
+  },
+  toolName: string,
+  auditCtx: AuditContext | undefined,
+): Promise<Record<string, unknown>> {
+  const identifiers = await resolveBatchProductIdentifiers(p);
+
+  if (identifiers.length === 0) {
+    return {
+      ok: true,
+      adapter: 'structured_facts_batch_v1',
+      batch: true,
+      organism: p.organism ?? null,
+      requestedCount: 0,
+      resolvedCount: 0,
+      results: [],
+      sources: [],
+      note: p.category?.trim()
+        ? `No products found in category "${p.category}".`
+        : 'No product identifiers resolved for this batch call.',
+    };
+  }
+
+  const resolutions = await Promise.all(
+    identifiers.map(async (identifier) => ({
+      identifier,
+      resolution: await resolveProductEntityWithAliasTelemetry(identifier, toolName, auditCtx),
+    })),
+  );
+
+  const productLineKeys = [
+    ...new Set(
+      resolutions
+        .map((r) => r.resolution.productLineKey)
+        .filter((key): key is string => Boolean(key)),
+    ),
+  ];
+
+  // B0-792 — pin each product's facts to its OWN resolved `productKey` when one is known, rather
+  // than merging in every sibling entity sharing `productLineKey` (see fetchFactsForProductBatch);
+  // aligned by index with `resolutions`, not deduped by line key, since two batch entries can share
+  // a (possibly bogus/over-broad) product_line_key but pin to different specific products.
+  const [factsList, labReportEntries] = await Promise.all([
+    fetchFactsForProductBatch(
+      resolutions.map(({ resolution }) => ({
+        productLineKey: resolution.productLineKey ?? '',
+        productKey: resolution.productKey,
+      })),
+      p.organism,
+    ),
+    Promise.all(
+      productLineKeys.map(
+        async (key) => [key, await fetchCurrentEfficacyLabReport(key, p.organism)] as const,
+      ),
+    ),
+  ]);
+  const labReportByLineKey = new Map(labReportEntries);
+
+  const sources: Record<string, unknown>[] = [];
+  const results = resolutions.map(({ identifier, resolution }, index) => {
+    const { productLineKey, productKey, aliasResolution } = resolution;
+    const facts: ProductLineFacts | null = factsList[index] ?? null;
+    const labReport: EfficacyLabReportCitation | null =
+      (productLineKey && labReportByLineKey.get(productLineKey)) || null;
+
+    if (facts) {
+      const factsBlock = buildFactsBlock(
+        new Map([[facts.entityId, facts]]),
+        new Map([[facts.entityId, identifier]]),
+      );
+      if (factsBlock) {
+        // B0-549: each product's facts source needs its own documentId — reusing the single
+        // VERIFIED_FACTS_SOURCE_ID sentinel across every product in the batch would collide under
+        // `collectSourceMetaFromToolOutputs`'s per-documentId dedupe and silently drop every
+        // product but one from the citable evidence. B0-792: keyed on `productKey` (falling back to
+        // `productLineKey`) rather than `productLineKey` alone — now that facts are pinned per
+        // product, two batch entries sharing one `productLineKey` can carry genuinely different
+        // facts and must not collide onto the same documentId.
+        const sourceKey = productKey ?? productLineKey ?? identifier;
+        sources.push({
+          documentId: `${VERIFIED_FACTS_SOURCE_ID}:${sourceKey}`,
+          chunkId: `${VERIFIED_FACTS_SOURCE_ID}:${sourceKey}`,
+          title: `Verified Product Facts (structured) — ${identifier}`,
+          snippet: factsBlock.slice(0, 900),
+          documentBody: factsBlock,
+          documentKind: 'facts',
+          confidence: 1,
+        });
+      }
+    }
+
+    if (labReport) {
+      const labReportBlock = renderEfficacyLabReportCitation(labReport);
+      sources.push({
+        documentId: labReport.documentId,
+        chunkId: labReport.documentId,
+        title: labReport.title,
+        snippet: labReportBlock.slice(0, 900),
+        documentBody: labReportBlock,
+        documentKind: 'efficacy',
+        confidence: 1,
+      });
+    }
+
+    return {
+      productId: identifier,
+      productLineKey,
+      aliasResolution,
+      facts,
+      labReport,
+      ...(facts || labReport
+        ? {}
+        : {
+            note: 'No verified dilution/efficacy data on file for this product. Do not estimate or infer a value — tell the user the data is not verified.',
+          }),
+    };
+  });
+
+  return {
+    ok: true,
+    adapter: 'structured_facts_batch_v1',
+    batch: true,
+    organism: p.organism ?? null,
+    requestedCount: identifiers.length,
+    resolvedCount: productLineKeys.length,
+    results,
+    sources,
+  };
+}
+
+/**
+ * B0-786 — signals the consolidated pre-orchestration analysis produced for THIS turn, threaded
+ * from `runProductSupportWorkflow` through `executeToolCall`. Every field is optional and every
+ * consumer below falls back to its pre-B0-786 deterministic behaviour when a field is absent, so a
+ * caller that supplies nothing (unit tests, `/api/v1/agents/*`, a degraded signals call) behaves
+ * exactly as it did before.
+ */
+export type ProductToolTurnOptions = {
+  /** Replaces `PROCEDURAL_DEPTH_PATTERNS` in `classifyRetrievalIntent` when present. */
+  answerShape?: AnswerShape;
+  /**
+   * ADDITIVE grounding signal, OR'd with `inferSectionTypeFromQuery` / `isClaimLikeQuery` inside
+   * `resolveRequiredDocumentKinds` — never substituted for them. It can only widen label-first
+   * ordering, never narrow it.
+   */
+  regulatedSectionIntent?: boolean;
+  /**
+   * B0-786 product lock — an explicit product-line filter the workflow resolved BEFORE retrieval
+   * (from the signals call's `betcoProduct`). Supplied only for the speculative pre-fetch, which
+   * otherwise searches the raw user message with no anchor at all. When set it replaces this call's
+   * own resolution; when absent, resolution is untouched.
+   */
+  productLineLock?: {
+    productLineKey: string;
+    resolutionSource: ProductEntityResolutionSource;
+  };
+  /**
+   * B0-738 — a deterministic query augmentation built from this turn's `TurnSignals`
+   * (`buildSignalQueryRewrite`, `~/lib/orchestrator/signals/signal-query-rewrite.ts`). No LLM call
+   * produces this; it is signals already extracted for the turn, joined. Appended to the
+   * `search_product_docs` query only when its content isn't already present, so it can only add
+   * context the model's own query terms missed (e.g. a named surface type), never override them.
+   */
+  queryRewrite?: string | null;
+};
+
+export async function executeProductTool(
+  name: ProductToolName,
+  args: unknown,
+  /** B0-488: threaded from `executeToolCall` (which run-product-support-workflow.ts's `executeTool`
+   * closure calls with its `wfCtx`), so an alias-resolution hit can be audit-logged. Undefined for
+   * callers that don't have one (e.g. unit tests) — alias-resolution telemetry is still attached to
+   * the returned payload, only the audit-log write is skipped. */
+  auditCtx?: AuditContext,
+  /** B0-786 — per-turn signals, supplied by the workflow only; undefined elsewhere. */
+  turnOptions?: ProductToolTurnOptions,
+): Promise<Record<string, unknown>> {
+  switch (name) {
+    case 'search_product_docs': {
+      const p = searchProductDocsInputSchema.parse(args);
+      const freeformQuery = p.freeformQuery?.trim() ?? '';
+      const q = (freeformQuery || [p.productName, p.topic, p.surfaceType].filter(Boolean).join(' ')).trim();
+      const resolvedProductName = freeformQuery ? '' : (p.productName || '');
+      /**
+       * B0-479 — a `freeformQuery` call used to skip product-entity resolution entirely (this
+       * passed `''`), so a query that names a product perfectly well (a bare SKU like `07512-00`,
+       * an acronym, a short product name) never touched `rag.product_alias` and instead fell
+       * through to `resolveProductLineFromMatches`'s post-hoc similarity lock over an unfiltered
+       * search — which is how a Kling SKU query ended up served another product line's SDS as a
+       * cited source. Freeform text now gets a resolution attempt too, but in `mode: 'freeform'`
+       * (exact + tokenized alias tiers only, no verified-tiebreak; see
+       * `~/lib/rag/entity-context.ts`), so an unambiguous alias hit anchors retrieval while a
+       * natural-language question or a name spanning several product lines still resolves to
+       * nothing and behaves exactly as before.
+       */
+      const [resolved, sectionType] = await Promise.all([
+        freeformQuery
+          ? resolveProductEntityWithAliasTelemetry(freeformQuery, name, auditCtx, {
+              mode: 'freeform',
+            })
+          : resolveProductEntityWithAliasTelemetry(resolvedProductName, name, auditCtx),
+        Promise.resolve(inferSectionTypeFromQuery(q)),
+      ]);
+      const { productKey, aliasResolution } = resolved;
+      /**
+       * B0-786 product lock — a key the workflow resolved from the turn's named Betco product wins
+       * over this call's own resolution. Only ever supplied for the speculative pre-fetch (see
+       * `ProductToolTurnOptions.productLineLock`), so a model-requested search still resolves for
+       * itself exactly as before.
+       */
+      const productLineKey = turnOptions?.productLineLock?.productLineKey ?? resolved.productLineKey;
+      const resolutionSource =
+        turnOptions?.productLineLock?.resolutionSource ?? resolved.resolutionSource;
+      const intent = classifyRetrievalIntent(q, resolvedProductName, turnOptions?.answerShape);
+      /**
+       * B0-738 — append the signals-derived rewrite only when it isn't already substantially
+       * present in the model's own query. This is context the model's own terms may have missed
+       * (e.g. the model asks about "wood floor finish" without naming the surface type signals
+       * already resolved from earlier turns), never a replacement for the model's query.
+       */
+      const query =
+        turnOptions?.queryRewrite && !q.toLowerCase().includes(turnOptions.queryRewrite.toLowerCase())
+          ? [q, turnOptions.queryRewrite].filter(Boolean).join(' ').trim()
+          : q;
+      const result = await ragQueryForProductKnowledgeWithMeta({
+        query,
+        productLineKey,
+        productKey,
+        productLineKeySource: resolutionSource,
+        sectionType,
+        limit: intent.limit,
+        maxPerDocument: intent.maxPerDocument,
+        requiredDocumentKinds: intent.requiredDocumentKinds,
+        regulatedSectionIntent: turnOptions?.regulatedSectionIntent,
+        // B0-873/B0-874 — see `classifyRetrievalIntent`'s `procedural` field.
+        proceduralIntent: intent.procedural,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
+      });
+      return {
+        ok: true,
+        adapter: ADAPTER_TAG,
+        aliasResolution,
+        query: q,
+        // B0-460 — read back by `buildModelToolPayload` (`~/lib/tools/model-tool-payload`) to decide
+        // whether a `product_line_profile` source's "Size and package variants" section stays
+        // collapsed for the model. Carried on the payload (not threaded through `executeToolCall`)
+        // so the flag travels with the exact call that produced it.
+        includeVariants: p.includeVariants,
+        entityContextBlock: result.entityContextBlock,
+        sources: sourcePayload(result),
+        retrieval: result.retrieval,
+      };
+    }
+    case 'get_product_spec': {
+      const p = getProductSpecInputSchema.parse(args);
+      const q = `${p.productId} specifications technical datasheet performance`;
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      const result = await ragQueryForProductKnowledgeWithMeta({
+        query: q,
+        productLineKey,
+        productKey,
+        productLineKeySource: resolutionSource,
+        sectionType: null,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
+      });
+      return {
+        ok: true,
+        adapter: ADAPTER_TAG,
+        aliasResolution,
+        productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
+        sources: sourcePayload(result),
+        retrieval: result.retrieval,
+      };
+    }
+    case 'get_approved_usage_guidance': {
+      const p = getApprovedUsageGuidanceInputSchema.parse(args);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      const sectionType = inferSectionTypeFromToolName('get_approved_usage_guidance');
+      const result = await retrieveApprovedUsage({
+        ...p,
+        productLineKey,
+        productKey,
+        productLineKeySource: resolutionSource,
+        sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          `${p.productId} ${p.task} ${p.surfaceType} ${p.environment ?? ''}`,
+        ),
+      });
+      return {
+        ok: true,
+        adapter: ADAPTER_TAG,
+        aliasResolution,
+        productId: p.productId,
+        task: p.task,
+        surfaceType: p.surfaceType,
+        environment: p.environment ?? null,
+        entityContextBlock: result.entityContextBlock,
+        sources: sourcePayload(result),
+        retrieval: result.retrieval,
+      };
+    }
+    case 'get_safety_constraints': {
+      const p = getSafetyConstraintsInputSchema.parse(args);
+      const [{ productLineKey, productKey, resolutionSource, aliasResolution }, sectionType] = await Promise.all([
+        resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx),
+        Promise.resolve(
+          inferSectionTypeFromQuery(`${p.productId} safety hazards PPE SDS precautions first aid`),
+        ),
+      ]);
+      const result = await retrieveSafetyConstraints({
+        ...p,
+        productLineKey,
+        productKey,
+        productLineKeySource: resolutionSource,
+        sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          p.productId,
+        ),
+      });
+      return {
+        ok: true,
+        adapter: ADAPTER_TAG,
+        aliasResolution,
+        productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
+        sources: sourcePayload(result),
+        retrieval: result.retrieval,
+      };
+    }
+    case 'get_compatibility_rules': {
+      const p = getCompatibilityRulesInputSchema.parse(args);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      const sectionType = inferSectionTypeFromToolName('get_compatibility_rules');
+      const result = await retrieveCompatibility({
+        ...p,
+        productLineKey,
+        productKey,
+        productLineKeySource: resolutionSource,
+        sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          `${p.productId} ${p.surfaceType} ${p.materialType ?? ''}`,
+        ),
+      });
+      return {
+        ok: true,
+        adapter: ADAPTER_TAG,
+        aliasResolution,
+        productId: p.productId,
+        surfaceType: p.surfaceType,
+        materialType: p.materialType ?? null,
+        entityContextBlock: result.entityContextBlock,
+        sources: sourcePayload(result),
+        retrieval: result.retrieval,
+      };
+    }
+    case 'list_allowed_surfaces': {
+      const p = listAllowedSurfacesInputSchema.parse(args);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      const sectionType = inferSectionTypeFromToolName('list_allowed_surfaces');
+      const result = await retrieveSurfacesLists({
+        productId: p.productId,
+        mode: 'allowed',
+        productLineKey,
+        productKey,
+        productLineKeySource: resolutionSource,
+        sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          p.productId,
+        ),
+      });
+      return {
+        ok: true,
+        adapter: ADAPTER_TAG,
+        aliasResolution,
+        productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
+        sources: sourcePayload(result),
+        retrieval: result.retrieval,
+      };
+    }
+    case 'list_disallowed_uses': {
+      const p = listDisallowedUsesInputSchema.parse(args);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      const sectionType = inferSectionTypeFromToolName('list_disallowed_uses');
+      const result = await retrieveSurfacesLists({
+        productId: p.productId,
+        mode: 'disallowed',
+        productLineKey,
+        productKey,
+        productLineKeySource: resolutionSource,
+        sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          p.productId,
+        ),
+      });
+      return {
+        ok: true,
+        adapter: ADAPTER_TAG,
+        aliasResolution,
+        productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
+        sources: sourcePayload(result),
+        retrieval: result.retrieval,
+      };
+    }
+    case 'get_escalation_policy': {
+      const p = getEscalationPolicyInputSchema.parse(args);
+      const policy = escalationForIssueType(p.issueType);
+      return {
+        ok: true,
+        adapter: 'static_policy_v1',
+        issueType: p.issueType,
+        policy,
+      };
+    }
+    case 'lookup_cross_reference': {
+      const p = lookupCrossReferenceInputSchema.parse(args);
+      // B0-322: shares its result with `recommend_cross_reference`'s step 1 when the model calls both
+      // with the same brand/product in one turn (see legacy-lookup-cache for the TTL scoping).
+      return lookupCrossReferenceDeduped(p);
+    }
+    case 'get_products_in_category': {
+      const p = getProductsInCategoryInputSchema.parse(args);
+      return getProductsInCategory(p);
+    }
+    case 'get_product_category': {
+      const p = getProductCategoryInputSchema.parse(args);
+      return getProductCategory(p);
+    }
+    case 'recommend_cross_reference': {
+      const p = recommendCrossReferenceInputSchema.parse(args);
+      /**
+       * B0-1056/B0-1057 — nothing upstream of this tool case validates that the model's own
+       * `competitorProduct`/`competitorBrand` arguments actually name a competitor at all, rather
+       * than the raw user message (a specialist prompt that expects a competitor lookup can
+       * pressure the model into calling this tool even on an unrelated question) or one of Betco's
+       * own brands/product lines (this table is competitors of Betco/Basic Coatings/EnviroZyme
+       * only — `classifyCompetitorSelfReference` catches this upstream in the chat workflow, but
+       * that pipeline needs the raw user message and a DB resolver, neither in scope here).
+       * `splitBetcoLinePrefix` catches named Betco product lines (Green Earth, Triforce,
+       * BestScent) even when the model didn't put "Betco" itself in the brand slot; a normalized
+       * brand identical to the product ("Hard As Nails" / "Hard As Nails") is never a real
+       * competitor entry either. Declines without ever calling the engine or persisting a row,
+       * same as the other unresolved-identity paths.
+       */
+      const normalizedBrand = (p.competitorBrand ?? '').trim().toLowerCase();
+      const normalizedProduct = p.competitorProduct.trim().toLowerCase();
+      const isSelfReferentialOrImplausible =
+        isBetcoBrand(p.competitorBrand ?? null) ||
+        isImplausibleCompetitorProductText(p.competitorProduct) ||
+        splitBetcoLinePrefix(normalizedBrand, normalizedProduct) !== null ||
+        (normalizedBrand.length > 0 && normalizedBrand === normalizedProduct);
+      const result = isSelfReferentialOrImplausible
+        ? await buildUnresolvedCompetitorDecline()
+        : await runCrossReferenceRecommendation(
+            {
+              competitorProduct: p.competitorProduct,
+              competitorBrand: p.competitorBrand ?? null,
+            },
+            // B0-1056 — reuse this turn's real workflow_runs row instead of a disconnected
+            // correlation id, so the persisted recommendation's evidence.traceId links to a real
+            // trace at /admin/observability/[runId]. Falls back to a fresh id (persistRecommendation's
+            // default) for the rare caller with no auditCtx, e.g. unit tests.
+            auditCtx?.workflowRunId ? { traceId: auditCtx.workflowRunId } : undefined,
+          );
+      return {
+        ok: true,
+        adapter: 'cross_reference_recommendation_v1',
+        source: result.source,
+        answered: result.answered,
+        status: result.status,
+        overallConfidence: result.overallConfidence,
+        thresholdUsed: result.thresholdUsed,
+        declineReason: result.declineReason,
+        candidates: result.candidates.slice(0, p.maxResults ?? 5),
+        evidence: result.evidence,
+        recommendationId: result.recommendationId,
+      };
+    }
+    case 'find_products_by_category': {
+      const p = findProductsByCategoryInputSchema.parse(args);
+      const route = await routeCategoryQuery(p.query);
+      if (route.path === 'semantic') {
+        return {
+          ok: true,
+          adapter: 'category_router_v1',
+          path: 'semantic',
+          reason: route.reason,
+          confidence: route.confidence,
+          topCandidate: route.topCandidate,
+          hint: 'No confident category match — use search_product_docs for this query.',
+          latencyMs: route.latencyMs,
+        };
+      }
+      const max = Math.min(p.maxResults ?? 25, 50);
+      return {
+        ok: true,
+        adapter: 'category_router_v1',
+        path: 'category',
+        confidence: route.confidence,
+        matchType: route.matchType,
+        node: route.node,
+        productCount: route.productCount,
+        products: route.products.slice(0, max),
+        candidates: route.candidates,
+        latencyMs: route.latencyMs,
+      };
+    }
+    case 'get_efficacy_data': {
+      const p = getEfficacyDataInputSchema.parse(args);
+
+      // B0-549: batch form — an explicit id list or a category collapses what would otherwise be
+      // N sequential single-product calls into this one. `p.productId` is always `''` (never
+      // undefined, per `normalizeProductRef`) when neither productId nor productName was sent, so
+      // this only branches when the caller actually supplied `productIds`/`category`.
+      if ((p.productIds && p.productIds.length > 0) || p.category?.trim()) {
+        return executeBatchEfficacyData(p, name, auditCtx);
+      }
+
+      const { productLineKey, productKey, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+
+      /**
+       * B0-1001 — an organism-first ask ("which products kill HIV-1?") names no real single
+       * product, but this tool's input schema (owned elsewhere; not changed here) still requires
+       * SOME `productId`/`productName` when `productIds`/`category` are absent, so the model sends
+       * a descriptive phrase ("products effective against HIV-1") in `productId` to satisfy it.
+       * That phrase never resolves to a `productLineKey`/`productKey`, and falling through to the
+       * single-product "not on file" note below is wrong: labeled products against this organism DO
+       * exist in the corpus, just not under this bogus "product". When resolution genuinely finds
+       * nothing AND an `organism` was given, redirect to the same batch path a real `category` call
+       * takes — defaulting to `disinfectant` (mirrors `classifyBatchFactAsk`'s default in
+       * `~/lib/workflows/product-support/fact-tool-enforcement.ts`) when the text names no other
+       * known category.
+       *
+       * Does not fire when resolution DID find a product (a genuine single-product + organism ask,
+       * e.g. "does Widget X kill HIV-1?", is unaffected and keeps the existing single-product flow
+       * below).
+       */
+      if (p.organism?.trim() && !productLineKey && !productKey) {
+        const inferredCategory = detectCategorySearchTerms(p.productId)[0] ?? 'disinfectant';
+        return executeBatchEfficacyData(
+          { category: inferredCategory, organism: p.organism },
+          name,
+          auditCtx,
+        );
+      }
+
+      // B0-792 — pin to the specific resolved `productKey` when one was found, so a
+      // product_line_key grouping that (incorrectly) buckets unrelated finished-goods products
+      // together (e.g. the "Drain Maintainer" group) can't leak a sibling product's dilution/
+      // efficacy figure into this answer. Falls back to the line-wide merge only when no specific
+      // product was resolved — see fetchFactsForProduct.
+      const [facts, labReport, fastDrawLookup] = await Promise.all([
+        productLineKey ? fetchFactsForProduct(productLineKey, productKey, p.organism) : Promise.resolve(null),
+        productLineKey
+          ? fetchCurrentEfficacyLabReport(productLineKey, p.organism)
+          : Promise.resolve(null),
+        // B0-636 — FastDraw-dispenser-specific dilution/yield, kept as a DISTINCT sibling field,
+        // never merged into `facts`: for ~8/40 FastDraw SKUs it legitimately disagrees with
+        // `facts.dilutionDisplay` because the two describe different dilution contexts (general use
+        // vs. the FastDraw dispenser).
+        fetchFastDrawDilution(productLineKey, productKey),
+      ]);
+      const fastDrawDilution = fastDrawLookup?.fastDrawDilution ?? null;
+
+      if (!facts && !labReport) {
+        return {
+          ok: true,
+          adapter: 'structured_facts_v1',
+          aliasResolution,
+          productId: p.productId,
+          organism: p.organism ?? null,
+          facts: null,
+          fastDrawDilution,
+          note: 'No verified dilution/efficacy data on file for this product. Do not estimate or infer a value — tell the user the data is not verified.',
+          ...(fastDrawLookup ? { sources: [fastDrawDilutionSourceEntry(fastDrawLookup)] } : {}),
+        };
+      }
+
+      // B0-700 follow-up — the facts block's title used to be `p.productId` (the caller's raw,
+      // unverified typed name), which silently relabeled the real product under whatever the
+      // user typed even when resolution only found it via a FUZZY alias match to a differently
+      // named product (e.g. "AG79 Concentrate Disinfectant" typed, "AF79 Concentrate
+      // Disinfectant" actually resolved). That made the mismatch invisible to the model — it saw
+      // a "Verified Product Facts" block confidently headed with its own typed name. Now uses the
+      // entity's own real title when available, falling back to the typed name only on a lookup
+      // miss (never blocks the answer on this).
+      const resolvedTitle = facts ? await fetchEntityTitle(facts.entityId) : null;
+      const factsDisplayTitle = resolvedTitle ?? p.productId;
+
+      // B0-196: surface the verified facts as a first-class grounded source so the
+      // validator's evidence summary (built from sources[].documentBody) can cite the
+      // kill claim. Without this, an efficacy-only answer carries zero evidence and the
+      // validator rejects the draft (confidence 0, human review). Mirrors the synthetic
+      // `verified-facts` source that sourcePayload() adds for the semantic-search tools.
+      const factsBlock = facts
+        ? buildFactsBlock(
+            new Map([[facts.entityId, facts]]),
+            new Map([[facts.entityId, factsDisplayTitle]]),
+          )
+        : null;
+
+      // B0-237/238: the lab-report corpus (document_kind='efficacy') is a real, citable
+      // rag.document — use its actual id/title so the model can cite `[doc:uuid]` per the
+      // standard convention (product-support-prompts.ts), with the lab + Project # +
+      // S3 source baked into documentBody for a regulatorily defensible citation.
+      const labReportBlock = labReport ? renderEfficacyLabReportCitation(labReport) : null;
+
+      const sources = [
+        ...(factsBlock
+          ? [
+              {
+                documentId: VERIFIED_FACTS_SOURCE_ID,
+                chunkId: VERIFIED_FACTS_SOURCE_ID,
+                title: 'Verified Product Facts (structured)',
+                snippet: factsBlock.slice(0, 900),
+                documentBody: factsBlock,
+                documentKind: 'facts',
+                similarity: 1,
+                confidence: 1,
+              },
+            ]
+          : []),
+        ...(labReport && labReportBlock
+          ? [
+              {
+                documentId: labReport.documentId,
+                chunkId: labReport.documentId,
+                title: labReport.title,
+                snippet: labReportBlock.slice(0, 900),
+                documentBody: labReportBlock,
+                documentKind: 'efficacy',
+                similarity: 1,
+                confidence: 1,
+              },
+            ]
+          : []),
+        // B0-636 — distinct citation from "Verified Product Facts (structured)" above, so the
+        // model can tell the general-use dilution and the FastDraw-dispenser dilution apart.
+        ...(fastDrawLookup ? [fastDrawDilutionSourceEntry(fastDrawLookup)] : []),
+      ];
+
+      return {
+        ok: true,
+        adapter: 'structured_facts_v1',
+        aliasResolution,
+        productId: p.productId,
+        // B0-700 follow-up — the ACTUAL product this data belongs to, distinct from `productId`
+        // (what was searched for). When `aliasResolution.outcome` is `alias_fuzzy` and this
+        // differs from `productId`, the answer must disclose the correction — see the
+        // "Identify the product before any regulated value" rule in product-support-prompts.ts.
+        resolvedProductTitle: resolvedTitle,
+        productLineKey,
+        organism: p.organism ?? null,
+        facts,
+        labReport,
+        fastDrawDilution,
+        sources,
+      };
+    }
+    /**
+     * B0-529 — dispenser/proportioner setup and dilution-ratio PROCEDURE documents.
+     *
+     * Deliberately not a product-entity-anchored search: a dispenser guide is written per dispenser
+     * family, not per product line, so `resolveProductEntityByName` would either miss or wrongly lock
+     * retrieval to one product line. The product name is used only as query text.
+     */
+    case 'get_dispenser_asset': {
+      const p = getDispenserAssetInputSchema.parse(args);
+      const q = buildKnowledgeAssetQuery([
+        p.dispenserModel,
+        p.productName,
+        p.topic,
+        'dispenser dilution control proportioner metering tip setup calibration dilution ratio',
+      ]);
+      const result = await retrieveKnowledgeAssets({ query: q, limit: p.maxResults });
+      return {
+        ok: true,
+        adapter: KNOWLEDGE_ASSET_ADAPTER_TAG,
+        query: result.query,
+        scope: result.scope,
+        dispenserModel: p.dispenserModel ?? null,
+        productName: p.productName ?? null,
+        topic: p.topic ?? null,
+        sources: result.sources,
+        retrieval: result.retrieval,
+      };
+    }
+    /** B0-529 — coat-count / coverage charts and floor procedure bulletins. Same rationale as above. */
+    case 'get_floor_asset': {
+      const p = getFloorAssetInputSchema.parse(args);
+      const q = buildKnowledgeAssetQuery([
+        p.surfaceType,
+        p.productName,
+        p.procedure,
+        'floor finish coats coverage yield recoat top scrub stripping procedure',
+      ]);
+      const result = await retrieveKnowledgeAssets({
+        query: q,
+        limit: p.maxResults,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
+        // B0-1032 — the structured arguments are passed on as an ORDER-ONLY ranking preference, so a
+        // document tagged to the requested substrate outranks a substrate-agnostic one with better
+        // lexical/embedding overlap. Deliberately NOT built from `q`: the static boilerplate above
+        // ("coats coverage yield ... procedure") is appended to every call and would make every
+        // floor document look on-topic. Measured live, dropping that boilerplate from `q` does not
+        // fix the ranking on its own, so it is left exactly as-is.
+        substrate: {
+          surfaceType: p.surfaceType,
+          topic: buildKnowledgeAssetQuery([p.procedure, p.productName]),
+        },
+      });
+      return {
+        ok: true,
+        adapter: KNOWLEDGE_ASSET_ADAPTER_TAG,
+        query: result.query,
+        scope: result.scope,
+        surfaceType: p.surfaceType ?? null,
+        productName: p.productName ?? null,
+        procedure: p.procedure ?? null,
+        sources: result.sources,
+        retrieval: result.retrieval,
+      };
+    }
+    /**
+     * B0-595 — general-purpose web search, reachable from any specialist route (see the
+     * `BASE_ROUTE_TOOL_NAMES` doc comment in `~/lib/tools/definitions.ts`). Dispatches straight to
+     * `WebSearchService.search()` — the exact same caching, source-trust ranking, and rate-limit/
+     * cost guardrails `/api/v1/tools/web-search` uses — so this is never a second implementation of
+     * web search, just a second entry point into the one service.
+     */
+    case 'web_search': {
+      const p = webSearchToolInputSchema.parse(args);
+      const service = await createWebSearchService();
+      const result = await service.search(p);
+
+      // B0-595 — mirrors the audit trail `/api/v1/tools/web-search`'s route writes
+      // (`writeAuditLog('web_search', ...)`), so a model-invoked call is traceable the same way
+      // regardless of entry point. Only written on success, matching that route (a thrown error
+      // propagates to `executeToolCall`'s catch, which serializes the failure but logs nothing —
+      // same as the route's own catch block).
+      if (auditCtx) {
+        await writeAuditLog(
+          'web_search',
+          {
+            source: 'model_tool',
+            specialist_id: auditCtx.specialistId ?? null,
+            query: p.query,
+            provider: result.provider,
+            depth: p.depth ?? 'basic',
+            result_count: result.metrics.resultCount,
+            latency_ms: result.metrics.latencyMs,
+            estimated_cost_usd: result.metrics.estimatedCostUsd,
+          },
+          { ...auditCtx, toolName: name },
+        );
+      }
+
+      return {
+        ok: true,
+        adapter: 'web_search_v1',
+        ...result,
+      };
+    }
+  }
+}

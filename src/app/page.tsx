@@ -7,8 +7,8 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { authOptions } from "~/lib/auth";
 
 export const metadata = {
-  title: "Sign In",
-  description: "Sign in to continue.",
+  title: "Sign In | Betco BEX",
+  description: "Sign in to access the Betco BEX admin workspace.",
 };
 
 type HomeProps = {
@@ -19,8 +19,19 @@ type HomeProps = {
   }>;
 };
 
+/**
+ * Sign-in rejections raised by the `signIn` callback in `~/lib/auth` (B0-406), plus NextAuth's own
+ * `AccessDenied`. Only reachable when `BEX_PERMISSIONS_ENFORCED=true` — in shadow mode the callback
+ * lets everyone through.
+ */
 const SIGN_IN_ERROR_MESSAGES: Record<string, string> = {
-  AccessDenied: "We couldn't verify your account. Please try again.",
+  UserNotFound:
+    "That account isn't set up for Bex yet. Ask an administrator to add you, then try again.",
+  AccountInactive:
+    "Your Bex account is inactive. Ask an administrator to reactivate it, then try again.",
+  NoIdentity:
+    "Your identity provider didn't return an email address, so we can't match you to a Bex account.",
+  AccessDenied: "We couldn't verify your Bex account. Please try again.",
 };
 
 function signInErrorMessage(error: string | undefined): string | undefined {
@@ -33,7 +44,7 @@ export default async function Home({ searchParams }: HomeProps) {
   const params = await searchParams;
 
   if (session) {
-    const redirectUrl = params.next || params.callbackUrl || "/dashboard";
+    const redirectUrl = params.next || params.callbackUrl || "/admin";
     redirect(redirectUrl);
   }
 

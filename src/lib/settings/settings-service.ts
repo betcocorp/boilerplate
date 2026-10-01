@@ -1,5 +1,29 @@
 import type { ModelProvider } from '~/lib/constants/models';
+import {
+  DEFAULT_HIGH_CONFIDENCE_ABSOLUTE,
+  DEFAULT_MIN_LOCK_MARGIN,
+  DEFAULT_MIN_LOCK_SIMILARITY,
+} from '~/lib/retrieval/product-line-resolution';
+import {
+  DEFAULT_RAG_BOOST_WEIGHTS,
+  DEFAULT_RAG_CHUNK_STRATEGY,
+  RAG_BOOST_WEIGHT_BOUNDS,
+  RAG_CHUNK_STRATEGIES,
+  RAG_CHUNK_TOKEN_BOUNDS,
+  type RagBoostConfig,
+  type RagChunkingConfig,
+  type RagChunkStrategy,
+} from '~/lib/settings/rag-corpus-config';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
+
+export {
+  DEFAULT_RAG_BOOST_WEIGHTS,
+  DEFAULT_RAG_CHUNK_STRATEGY,
+  RAG_BOOST_WEIGHT_BOUNDS,
+  RAG_CHUNK_STRATEGIES,
+  RAG_CHUNK_TOKEN_BOUNDS,
+};
+export type { RagBoostConfig, RagChunkingConfig, RagChunkStrategy };
 
 /**
  * B0-618 — the `settings` table (see /admin/settings) backs feature toggles that used to be
@@ -131,6 +155,139 @@ export async function getLlmProvider(): Promise<ModelProvider> {
     : DEFAULT_LLM_PROVIDER;
 }
 
+/**
+ * B0-686 — how `rag.document_chunk` rows are cut when a document is (re)chunked.
+ *
+ * `'naive'` is the split-on-blank-lines behaviour the corpus was built with and the safe fallback
+ * for every failure mode: missing row, DB error, or a stored string outside the allowed set.
+ * As with `getRouterType`, `settings.allowed_values` is advisory metadata the admin API validates
+ * against — it is NOT a database constraint — so the stored value is re-validated here rather than
+ * trusted, and this getter can never throw or return an unrecognized strategy.
+ *
+ * `'heading-aware'` packs sections to the token budget below; selecting it changes nothing already
+ * in the corpus until documents are re-chunked.
+ *
+ * The tuple, bounds and defaults live in `~/lib/settings/rag-corpus-config` so the admin cards can
+ * import them client-side; they are re-exported here for callers already reaching for this module.
+ */
+export async function getRagChunkStrategy(): Promise<RagChunkStrategy> {
+  const value = await getStringSetting('RAG_CHUNK_STRATEGY', DEFAULT_RAG_CHUNK_STRATEGY);
+  const normalized = value.trim().toLowerCase();
+  return (RAG_CHUNK_STRATEGIES as readonly string[]).includes(normalized)
+    ? (normalized as RagChunkStrategy)
+    : DEFAULT_RAG_CHUNK_STRATEGY;
+}
+
+function clampInt(value: number, { min, max }: { min: number; max: number }, fallback: number) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+/**
+ * B0-686 — the chunking strategy plus its token budget, as one read.
+ *
+ * Every field is clamped to the bounds the admin form enforces, and `maxTokens` is additionally
+ * floored at `minTokens`, so a hand-edited `settings` row can never hand a caller an impossible
+ * `min > max` budget. The defaults reproduce today's corpus exactly.
+ */
+export async function getRagChunkingConfig(): Promise<RagChunkingConfig> {
+  const [strategy, rawMin, rawMax, rawOverlap] = await Promise.all([
+    getRagChunkStrategy(),
+    getNumberSetting('RAG_CHUNK_MIN_TOKENS', RAG_CHUNK_TOKEN_BOUNDS.minTokens.default),
+    getNumberSetting('RAG_CHUNK_MAX_TOKENS', RAG_CHUNK_TOKEN_BOUNDS.maxTokens.default),
+    getNumberSetting('RAG_CHUNK_OVERLAP_TOKENS', RAG_CHUNK_TOKEN_BOUNDS.overlapTokens.default),
+  ]);
+
+  const minTokens = clampInt(
+    rawMin,
+    RAG_CHUNK_TOKEN_BOUNDS.minTokens,
+    RAG_CHUNK_TOKEN_BOUNDS.minTokens.default,
+  );
+  const maxTokens = Math.max(
+    minTokens,
+    clampInt(rawMax, RAG_CHUNK_TOKEN_BOUNDS.maxTokens, RAG_CHUNK_TOKEN_BOUNDS.maxTokens.default),
+  );
+  const overlapTokens = clampInt(
+    rawOverlap,
+    RAG_CHUNK_TOKEN_BOUNDS.overlapTokens,
+    RAG_CHUNK_TOKEN_BOUNDS.overlapTokens.default,
+  );
+
+  return { strategy, minTokens, maxTokens, overlapTokens };
+}
+
+function clampWeight(value: number, fallback: number) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(RAG_BOOST_WEIGHT_BOUNDS.max, Math.max(RAG_BOOST_WEIGHT_BOUNDS.min, value));
+}
+
+/**
+ * B0-686 — metadata boost weights added to cosine similarity for `ORDER BY` only.
+ *
+ * `RAG_BOOST_ENABLED` defaults to false, and when it is false every weight is reported as `0` so a
+ * caller never needs a second branch: multiplying by the returned weights is a no-op. The stored
+ * weights are preserved in `settings` across a disable/enable cycle — only what this getter reports
+ * changes.
+ */
+export async function getRagBoostConfig(): Promise<RagBoostConfig> {
+  const enabled = await getBooleanSetting('RAG_BOOST_ENABLED', false);
+  if (!enabled) {
+    return { enabled: false, surfaceType: 0, dwellTime: 0, dilutionRatio: 0 };
+  }
+
+  const [surfaceType, dwellTime, dilutionRatio] = await Promise.all([
+    getNumberSetting('RAG_BOOST_SURFACE_TYPE', DEFAULT_RAG_BOOST_WEIGHTS.surfaceType),
+    getNumberSetting('RAG_BOOST_DWELL_TIME', DEFAULT_RAG_BOOST_WEIGHTS.dwellTime),
+    getNumberSetting('RAG_BOOST_DILUTION_RATIO', DEFAULT_RAG_BOOST_WEIGHTS.dilutionRatio),
+  ]);
+
+  return {
+    enabled: true,
+    surfaceType: clampWeight(surfaceType, DEFAULT_RAG_BOOST_WEIGHTS.surfaceType),
+    dwellTime: clampWeight(dwellTime, DEFAULT_RAG_BOOST_WEIGHTS.dwellTime),
+    dilutionRatio: clampWeight(dilutionRatio, DEFAULT_RAG_BOOST_WEIGHTS.dilutionRatio),
+  };
+}
+
+/**
+ * B0-686 — the stored weights regardless of `RAG_BOOST_ENABLED`, for the admin form to seed its
+ * inputs from. Read paths should use `getRagBoostConfig()` instead, which zeroes a disabled rule.
+ */
+export async function getRagBoostWeights(): Promise<Omit<RagBoostConfig, 'enabled'>> {
+  const [surfaceType, dwellTime, dilutionRatio] = await Promise.all([
+    getNumberSetting('RAG_BOOST_SURFACE_TYPE', DEFAULT_RAG_BOOST_WEIGHTS.surfaceType),
+    getNumberSetting('RAG_BOOST_DWELL_TIME', DEFAULT_RAG_BOOST_WEIGHTS.dwellTime),
+    getNumberSetting('RAG_BOOST_DILUTION_RATIO', DEFAULT_RAG_BOOST_WEIGHTS.dilutionRatio),
+  ]);
+
+  return {
+    surfaceType: clampWeight(surfaceType, DEFAULT_RAG_BOOST_WEIGHTS.surfaceType),
+    dwellTime: clampWeight(dwellTime, DEFAULT_RAG_BOOST_WEIGHTS.dwellTime),
+    dilutionRatio: clampWeight(dilutionRatio, DEFAULT_RAG_BOOST_WEIGHTS.dilutionRatio),
+  };
+}
+
+/**
+ * B0-757 — the three `resolveProductLineFromMatches` (~/lib/retrieval/product-line-resolution.ts)
+ * lock thresholds, moved off `process.env.BEX_PRODUCT_LINE_LOCK_*` (never actually set in any
+ * environment). Defaults mirror that module's own fallback consts exactly, so a missing/unreadable
+ * row reproduces today's behavior. The function itself stays synchronous and untouched — this is
+ * read once by the one production call site (`~/lib/retrieval/product-knowledge.ts`) and passed in
+ * as an options override; its unit tests keep exercising the hardcoded defaults directly.
+ */
+export async function getProductLineLockThresholds(): Promise<{
+  minLockSimilarity: number;
+  minLockMargin: number;
+  highConfidenceAbsolute: number;
+}> {
+  const [minLockSimilarity, minLockMargin, highConfidenceAbsolute] = await Promise.all([
+    getNumberSetting('BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY', DEFAULT_MIN_LOCK_SIMILARITY),
+    getNumberSetting('BEX_PRODUCT_LINE_LOCK_MARGIN', DEFAULT_MIN_LOCK_MARGIN),
+    getNumberSetting('BEX_PRODUCT_LINE_LOCK_HIGH_CONFIDENCE', DEFAULT_HIGH_CONFIDENCE_ABSOLUTE),
+  ]);
+
+  return { minLockSimilarity, minLockMargin, highConfidenceAbsolute };
+}
 
 /** Test seam: clears the per-key value cache so a test can change the mocked DB response. */
 export function resetSettingsCacheForTest(): void {

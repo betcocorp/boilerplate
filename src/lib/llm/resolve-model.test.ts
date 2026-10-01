@@ -156,11 +156,11 @@ describe('resolveModel — preview under BEX_LLM_PROVIDER = openai (B0-899)', ()
 describe('resolveModel — preview under BEX_LLM_PROVIDER = anthropic (B0-899)', () => {
   it('resolves preview to the BEX_ANTHROPIC_MODEL value', async () => {
     vi.mocked(getLlmProvider).mockResolvedValue('anthropic');
-    stubSettings({ [ANTHROPIC_MODEL_SETTING_KEY]: 'claude-sonnet-4-6', BEX_RESPONSES_MODEL: 'gpt-4.1' });
+    stubSettings({ [ANTHROPIC_MODEL_SETTING_KEY]: 'claude-opus-5', BEX_RESPONSES_MODEL: 'gpt-4.1' });
 
-    expect(await resolveModel('preview')).toBe('claude-sonnet-4-6');
-    expect(await resolveModel('')).toBe('claude-sonnet-4-6');
-    expect(await resolveModel(undefined)).toBe('claude-sonnet-4-6');
+    expect(await resolveModel('preview')).toBe('claude-opus-5');
+    expect(await resolveModel('')).toBe('claude-opus-5');
+    expect(await resolveModel(undefined)).toBe('claude-opus-5');
     expect(modelProviderFor(await resolveModel('preview'))).toBe('anthropic');
   });
 
@@ -210,11 +210,11 @@ describe('resolveModel — preview under BEX_LLM_PROVIDER = anthropic (B0-899)',
   it('lets a claude BEX_RESPONSES_MODEL win over a different BEX_ANTHROPIC_MODEL', async () => {
     vi.mocked(getLlmProvider).mockResolvedValue('anthropic');
     stubSettings({
-      BEX_RESPONSES_MODEL: 'claude-sonnet-4-6',
+      BEX_RESPONSES_MODEL: 'claude-opus-5',
       [ANTHROPIC_MODEL_SETTING_KEY]: 'claude-haiku-4-5',
     });
 
-    expect(await resolveModel('preview')).toBe('claude-sonnet-4-6');
+    expect(await resolveModel('preview')).toBe('claude-opus-5');
     // The vendor-switch row is not even read once the model row has named a Claude model.
     expect(vi.mocked(getStringSetting).mock.calls.map(([key]) => key)).not.toContain(
       ANTHROPIC_MODEL_SETTING_KEY,

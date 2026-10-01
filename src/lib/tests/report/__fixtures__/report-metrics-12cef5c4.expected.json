@@ -1,0 +1,2828 @@
+{
+  "totalCases": 20,
+  "evaluated": 20,
+  "ute": [],
+  "uteCount": 0,
+  "overall": {
+    "n": 20,
+    "avg": 41.8,
+    "grade": "F",
+    "pass": 5,
+    "fail": 15,
+    "passPct": 25,
+    "failPct": 75
+  },
+  "highest": [
+    {
+      "id": "8a66fba1-b778-486f-a6ba-0e8dc1e13f8e",
+      "question": "Is No-rinse Floor Cleaner safe on food-contact surfaces without rinsing?",
+      "overall": 83
+    }
+  ],
+  "lowest": [
+    {
+      "id": "5be3724f-8587-43ae-a51e-b3abd9235f2d",
+      "question": "What's the difference between pH7Q and pH7Q Dual?",
+      "overall": 9
+    }
+  ],
+  "perCase": [
+    {
+      "id": "5be3724f-8587-43ae-a51e-b3abd9235f2d",
+      "question": "What's the difference between pH7Q and pH7Q Dual?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "product-comparison",
+      "accuracy": 8,
+      "completeness": 0,
+      "relevance": 10,
+      "clarity": 40,
+      "overall": 9,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 14
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 9,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 9,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: primary difference is concentration / dilution rate, pH7Q Dual is the more concentrated of the two, pH7Q Dual dilutes at 1:256 (0.5 oz/gal), pH7Q dilutes at 1:64. The response scored 9/100 on the rubric and failed there as well; the mandatory cap holds it at 9/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "primary difference is concentration / dilution rate",
+            "pH7Q Dual is the more concentrated of the two",
+            "pH7Q Dual dilutes at 1:256 (0.5 oz/gal)",
+            "pH7Q dilutes at 1:64"
+          ],
+          "satisfied": [],
+          "missing": [
+            "primary difference is concentration / dilution rate",
+            "pH7Q Dual is the more concentrated of the two",
+            "pH7Q Dual dilutes at 1:256 (0.5 oz/gal)",
+            "pH7Q dilutes at 1:64"
+          ]
+        },
+        "expected": {
+          "required": [
+            "primary difference is concentration / dilution rate",
+            "pH7Q Dual is the more concentrated of the two",
+            "pH7Q Dual dilutes at 1:256 (0.5 oz/gal)",
+            "pH7Q dilutes at 1:64",
+            "higher dilution yields more end-use solution per container",
+            "potentially lower cost-in-use for pH7Q Dual",
+            "both are neutral pH disinfectant cleaners",
+            "both work as a single-step disinfect/clean/deodorize product",
+            "both carry the same broad-spectrum efficacy claims",
+            "each product's approved surface list differs",
+            "check the current label for approved surfaces",
+            "available container sizes differ between the two",
+            "pH7Q Dual coverage is 500 sq ft/gal",
+            "names the source product documents"
+          ],
+          "satisfied": [],
+          "missing": [
+            "primary difference is concentration / dilution rate",
+            "pH7Q Dual is the more concentrated of the two",
+            "pH7Q Dual dilutes at 1:256 (0.5 oz/gal)",
+            "pH7Q dilutes at 1:64",
+            "higher dilution yields more end-use solution per container",
+            "potentially lower cost-in-use for pH7Q Dual",
+            "both are neutral pH disinfectant cleaners",
+            "both work as a single-step disinfect/clean/deodorize product",
+            "both carry the same broad-spectrum efficacy claims",
+            "each product's approved surface list differs",
+            "check the current label for approved surfaces",
+            "available container sizes differ between the two",
+            "pH7Q Dual coverage is 500 sq ft/gal",
+            "names the source product documents"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.02,
+      "similarityNote": "The response conveys none of the golden answer's substance beyond a generic 'consult the label' pointer.",
+      "evalConfidence": 92,
+      "confidenceNote": "The refusal is unambiguous and clearly omits every listed concept; only minor judgment on how much credit a safe deferral deserves."
+    },
+    {
+      "id": "51cae97f-2b4c-4c5e-bcfe-5896f34086a3",
+      "question": "Do you have a product called Hard as Nailz?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 72,
+      "completeness": 80,
+      "relevance": 86,
+      "clarity": 90,
+      "overall": 79,
+      "grade": "C",
+      "status": "Pass",
+      "coverage": {
+        "satisfied": 4,
+        "required": 5
+      },
+      "completenessJudged": null,
+      "coveragePct": 80,
+      "coverageApplied": false,
+      "weighted": 79,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 79,
+      "preGateGrade": "C",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Pass",
+      "statusSource": "rubric",
+      "ratingConstrained": false,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": null,
+      "mandatoryMissing": false,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "cite the Hard As Nails product line profile"
+          ],
+          "satisfied": [
+            "cite the Hard As Nails product line profile"
+          ],
+          "missing": []
+        },
+        "expected": {
+          "required": [
+            "closest catalog match is Hard As Nails (spelling differs)",
+            "provide its documented product type",
+            "provide its documented labeled use",
+            "offer to look again if that isn't the intended product",
+            "cite the Hard As Nails product line profile"
+          ],
+          "satisfied": [
+            "provide its documented product type",
+            "provide its documented labeled use",
+            "offer to look again if that isn't the intended product",
+            "cite the Hard As Nails product line profile"
+          ],
+          "missing": [
+            "closest catalog match is Hard As Nails (spelling differs)"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.65,
+      "similarityNote": "Shares product type, labeled use, verification prompt and the product line profile citation, but omits the explicit spelling-mismatch framing and adds unverified specifics.",
+      "evalConfidence": 72,
+      "confidenceNote": "Golden is a behavioural template with placeholders, and the response supplies coverage/RTU claims that cannot be verified from the material provided."
+    },
+    {
+      "id": "c8004f51-8883-414a-834f-15c41d8b4dde",
+      "question": "What is the best glass cleaner?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 78,
+      "completeness": 57,
+      "relevance": 90,
+      "clarity": 90,
+      "overall": 75,
+      "grade": "C",
+      "status": "Pass",
+      "coverage": {
+        "satisfied": 4,
+        "required": 7
+      },
+      "completenessJudged": null,
+      "coveragePct": 57,
+      "coverageApplied": false,
+      "weighted": 75,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 75,
+      "preGateGrade": "C",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Pass",
+      "statusSource": "rubric",
+      "ratingConstrained": false,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": null,
+      "mandatoryMissing": false,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "no documented basis to rank one product as best",
+            "instead provide the full list of Betco glass cleaners to choose from"
+          ],
+          "satisfied": [
+            "no documented basis to rank one product as best",
+            "instead provide the full list of Betco glass cleaners to choose from"
+          ],
+          "missing": []
+        },
+        "expected": {
+          "required": [
+            "no documented basis to rank one product as best",
+            "best choice depends on surface",
+            "best choice depends on soil",
+            "best choice depends on ready-to-use vs concentrate",
+            "instead provide the full list of Betco glass cleaners to choose from",
+            "offer to identify which are labeled for a given application",
+            "cite the Betco product catalog glass cleaner category"
+          ],
+          "satisfied": [
+            "no documented basis to rank one product as best",
+            "best choice depends on ready-to-use vs concentrate",
+            "instead provide the full list of Betco glass cleaners to choose from",
+            "offer to identify which are labeled for a given application"
+          ],
+          "missing": [
+            "best choice depends on surface",
+            "best choice depends on soil",
+            "cite the Betco product catalog glass cleaner category"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.7,
+      "similarityNote": "Matches the golden's core refusal-to-rank plus list-and-offer behavior, but omits catalog sourcing, item numbers/links, and the surface/soil decision factors.",
+      "evalConfidence": 74,
+      "confidenceNote": "Golden is a behavioral template with a placeholder product list, and the response supplies dilution/coverage figures I cannot verify from the material given."
+    },
+    {
+      "id": "c90eae50-5d02-4fb9-b056-4bbf823f1ac6",
+      "question": "What is the strongest wood floor stripper you have?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 68,
+      "completeness": 38,
+      "relevance": 76,
+      "clarity": 85,
+      "overall": 59,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 3,
+        "required": 8
+      },
+      "completenessJudged": null,
+      "coveragePct": 38,
+      "coverageApplied": false,
+      "weighted": 62,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 62,
+      "preGateGrade": "D",
+      "ceiling": 59,
+      "ceilingApplied": true,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": true,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: list all Betco floor strippers with labeled dilution range, list all Betco floor strippers with approved substrates. A missing mandatory concept caps the score at 59/100 (grade F, Fail). Pre-Gate Content Score: 62/100 — the rubric arithmetic before the cap, shown as a diagnostic so a near miss stays distinguishable from a total one.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "no strength rating exists in Betco product data to rank on",
+            "list all Betco floor strippers with labeled dilution range",
+            "list all Betco floor strippers with approved substrates"
+          ],
+          "satisfied": [
+            "no strength rating exists in Betco product data to rank on"
+          ],
+          "missing": [
+            "list all Betco floor strippers with labeled dilution range",
+            "list all Betco floor strippers with approved substrates"
+          ]
+        },
+        "expected": {
+          "required": [
+            "no strength rating exists in Betco product data to rank on",
+            "won't guess at a strongest product",
+            "list all Betco floor strippers with labeled dilution range",
+            "list all Betco floor strippers with approved substrates",
+            "ask for the finish being removed to narrow it",
+            "ask for the floor substrate to narrow it",
+            "cite the product catalog",
+            "cite individual product labels"
+          ],
+          "satisfied": [
+            "no strength rating exists in Betco product data to rank on",
+            "won't guess at a strongest product",
+            "cite the product catalog"
+          ],
+          "missing": [
+            "list all Betco floor strippers with labeled dilution range",
+            "list all Betco floor strippers with approved substrates",
+            "ask for the finish being removed to narrow it",
+            "ask for the floor substrate to narrow it",
+            "cite individual product labels"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.45,
+      "similarityNote": "Shares the core refusal to rank strength and a product list, but omits dilution ranges, item numbers, approved substrates, and the clarifying questions the ideal answer asks.",
+      "evalConfidence": 78,
+      "confidenceNote": "Golden is a behavioural template with placeholders, and the listed product descriptions cannot be verified from the material provided."
+    },
+    {
+      "id": "711767d5-e2a2-46cf-aa61-ab8f7b26e183",
+      "question": "What product should I use on VCT floors for day-to-day cleaning?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 12,
+      "completeness": 0,
+      "relevance": 10,
+      "clarity": 40,
+      "overall": 11,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 4
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 11,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 11,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: ask whether it's daily cleaning, scrub and recoat, or full strip and refinish, then list Betco products labeled for VCT for that step. The response scored 11/100 on the rubric and failed there as well; the mandatory cap holds it at 11/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "ask whether it's daily cleaning, scrub and recoat, or full strip and refinish",
+            "then list Betco products labeled for VCT for that step"
+          ],
+          "satisfied": [],
+          "missing": [
+            "ask whether it's daily cleaning, scrub and recoat, or full strip and refinish",
+            "then list Betco products labeled for VCT for that step"
+          ]
+        },
+        "expected": {
+          "required": [
+            "VCT covers several different jobs, so clarify first",
+            "ask whether it's daily cleaning, scrub and recoat, or full strip and refinish",
+            "then list Betco products labeled for VCT for that step",
+            "direct the multi-step floor maintenance program to Betco floor care resources"
+          ],
+          "satisfied": [],
+          "missing": [
+            "VCT covers several different jobs, so clarify first",
+            "ask whether it's daily cleaning, scrub and recoat, or full strip and refinish",
+            "then list Betco products labeled for VCT for that step",
+            "direct the multi-step floor maintenance program to Betco floor care resources"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.05,
+      "similarityNote": "Only the generic gesture toward Betco support overlaps; none of the clarifying-question substance is present.",
+      "evalConfidence": 92,
+      "confidenceNote": "The golden expects a specific clarifying behavior that is plainly absent from the response; little judgment ambiguity."
+    },
+    {
+      "id": "64a2c2ba-78fe-4885-8001-339895530ad1",
+      "question": "I need a disinfectant for a school that will kill norovirus. What do you have?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "pathogen-specific",
+      "accuracy": 12,
+      "completeness": 6,
+      "relevance": 12,
+      "clarity": 55,
+      "overall": 15,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 2,
+        "required": 36
+      },
+      "completenessJudged": null,
+      "coveragePct": 6,
+      "coverageApplied": false,
+      "weighted": 15,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 15,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: recommends EPA-registered Betco disinfectants for norovirus hard surfaces, use the norovirus contact time from the product's current label, surface must stay visibly wet for the entire contact time, clean visible soil before disinfecting, handwashing is the best defense against norovirus, alcohol hand sanitizer is not a substitute for handwashing. The response scored 15/100 on the rubric and failed there as well; the mandatory cap holds it at 15/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "recommends EPA-registered Betco disinfectants for norovirus hard surfaces",
+            "use the norovirus contact time from the product's current label",
+            "does not state a norovirus contact time from memory",
+            "surface must stay visibly wet for the entire contact time",
+            "clean visible soil before disinfecting",
+            "handwashing is the best defense against norovirus",
+            "alcohol hand sanitizer is not a substitute for handwashing"
+          ],
+          "satisfied": [
+            "does not state a norovirus contact time from memory"
+          ],
+          "missing": [
+            "recommends EPA-registered Betco disinfectants for norovirus hard surfaces",
+            "use the norovirus contact time from the product's current label",
+            "surface must stay visibly wet for the entire contact time",
+            "clean visible soil before disinfecting",
+            "handwashing is the best defense against norovirus",
+            "alcohol hand sanitizer is not a substitute for handwashing"
+          ]
+        },
+        "expected": {
+          "required": [
+            "norovirus lacks an outer lipid envelope",
+            "norovirus is resistant to common disinfectants",
+            "norovirus resists alcohol-based products that handle cold and flu viruses",
+            "norovirus can survive on surfaces up to two weeks",
+            "recommends EPA-registered Betco disinfectants for norovirus hard surfaces",
+            "names Quat-Stat 5",
+            "names Fight Bac RTU",
+            "names GE Fight Bac RTU",
+            "names pH7Q Dual",
+            "identifies which options are ready-to-use",
+            "identifies which options are concentrates",
+            "selection depends on the surfaces and areas involved",
+            "selection depends on routine cleaning vs outbreak response",
+            "selection depends on ready-to-use vs dilution-controlled concentrate",
+            "use the norovirus contact time from the product's current label",
+            "does not state a norovirus contact time from memory",
+            "norovirus contact times are typically longer than other organisms on the same label",
+            "surface must stay visibly wet for the entire contact time",
+            "reapply if it dries early rather than shortening the contact time",
+            "dilute exactly as labeled",
+            "does not state a dilution rate from memory",
+            "extra concentrate does not improve kill",
+            "clean visible soil before disinfecting",
+            "follow the body-fluid cleanup procedure for vomit or diarrhea",
+            "use disposable gloves for contaminated cleanup",
+            "use the PPE the label and SDS specify",
+            "disinfect high-touch surfaces frequently, not only after an incident",
+            "follow the label's directions for occupied spaces",
+            "keep students out during application and until dry",
+            "ventilate during application",
+            "rinse food-contact surfaces with potable water unless the label states no rinse required",
+            "handwashing is the best defense against norovirus",
+            "alcohol hand sanitizer is not a substitute for handwashing",
+            "Clario dispenser bags are sealed to prevent contamination",
+            "Betco representative can confirm product fit",
+            "Betco representative can verify the current label claim and regional availability"
+          ],
+          "satisfied": [
+            "does not state a norovirus contact time from memory",
+            "does not state a dilution rate from memory"
+          ],
+          "missing": [
+            "norovirus lacks an outer lipid envelope",
+            "norovirus is resistant to common disinfectants",
+            "norovirus resists alcohol-based products that handle cold and flu viruses",
+            "norovirus can survive on surfaces up to two weeks",
+            "recommends EPA-registered Betco disinfectants for norovirus hard surfaces",
+            "names Quat-Stat 5",
+            "names Fight Bac RTU",
+            "names GE Fight Bac RTU",
+            "names pH7Q Dual",
+            "identifies which options are ready-to-use",
+            "identifies which options are concentrates",
+            "selection depends on the surfaces and areas involved",
+            "selection depends on routine cleaning vs outbreak response",
+            "selection depends on ready-to-use vs dilution-controlled concentrate",
+            "use the norovirus contact time from the product's current label",
+            "norovirus contact times are typically longer than other organisms on the same label",
+            "surface must stay visibly wet for the entire contact time",
+            "reapply if it dries early rather than shortening the contact time",
+            "dilute exactly as labeled",
+            "extra concentrate does not improve kill",
+            "clean visible soil before disinfecting",
+            "follow the body-fluid cleanup procedure for vomit or diarrhea",
+            "use disposable gloves for contaminated cleanup",
+            "use the PPE the label and SDS specify",
+            "disinfect high-touch surfaces frequently, not only after an incident",
+            "follow the label's directions for occupied spaces",
+            "keep students out during application and until dry",
+            "ventilate during application",
+            "rinse food-contact surfaces with potable water unless the label states no rinse required",
+            "handwashing is the best defense against norovirus",
+            "alcohol hand sanitizer is not a substitute for handwashing",
+            "Clario dispenser bags are sealed to prevent contamination",
+            "Betco representative can confirm product fit",
+            "Betco representative can verify the current label claim and regional availability"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.05,
+      "similarityNote": "Only the shared idea of deferring to the label/Betco support; none of the product recommendations, norovirus background, or usage guidance is present.",
+      "evalConfidence": 92,
+      "confidenceNote": "The response is an unambiguous blanket refusal, so concept coverage is easy to judge; minor judgment on crediting the two negative concepts."
+    },
+    {
+      "id": "3b8d665b-1f69-432a-aee1-7a483832da65",
+      "question": "What should I use for greasy kitchen floors?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 12,
+      "completeness": 0,
+      "relevance": 10,
+      "clarity": 45,
+      "overall": 11,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 7
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 11,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 11,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: list Betco degreasers documented for floor use with product name, list Betco degreasers documented for floor use with item number, cite the product catalog degreaser category, cite individual product labels. The response scored 11/100 on the rubric and failed there as well; the mandatory cap holds it at 11/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "list Betco degreasers documented for floor use with product name",
+            "list Betco degreasers documented for floor use with item number",
+            "cite the product catalog degreaser category",
+            "cite individual product labels"
+          ],
+          "satisfied": [],
+          "missing": [
+            "list Betco degreasers documented for floor use with product name",
+            "list Betco degreasers documented for floor use with item number",
+            "cite the product catalog degreaser category",
+            "cite individual product labels"
+          ]
+        },
+        "expected": {
+          "required": [
+            "list Betco degreasers documented for floor use with product name",
+            "list Betco degreasers documented for floor use with item number",
+            "confirm the floor substrate (not all degreasers labeled for all surfaces)",
+            "confirm whether it's a food-preparation zone affecting rinsing requirements",
+            "both details come from the label",
+            "cite the product catalog degreaser category",
+            "cite individual product labels"
+          ],
+          "satisfied": [],
+          "missing": [
+            "list Betco degreasers documented for floor use with product name",
+            "list Betco degreasers documented for floor use with item number",
+            "confirm the floor substrate (not all degreasers labeled for all surfaces)",
+            "confirm whether it's a food-preparation zone affecting rinsing requirements",
+            "both details come from the label",
+            "cite the product catalog degreaser category",
+            "cite individual product labels"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.05,
+      "similarityNote": "Only the shared gesture of 'check the product label' overlaps; none of the product recommendations, qualifiers, or catalog/label sourcing appear.",
+      "evalConfidence": 90,
+      "confidenceNote": "The golden is a template with a placeholder product list, but the response supplies no substance at all, making the shortfall unambiguous."
+    },
+    {
+      "id": "1ae3e599-ac6d-4e2e-b048-2831b5a1ff42",
+      "question": "I need a Betco replacement for a Diversey quat disinfectant. Which one?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "competitor",
+      "accuracy": 21.5,
+      "completeness": 14,
+      "relevance": 29,
+      "clarity": 20,
+      "overall": 21,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 1,
+        "required": 7
+      },
+      "completenessJudged": null,
+      "coveragePct": 14,
+      "coverageApplied": false,
+      "weighted": 21,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 21,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: need the specific product name to give a defensible match. The response scored 21/100 on the rubric and failed there as well; the mandatory cap holds it at 21/100.",
+      "mandatoryMissing": true,
+      "materialIssue": true,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "need the specific product name to give a defensible match",
+            "ask for the exact product name"
+          ],
+          "satisfied": [
+            "ask for the exact product name"
+          ],
+          "missing": [
+            "need the specific product name to give a defensible match"
+          ]
+        },
+        "expected": {
+          "required": [
+            "need the specific product name to give a defensible match",
+            "Diversey has multiple quat disinfectants",
+            "they differ on dilution",
+            "they differ on contact time",
+            "they differ on organism claims",
+            "ask for the exact product name",
+            "ask for the EPA registration number from the label"
+          ],
+          "satisfied": [
+            "ask for the exact product name"
+          ],
+          "missing": [
+            "need the specific product name to give a defensible match",
+            "Diversey has multiple quat disinfectants",
+            "they differ on dilution",
+            "they differ on contact time",
+            "they differ on organism claims",
+            "ask for the EPA registration number from the label"
+          ]
+        },
+        "materialIssue": true,
+        "materialIssueNote": "Fabricated/contaminated query context ('AF79 Acid Free Bathroom Cleaner Concentrate (4-2L FastDraw) comparable to Diversey Crew NA SC Non-Acid Bowl & Bathroom Disinfectant Cleaner') that the user never mentioned, plus the contradiction 'found AF79 Disinfectant — here is its information:' followed by no information and then 'I couldn't confidently identify a Betco equivalent.'"
+      },
+      "similarity": 0.18,
+      "similarityNote": "Only the closing request for a corrected product name overlaps with the ideal clarifying-question response; none of the reasoning about why the specific name, dilution, contact time, organism claims, or EPA reg number is needed appears.",
+      "evalConfidence": 88,
+      "confidenceNote": "The golden answer is a clear clarifying-question behavior and the response plainly fails most of it; only minor judgment on crediting the conditional request for a product name."
+    },
+    {
+      "id": "88fff5f3-b018-4af4-be01-8b0f7bedcdca",
+      "question": "Betco's version of BNC-15 kills everything BNC-15 does, right?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "kill-claims",
+      "accuracy": 25,
+      "completeness": 0,
+      "relevance": 20,
+      "clarity": 70,
+      "overall": 21,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 7
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 21,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 21,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: a cross-reference match does not transfer claims between products, if a claim you depend on isn't on the Betco label, it isn't supported. The response scored 21/100 on the rubric and failed there as well; the mandatory cap holds it at 21/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "a cross-reference match does not transfer claims between products",
+            "if a claim you depend on isn't on the Betco label, it isn't supported"
+          ],
+          "satisfied": [],
+          "missing": [
+            "a cross-reference match does not transfer claims between products",
+            "if a claim you depend on isn't on the Betco label, it isn't supported"
+          ]
+        },
+        "expected": {
+          "required": [
+            "cannot confirm a cross-reference transfers organism claims",
+            "organism claims live on each product's own EPA-registered label",
+            "a cross-reference match does not transfer claims between products",
+            "the Betco product's organism claims come from its own label",
+            "if a claim you depend on isn't on the Betco label, it isn't supported",
+            "cite the product label",
+            "cite efficacy data"
+          ],
+          "satisfied": [],
+          "missing": [
+            "cannot confirm a cross-reference transfers organism claims",
+            "organism claims live on each product's own EPA-registered label",
+            "a cross-reference match does not transfer claims between products",
+            "the Betco product's organism claims come from its own label",
+            "if a claim you depend on isn't on the Betco label, it isn't supported",
+            "cite the product label",
+            "cite efficacy data"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.08,
+      "similarityNote": "Both stop short of confirming equivalence, but the response shares none of the golden's substance on claim transfer, label sourcing, or citations.",
+      "evalConfidence": 88,
+      "confidenceNote": "The response is short and plainly omits every listed concept; only minor judgment on whether the deflection partially implies non-confirmation."
+    },
+    {
+      "id": "187039a9-0611-4575-8974-aacac8d72878",
+      "question": "Which Betco product is identical to the competitor product we're using now?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 38,
+      "completeness": 0,
+      "relevance": 42,
+      "clarity": 80,
+      "overall": 32,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 6
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 32,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 32,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: cross-reference identifies comparable products for the same application, not chemically identical ones, provide the Betco label values to verify before converting. The response scored 32/100 on the rubric and failed there as well; the mandatory cap holds it at 32/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "cross-reference identifies comparable products for the same application, not chemically identical ones",
+            "provide the Betco label values to verify before converting"
+          ],
+          "satisfied": [],
+          "missing": [
+            "cross-reference identifies comparable products for the same application, not chemically identical ones",
+            "provide the Betco label values to verify before converting"
+          ]
+        },
+        "expected": {
+          "required": [
+            "avoid the word \"identical\"",
+            "cross-reference identifies comparable products for the same application, not chemically identical ones",
+            "ask for the competitor brand",
+            "ask for the competitor product name",
+            "provide the documented comparable match",
+            "provide the Betco label values to verify before converting"
+          ],
+          "satisfied": [],
+          "missing": [
+            "avoid the word \"identical\"",
+            "cross-reference identifies comparable products for the same application, not chemically identical ones",
+            "ask for the competitor brand",
+            "ask for the competitor product name",
+            "provide the documented comparable match",
+            "provide the Betco label values to verify before converting"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.18,
+      "similarityNote": "Both decline to name a match, but the response omits the identical-vs-comparable clarification, the request for brand/product name, and the label-verification step.",
+      "evalConfidence": 88,
+      "confidenceNote": "The golden answer is a clear behavioural template and the response plainly misses its required elements; only minor judgment on partial credit for deferral."
+    },
+    {
+      "id": "8ddb4a37-60fb-4946-b947-b3c081106389",
+      "question": "Can I use pH7Q on stainless steel?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 35,
+      "completeness": 17,
+      "relevance": 36.5,
+      "clarity": 68.5,
+      "overall": 33,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 1,
+        "required": 6
+      },
+      "completenessJudged": null,
+      "coveragePct": 17,
+      "coverageApplied": false,
+      "weighted": 33,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 33,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: approved surfaces come from the product label, if it isn't listed, it's not an approved use. The response scored 33/100 on the rubric and failed there as well; the mandatory cap holds it at 33/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "approved surfaces come from the product label",
+            "if it isn't listed, it's not an approved use"
+          ],
+          "satisfied": [],
+          "missing": [
+            "approved surfaces come from the product label",
+            "if it isn't listed, it's not an approved use"
+          ]
+        },
+        "expected": {
+          "required": [
+            "approved surfaces come from the product label",
+            "if stainless steel is listed, it's a labeled use at the labeled dilution",
+            "if it isn't listed, it's not an approved use",
+            "cannot endorse an unlisted use",
+            "check with your Betco representative",
+            "cite the product label"
+          ],
+          "satisfied": [
+            "check with your Betco representative"
+          ],
+          "missing": [
+            "approved surfaces come from the product label",
+            "if stainless steel is listed, it's a labeled use at the labeled dilution",
+            "if it isn't listed, it's not an approved use",
+            "cannot endorse an unlisted use",
+            "cite the product label"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.21,
+      "similarityNote": "Shares only the deferral-to-label/contact-Betco element; omits the entire label-listed-surface logic that forms the substance of the ideal answer.",
+      "evalConfidence": 84,
+      "confidenceNote": "Golden is a behavioral template, but the response is clearly an over-refusal that skips the required reasoning framework."
+    },
+    {
+      "id": "8a66fba1-b778-486f-a6ba-0e8dc1e13f8e",
+      "question": "Is No-rinse Floor Cleaner safe on food-contact surfaces without rinsing?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "surface-compatibility",
+      "accuracy": 86.5,
+      "completeness": 67,
+      "relevance": 95,
+      "clarity": 92,
+      "overall": 83,
+      "grade": "B",
+      "status": "Pass",
+      "coverage": {
+        "satisfied": 4,
+        "required": 6
+      },
+      "completenessJudged": null,
+      "coveragePct": 67,
+      "coverageApplied": false,
+      "weighted": 83,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 83,
+      "preGateGrade": "B",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Pass",
+      "statusSource": "rubric",
+      "ratingConstrained": false,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": null,
+      "mandatoryMissing": false,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "no-rinse for floors does not mean food-contact approval",
+            "food-contact approval must be explicit on the label",
+            "cite the product label"
+          ],
+          "satisfied": [
+            "no-rinse for floors does not mean food-contact approval",
+            "food-contact approval must be explicit on the label",
+            "cite the product label"
+          ],
+          "missing": []
+        },
+        "expected": {
+          "required": [
+            "no-rinse for floors does not mean food-contact approval",
+            "food-contact approval must be explicit on the label",
+            "if not label-approved without a potable-water rinse, it is not approved for that use",
+            "the product name does not determine approval",
+            "use a product whose label carries the food-contact claim",
+            "cite the product label"
+          ],
+          "satisfied": [
+            "no-rinse for floors does not mean food-contact approval",
+            "food-contact approval must be explicit on the label",
+            "use a product whose label carries the food-contact claim",
+            "cite the product label"
+          ],
+          "missing": [
+            "if not label-approved without a potable-water rinse, it is not approved for that use",
+            "the product name does not determine approval"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.72,
+      "similarityNote": "Reaches the same conclusion and label sourcing, but omits the potable-water-rinse conditional and the explicit \"product name doesn't determine approval\" reasoning.",
+      "evalConfidence": 74,
+      "confidenceNote": "Golden is a behavioural template with a placeholder, and the response supplies a direct label quote (\"DO NOT USE ON FOOD CONTACT SURFACES\") that cannot be verified from the material provided."
+    },
+    {
+      "id": "eac2621d-1233-45be-b7ab-283967a1483d",
+      "question": "What dilution do other customers use for Grease Solv? Not the label rate � what actually works.",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "dilution",
+      "accuracy": 80,
+      "completeness": 67,
+      "relevance": 91,
+      "clarity": 90,
+      "overall": 79,
+      "grade": "C",
+      "status": "Pass",
+      "coverage": {
+        "satisfied": 4,
+        "required": 6
+      },
+      "completenessJudged": null,
+      "coveragePct": 67,
+      "coverageApplied": false,
+      "weighted": 79,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 79,
+      "preGateGrade": "C",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Pass",
+      "statusSource": "rubric",
+      "ratingConstrained": false,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": null,
+      "mandatoryMissing": false,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "only provide the labeled dilution rate",
+            "will not share off-label practice data"
+          ],
+          "satisfied": [
+            "only provide the labeled dilution rate",
+            "will not share off-label practice data"
+          ],
+          "missing": []
+        },
+        "expected": {
+          "required": [
+            "only provide the labeled dilution rate",
+            "will not share off-label practice data",
+            "using an unsupported concentration is not a supported use",
+            "off-label use shifts liability onto the user",
+            "if the labeled rate underperforms, consult your Betco representative",
+            "cite the product label"
+          ],
+          "satisfied": [
+            "only provide the labeled dilution rate",
+            "will not share off-label practice data",
+            "using an unsupported concentration is not a supported use",
+            "cite the product label"
+          ],
+          "missing": [
+            "off-label use shifts liability onto the user",
+            "if the labeled rate underperforms, consult your Betco representative"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.65,
+      "similarityNote": "Matches the refusal-to-share-off-label stance, label-only rates and label citation, but omits the liability-shift point and the Betco-rep referral path.",
+      "evalConfidence": 78,
+      "confidenceNote": "Golden is a behavioural template with a placeholder rate, and the specific oz/gal and ratio values supplied cannot be verified from the material provided."
+    },
+    {
+      "id": "ab8f594c-3688-4e01-aa5b-0c85b43219f4",
+      "question": "Which of your disinfectants kill HIV-1?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "pathogen-specific",
+      "accuracy": 17.5,
+      "completeness": 0,
+      "relevance": 24,
+      "clarity": 70,
+      "overall": 19,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 6
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 19,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 19,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: list Betco products carrying a labeled HIV-1 claim, use the contact time for the HIV-1 claim specifically, not the general one. The response scored 19/100 on the rubric and failed there as well; the mandatory cap holds it at 19/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "list Betco products carrying a labeled HIV-1 claim",
+            "use the contact time for the HIV-1 claim specifically, not the general one"
+          ],
+          "satisfied": [],
+          "missing": [
+            "list Betco products carrying a labeled HIV-1 claim",
+            "use the contact time for the HIV-1 claim specifically, not the general one"
+          ]
+        },
+        "expected": {
+          "required": [
+            "list Betco products carrying a labeled HIV-1 claim",
+            "include each product's labeled contact time",
+            "include each product's labeled dilution",
+            "use the contact time for the HIV-1 claim specifically, not the general one",
+            "cite verified efficacy data",
+            "cite product labels"
+          ],
+          "satisfied": [],
+          "missing": [
+            "list Betco products carrying a labeled HIV-1 claim",
+            "include each product's labeled contact time",
+            "include each product's labeled dilution",
+            "use the contact time for the HIV-1 claim specifically, not the general one",
+            "cite verified efficacy data",
+            "cite product labels"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.07,
+      "similarityNote": "Only shares the notion of deferring to product labels; none of the expected substance (product list, contact times, dilutions, HIV-1-specific contact-time caveat) appears.",
+      "evalConfidence": 88,
+      "confidenceNote": "The refusal is unambiguous and clearly misses every listed concept; slight uncertainty only because the golden is a placeholder template."
+    },
+    {
+      "id": "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7",
+      "question": "What disinfectant works best against norovirus?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "pathogen-specific",
+      "accuracy": 21,
+      "completeness": 0,
+      "relevance": 18,
+      "clarity": 61,
+      "overall": 18,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 11
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 18,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 18,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: no documented ranking exists to name one product 'best', list every Betco product with a labeled norovirus claim. The response scored 18/100 on the rubric and failed there as well; the mandatory cap holds it at 18/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "no documented ranking exists to name one product 'best'",
+            "list every Betco product with a labeled norovirus claim"
+          ],
+          "satisfied": [],
+          "missing": [
+            "no documented ranking exists to name one product 'best'",
+            "list every Betco product with a labeled norovirus claim"
+          ]
+        },
+        "expected": {
+          "required": [
+            "no documented ranking exists to name one product 'best'",
+            "list every Betco product with a labeled norovirus claim",
+            "include each product's contact time",
+            "include each product's dilution",
+            "the meaningful differences are contact time",
+            "the meaningful differences are dilution",
+            "the meaningful differences are approved surfaces",
+            "ask for surfaces to narrow the list",
+            "ask for available dwell time to narrow the list",
+            "cite verified efficacy data",
+            "cite product labels"
+          ],
+          "satisfied": [],
+          "missing": [
+            "no documented ranking exists to name one product 'best'",
+            "list every Betco product with a labeled norovirus claim",
+            "include each product's contact time",
+            "include each product's dilution",
+            "the meaningful differences are contact time",
+            "the meaningful differences are dilution",
+            "the meaningful differences are approved surfaces",
+            "ask for surfaces to narrow the list",
+            "ask for available dwell time to narrow the list",
+            "cite verified efficacy data",
+            "cite product labels"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.08,
+      "similarityNote": "Only the shared implication that label confirmation matters; none of the golden's substance (no-ranking framing, product list, contact time/dilution/surface differentiators, clarifying questions) appears.",
+      "evalConfidence": 88,
+      "confidenceNote": "The golden is a template with a placeholder list, but the response supplies no content at all, making the gap unambiguous."
+    },
+    {
+      "id": "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+      "question": "The website says something different from the label. Which one do I follow?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 78,
+      "completeness": 57,
+      "relevance": 74,
+      "clarity": 87,
+      "overall": 59,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 4,
+        "required": 7
+      },
+      "completenessJudged": null,
+      "coveragePct": 57,
+      "coverageApplied": false,
+      "weighted": 72,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 72,
+      "preGateGrade": "C",
+      "ceiling": 59,
+      "ceilingApplied": true,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": true,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: the label and SDS are the controlling documents. A missing mandatory concept caps the score at 59/100 (grade F, Fail). Pre-Gate Content Score: 72/100 — the rubric arithmetic before the cap, shown as a diagnostic so a near miss stays distinguishable from a total one.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "follow the label",
+            "the label and SDS are the controlling documents"
+          ],
+          "satisfied": [
+            "follow the label"
+          ],
+          "missing": [
+            "the label and SDS are the controlling documents"
+          ]
+        },
+        "expected": {
+          "required": [
+            "follow the label",
+            "the label and SDS are the controlling documents",
+            "website and marketing copy are supporting",
+            "website and marketing copy may not reflect the current label revision",
+            "offer to check the current label",
+            "offer to flag the conflict",
+            "cite the product label as controlling"
+          ],
+          "satisfied": [
+            "follow the label",
+            "website and marketing copy are supporting",
+            "website and marketing copy may not reflect the current label revision",
+            "cite the product label as controlling"
+          ],
+          "missing": [
+            "the label and SDS are the controlling documents",
+            "offer to check the current label",
+            "offer to flag the conflict"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.6,
+      "similarityNote": "Shares the core directive (follow the label, website is supporting/may be outdated) but omits SDS as co-controlling and the offers to verify the current label and flag the conflict.",
+      "evalConfidence": 81,
+      "confidenceNote": "Golden is largely behavioural and easy to compare, but the quoted label text for an unrelated product cannot be verified from the material given."
+    },
+    {
+      "id": "12f1ae56-2cc2-4095-9507-2e55802935f7",
+      "question": "Can you send the 2019 SDS for Push?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 20,
+      "completeness": 0,
+      "relevance": 17.5,
+      "clarity": 47.5,
+      "overall": 16,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 0,
+        "required": 5
+      },
+      "completenessJudged": null,
+      "coveragePct": 0,
+      "coverageApplied": false,
+      "weighted": 16,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 16,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: only the current SDS version is on file, superseded revisions aren't stored, superseded revisions won't be reproduced from memory, Betco Regulatory Affairs or your representative can retrieve an archived SDS. The response scored 16/100 on the rubric and failed there as well; the mandatory cap holds it at 16/100.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "only the current SDS version is on file",
+            "superseded revisions aren't stored",
+            "superseded revisions won't be reproduced from memory",
+            "Betco Regulatory Affairs or your representative can retrieve an archived SDS"
+          ],
+          "satisfied": [],
+          "missing": [
+            "only the current SDS version is on file",
+            "superseded revisions aren't stored",
+            "superseded revisions won't be reproduced from memory",
+            "Betco Regulatory Affairs or your representative can retrieve an archived SDS"
+          ]
+        },
+        "expected": {
+          "required": [
+            "only the current SDS version is on file",
+            "superseded revisions aren't stored",
+            "superseded revisions won't be reproduced from memory",
+            "Betco Regulatory Affairs or your representative can retrieve an archived SDS",
+            "offer the current SDS content now"
+          ],
+          "satisfied": [],
+          "missing": [
+            "only the current SDS version is on file",
+            "superseded revisions aren't stored",
+            "superseded revisions won't be reproduced from memory",
+            "Betco Regulatory Affairs or your representative can retrieve an archived SDS",
+            "offer the current SDS content now"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.15,
+      "similarityNote": "Shares only the general 'contact Betco / consult the SDS' escalation idea; none of the version-archive substance is present.",
+      "evalConfidence": 88,
+      "confidenceNote": "The golden answer is explicit about the required refusal content, and the response clearly misses it; only minor judgment on partial escalation credit."
+    },
+    {
+      "id": "962871ba-805d-44bc-bab8-973dc470a0b3",
+      "question": "Is BestScent Lemon Zest still good after sitting in storage for a year?; asked by Customer Service",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 33.5,
+      "completeness": 67,
+      "relevance": 70,
+      "clarity": 83.5,
+      "overall": 56,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 4,
+        "required": 6
+      },
+      "completenessJudged": null,
+      "coveragePct": 67,
+      "coverageApplied": false,
+      "weighted": 56,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 56,
+      "preGateGrade": "F",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: no shelf-life or expiration figure available, won't state one. The response scored 56/100 on the rubric and failed there as well; the mandatory cap holds it at 56/100.",
+      "mandatoryMissing": true,
+      "materialIssue": true,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "no shelf-life or expiration figure available, won't state one",
+            "Betco representative or Technical Services can confirm shelf life or a date code",
+            "cite the product label",
+            "cite the SDS"
+          ],
+          "satisfied": [
+            "Betco representative or Technical Services can confirm shelf life or a date code",
+            "cite the product label",
+            "cite the SDS"
+          ],
+          "missing": [
+            "no shelf-life or expiration figure available, won't state one"
+          ]
+        },
+        "expected": {
+          "required": [
+            "no shelf-life or expiration figure available, won't state one",
+            "defer exact storage conditions to the label and SDS Section 7",
+            "storage outside those conditions (frozen, overheated, left open) is a reason to set it aside",
+            "Betco representative or Technical Services can confirm shelf life or a date code",
+            "cite the product label",
+            "cite the SDS"
+          ],
+          "satisfied": [
+            "storage outside those conditions (frozen, overheated, left open) is a reason to set it aside",
+            "Betco representative or Technical Services can confirm shelf life or a date code",
+            "cite the product label",
+            "cite the SDS"
+          ],
+          "missing": [
+            "no shelf-life or expiration figure available, won't state one",
+            "defer exact storage conditions to the label and SDS Section 7"
+          ]
+        },
+        "materialIssue": true,
+        "materialIssueNote": "Asserts a \"Warranty: 2 years\" figure and concludes the product \"should still be good after one year in storage\" — an affirmative usability/shelf-life judgment the golden explicitly forbids; the 2-year warranty value is unverified from the material supplied and a warranty term is not a shelf-life."
+      },
+      "similarity": 0.43,
+      "similarityNote": "Shares the escalation-to-Betco advice, the frozen/overheated/left-open set-aside guidance, and label+SDS citation, but reverses the golden's core refusal by affirming the product is still good on a 2-year warranty.",
+      "evalConfidence": 85,
+      "confidenceNote": "Golden behavior is unambiguous (state no shelf-life figure), though the \"2 years\" warranty claim cannot be verified from the material given."
+    },
+    {
+      "id": "578ff952-4958-4c4d-8d0f-7e6fe6123bf2",
+      "question": "Is GE Fight Bac RTU approved for use in my state?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 62,
+      "completeness": 75,
+      "relevance": 85,
+      "clarity": 88,
+      "overall": 59,
+      "grade": "F",
+      "status": "Fail",
+      "coverage": {
+        "satisfied": 3,
+        "required": 4
+      },
+      "completenessJudged": null,
+      "coveragePct": 75,
+      "coverageApplied": false,
+      "weighted": 73,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 73,
+      "preGateGrade": "C",
+      "ceiling": 59,
+      "ceilingApplied": true,
+      "rubricStatus": "Fail",
+      "statusSource": "minimal_gate",
+      "ratingConstrained": true,
+      "gateBlockedAPass": true,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": "Failed on mandatory concepts: Betco registers its disinfectants in every state. A missing mandatory concept caps the score at 59/100 (grade F, Fail). Pre-Gate Content Score: 73/100 — the rubric arithmetic before the cap, shown as a diagnostic so a near miss stays distinguishable from a total one.",
+      "mandatoryMissing": true,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "Betco registers its disinfectants in every state",
+            "for state registration in a specific jurisdiction, contact Betco Regulatory Affairs or your Betco representative",
+            "cite the product label (federal registration only)"
+          ],
+          "satisfied": [
+            "for state registration in a specific jurisdiction, contact Betco Regulatory Affairs or your Betco representative",
+            "cite the product label (federal registration only)"
+          ],
+          "missing": [
+            "Betco registers its disinfectants in every state"
+          ]
+        },
+        "expected": {
+          "required": [
+            "Betco registers its disinfectants in every state",
+            "the federal EPA registration number is on the label",
+            "for state registration in a specific jurisdiction, contact Betco Regulatory Affairs or your Betco representative",
+            "cite the product label (federal registration only)"
+          ],
+          "satisfied": [
+            "the federal EPA registration number is on the label",
+            "for state registration in a specific jurisdiction, contact Betco Regulatory Affairs or your Betco representative",
+            "cite the product label (federal registration only)"
+          ],
+          "missing": [
+            "Betco registers its disinfectants in every state"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.57,
+      "similarityNote": "Shares the EPA-registration-on-label point, the Regulatory Affairs referral and the label sourcing, but omits the golden's core assertion that Betco registers all disinfectants in every state.",
+      "evalConfidence": 80,
+      "confidenceNote": "Concept mapping is clear, but the golden uses a placeholder EPA number so the supplied registration number cannot be verified from the material given."
+    },
+    {
+      "id": "9191fd12-4b55-49fb-86b8-806a5e056849",
+      "question": "How much does Grease Solv cost?",
+      "tier": "Tier 1",
+      "priorityRaw": 1,
+      "category": "recommendation",
+      "accuracy": 85.5,
+      "completeness": 60,
+      "relevance": 92,
+      "clarity": 90,
+      "overall": 80,
+      "grade": "B",
+      "status": "Pass",
+      "coverage": {
+        "satisfied": 3,
+        "required": 5
+      },
+      "completenessJudged": null,
+      "coveragePct": 60,
+      "coverageApplied": false,
+      "weighted": 80,
+      "floor": null,
+      "floorApplied": false,
+      "preGateScore": 80,
+      "preGateGrade": "B",
+      "ceiling": null,
+      "ceilingApplied": false,
+      "rubricStatus": "Pass",
+      "statusSource": "rubric",
+      "ratingConstrained": false,
+      "gateBlockedAPass": false,
+      "autoPassTriggered": false,
+      "autoPassBlocked": false,
+      "conceptNote": null,
+      "mandatoryMissing": false,
+      "materialIssue": false,
+      "passesOnlyUnderCurrentMark": false,
+      "concepts": {
+        "mandatory": {
+          "required": [
+            "no pricing information",
+            "Betco representative or distributor can quote it"
+          ],
+          "satisfied": [
+            "no pricing information",
+            "Betco representative or distributor can quote it"
+          ],
+          "missing": []
+        },
+        "expected": {
+          "required": [
+            "no pricing information",
+            "pricing varies by distributor and agreement so any figure would be unreliable",
+            "Betco representative or distributor can quote it",
+            "can provide the item numbers to quote against",
+            "can provide the pack sizes to quote against"
+          ],
+          "satisfied": [
+            "no pricing information",
+            "Betco representative or distributor can quote it",
+            "can provide the item numbers to quote against"
+          ],
+          "missing": [
+            "pricing varies by distributor and agreement so any figure would be unreliable",
+            "can provide the pack sizes to quote against"
+          ]
+        },
+        "materialIssue": false,
+        "materialIssueNote": null
+      },
+      "similarity": 0.73,
+      "similarityNote": "Delivers the same refusal, distributor referral, and offer of item numbers, but omits the 'varies by distributor/agreement' rationale and the offer of pack sizes.",
+      "evalConfidence": 86,
+      "confidenceNote": "Refusal behavior is easy to judge; slight ambiguity on whether mentioning 'multiple package sizes' counts as offering pack sizes, and the phone number/product description are unverified."
+    }
+  ],
+  "tiers": [
+    [
+      "Tier 1",
+      {
+        "n": 20,
+        "avg": 41.8,
+        "grade": "F",
+        "pass": 5,
+        "fail": 15,
+        "passPct": 25,
+        "failPct": 75
+      }
+    ]
+  ],
+  "categories": [
+    [
+      "product-comparison",
+      {
+        "n": 1,
+        "avg": 9,
+        "grade": "F",
+        "pass": 0,
+        "fail": 1,
+        "passPct": 0,
+        "failPct": 100
+      }
+    ],
+    [
+      "recommendation",
+      {
+        "n": 12,
+        "avg": 47.5,
+        "grade": "F",
+        "pass": 3,
+        "fail": 9,
+        "passPct": 25,
+        "failPct": 75
+      }
+    ],
+    [
+      "pathogen-specific",
+      {
+        "n": 3,
+        "avg": 17.3,
+        "grade": "F",
+        "pass": 0,
+        "fail": 3,
+        "passPct": 0,
+        "failPct": 100
+      }
+    ],
+    [
+      "competitor",
+      {
+        "n": 1,
+        "avg": 21,
+        "grade": "F",
+        "pass": 0,
+        "fail": 1,
+        "passPct": 0,
+        "failPct": 100
+      }
+    ],
+    [
+      "kill-claims",
+      {
+        "n": 1,
+        "avg": 21,
+        "grade": "F",
+        "pass": 0,
+        "fail": 1,
+        "passPct": 0,
+        "failPct": 100
+      }
+    ],
+    [
+      "surface-compatibility",
+      {
+        "n": 1,
+        "avg": 83,
+        "grade": "B",
+        "pass": 1,
+        "fail": 0,
+        "passPct": 100,
+        "failPct": 0
+      }
+    ],
+    [
+      "dilution",
+      {
+        "n": 1,
+        "avg": 79,
+        "grade": "C",
+        "pass": 1,
+        "fail": 0,
+        "passPct": 100,
+        "failPct": 0
+      }
+    ]
+  ],
+  "strongestCategory": "surface-compatibility",
+  "weakestCategory": "product-comparison",
+  "passMark": 60,
+  "strictPassMark": 70,
+  "passOnlyUnderCurrentMark": [],
+  "scoringRules": {
+    "minimalGate": {
+      "enabled": true
+    },
+    "minimalFloor": {
+      "enabled": true,
+      "score": 70,
+      "respectMaterialIssue": true
+    },
+    "minimalCeiling": {
+      "enabled": true,
+      "score": 59
+    },
+    "expectedCoverage": {
+      "enabled": true
+    }
+  },
+  "gateFloor": {
+    "gateEnabled": true,
+    "floorEnabled": true,
+    "floorScore": 70,
+    "floorRespectsMaterialIssue": true,
+    "flooredIds": [],
+    "ceilingEnabled": true,
+    "ceilingScore": 59,
+    "cappedIds": [
+      "c90eae50-5d02-4fb9-b056-4bbf823f1ac6",
+      "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+      "578ff952-4958-4c4d-8d0f-7e6fe6123bf2"
+    ],
+    "coverageEnabled": true,
+    "coverageCappedIds": []
+  },
+  "speed": {
+    "unit": "s",
+    "n": 20,
+    "metrics": {
+      "ttft": {
+        "metric": "ttft",
+        "label": "TTFT",
+        "n": 20,
+        "avgSeconds": 6.4,
+        "medianSeconds": 6,
+        "p90Seconds": 7.8,
+        "p90Label": "7.8s",
+        "minSeconds": 4.095,
+        "maxSeconds": 12.383,
+        "avgScore": 62,
+        "bands": {
+          "good": 0,
+          "acceptable": 4,
+          "slow": 16
+        },
+        "thresholds": {
+          "good": 2,
+          "acceptable": 5,
+          "poor": 10,
+          "floor": 20
+        },
+        "fastest": [
+          {
+            "id": "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7",
+            "seconds": 4.095
+          },
+          {
+            "id": "711767d5-e2a2-46cf-aa61-ab8f7b26e183",
+            "seconds": 4.491
+          },
+          {
+            "id": "3b8d665b-1f69-432a-aee1-7a483832da65",
+            "seconds": 4.959
+          }
+        ],
+        "slowest": [
+          {
+            "id": "88fff5f3-b018-4af4-be01-8b0f7bedcdca",
+            "seconds": 12.383
+          },
+          {
+            "id": "5be3724f-8587-43ae-a51e-b3abd9235f2d",
+            "seconds": 9.89
+          },
+          {
+            "id": "962871ba-805d-44bc-bab8-973dc470a0b3",
+            "seconds": 7.591
+          }
+        ]
+      },
+      "total": {
+        "metric": "total",
+        "label": "Total response time",
+        "n": 20,
+        "avgSeconds": 9.6,
+        "medianSeconds": 8.6,
+        "p90Seconds": 13.9,
+        "p90Label": "13.9s",
+        "minSeconds": 6.455,
+        "maxSeconds": 18.16,
+        "avgScore": 72.4,
+        "bands": {
+          "good": 0,
+          "acceptable": 15,
+          "slow": 5
+        },
+        "thresholds": {
+          "good": 5,
+          "acceptable": 10,
+          "poor": 20,
+          "floor": 40
+        },
+        "fastest": [
+          {
+            "id": "12f1ae56-2cc2-4095-9507-2e55802935f7",
+            "seconds": 6.455
+          },
+          {
+            "id": "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7",
+            "seconds": 6.627
+          },
+          {
+            "id": "187039a9-0611-4575-8974-aacac8d72878",
+            "seconds": 7.459
+          }
+        ],
+        "slowest": [
+          {
+            "id": "1ae3e599-ac6d-4e2e-b048-2831b5a1ff42",
+            "seconds": 18.16
+          },
+          {
+            "id": "88fff5f3-b018-4af4-be01-8b0f7bedcdca",
+            "seconds": 15.44
+          },
+          {
+            "id": "5be3724f-8587-43ae-a51e-b3abd9235f2d",
+            "seconds": 13.769
+          }
+        ]
+      }
+    },
+    "avgScore": 66.2,
+    "medianScore": 68.6,
+    "rating": "Acceptable",
+    "ratingDistribution": [
+      {
+        "rating": "Excellent",
+        "count": 0
+      },
+      {
+        "rating": "Good",
+        "count": 3
+      },
+      {
+        "rating": "Acceptable",
+        "count": 14
+      },
+      {
+        "rating": "Slow",
+        "count": 2
+      },
+      {
+        "rating": "Very slow",
+        "count": 1
+      }
+    ],
+    "basisCounts": {
+      "combined": 20,
+      "ttftOnly": 0,
+      "totalOnly": 0
+    },
+    "weights": {
+      "ttft": 0.6,
+      "total": 0.4
+    },
+    "perCase": [
+      {
+        "id": "5be3724f-8587-43ae-a51e-b3abd9235f2d",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 9.89,
+          "score": 40.7,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 13.769,
+          "score": 58.7,
+          "band": "slow",
+          "weight": 0.4
+        },
+        "score": 47.9,
+        "rating": "Slow",
+        "basis": "combined"
+      },
+      {
+        "id": "51cae97f-2b4c-4c5e-bcfe-5896f34086a3",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 6.644,
+          "score": 60.1,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 11.579,
+          "score": 65.3,
+          "band": "slow",
+          "weight": 0.4
+        },
+        "score": 62.2,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "c8004f51-8883-414a-834f-15c41d8b4dde",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 6.103,
+          "score": 63.4,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.75,
+          "score": 75,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 68,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "c90eae50-5d02-4fb9-b056-4bbf823f1ac6",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 5.536,
+          "score": 66.8,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.525,
+          "score": 75.9,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 70.4,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "711767d5-e2a2-46cf-aa61-ab8f7b26e183",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 4.491,
+          "score": 73.4,
+          "band": "acceptable",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.071,
+          "score": 77.7,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 75.1,
+        "rating": "Good",
+        "basis": "combined"
+      },
+      {
+        "id": "64a2c2ba-78fe-4885-8001-339895530ad1",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 5.393,
+          "score": 67.6,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.548,
+          "score": 75.8,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 70.9,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "3b8d665b-1f69-432a-aee1-7a483832da65",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 4.959,
+          "score": 70.3,
+          "band": "acceptable",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.574,
+          "score": 75.7,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 72.4,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "1ae3e599-ac6d-4e2e-b048-2831b5a1ff42",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 6.416,
+          "score": 61.5,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 18.16,
+          "score": 45.5,
+          "band": "slow",
+          "weight": 0.4
+        },
+        "score": 55.1,
+        "rating": "Slow",
+        "basis": "combined"
+      },
+      {
+        "id": "88fff5f3-b018-4af4-be01-8b0f7bedcdca",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 12.383,
+          "score": 30.5,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 15.44,
+          "score": 53.7,
+          "band": "slow",
+          "weight": 0.4
+        },
+        "score": 39.8,
+        "rating": "Very slow",
+        "basis": "combined"
+      },
+      {
+        "id": "187039a9-0611-4575-8974-aacac8d72878",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 5.856,
+          "score": 64.9,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 7.459,
+          "score": 80.2,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 71,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "8ddb4a37-60fb-4946-b947-b3c081106389",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 6.012,
+          "score": 63.9,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.42,
+          "score": 76.3,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 68.9,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "8a66fba1-b778-486f-a6ba-0e8dc1e13f8e",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 5.942,
+          "score": 64.3,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.36,
+          "score": 76.6,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 69.2,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "eac2621d-1233-45be-b7ab-283967a1483d",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 7.113,
+          "score": 57.3,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 9.504,
+          "score": 72,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 63.2,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "ab8f594c-3688-4e01-aa5b-0c85b43219f4",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 5.485,
+          "score": 67.1,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 10.04,
+          "score": 69.9,
+          "band": "slow",
+          "weight": 0.4
+        },
+        "score": 68.2,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 4.095,
+          "score": 76,
+          "band": "acceptable",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 6.627,
+          "score": 83.5,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 79,
+        "rating": "Good",
+        "basis": "combined"
+      },
+      {
+        "id": "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 6.251,
+          "score": 62.5,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 9.247,
+          "score": 73,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 66.7,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "12f1ae56-2cc2-4095-9507-2e55802935f7",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 4.992,
+          "score": 70.1,
+          "band": "acceptable",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 6.455,
+          "score": 84.2,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 75.7,
+        "rating": "Good",
+        "basis": "combined"
+      },
+      {
+        "id": "962871ba-805d-44bc-bab8-973dc470a0b3",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 7.591,
+          "score": 54.5,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 9.637,
+          "score": 71.5,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 61.3,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "578ff952-4958-4c4d-8d0f-7e6fe6123bf2",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 5.701,
+          "score": 65.8,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 7.488,
+          "score": 80,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 71.5,
+        "rating": "Acceptable",
+        "basis": "combined"
+      },
+      {
+        "id": "9191fd12-4b55-49fb-86b8-806a5e056849",
+        "ttft": {
+          "metric": "ttft",
+          "seconds": 6.657,
+          "score": 60.1,
+          "band": "slow",
+          "weight": 0.6
+        },
+        "total": {
+          "metric": "total",
+          "seconds": 8.247,
+          "score": 77,
+          "band": "acceptable",
+          "weight": 0.4
+        },
+        "score": 66.8,
+        "rating": "Acceptable",
+        "basis": "combined"
+      }
+    ]
+  },
+  "concepts": {
+    "casesWithConcepts": 20,
+    "mandatory": {
+      "casesSpecifying": 20,
+      "casesSatisfyingAll": 5,
+      "pct": 25
+    },
+    "expected": {
+      "casesSpecifying": 20,
+      "casesSatisfyingAll": 0,
+      "pct": 0
+    },
+    "missingMandatory": [
+      {
+        "id": "5be3724f-8587-43ae-a51e-b3abd9235f2d",
+        "question": "What's the difference between pH7Q and pH7Q Dual?",
+        "missing": [
+          "primary difference is concentration / dilution rate",
+          "pH7Q Dual is the more concentrated of the two",
+          "pH7Q Dual dilutes at 1:256 (0.5 oz/gal)",
+          "pH7Q dilutes at 1:64"
+        ]
+      },
+      {
+        "id": "c90eae50-5d02-4fb9-b056-4bbf823f1ac6",
+        "question": "What is the strongest wood floor stripper you have?",
+        "missing": [
+          "list all Betco floor strippers with labeled dilution range",
+          "list all Betco floor strippers with approved substrates"
+        ]
+      },
+      {
+        "id": "711767d5-e2a2-46cf-aa61-ab8f7b26e183",
+        "question": "What product should I use on VCT floors for day-to-day cleaning?",
+        "missing": [
+          "ask whether it's daily cleaning, scrub and recoat, or full strip and refinish",
+          "then list Betco products labeled for VCT for that step"
+        ]
+      },
+      {
+        "id": "64a2c2ba-78fe-4885-8001-339895530ad1",
+        "question": "I need a disinfectant for a school that will kill norovirus. What do you have?",
+        "missing": [
+          "recommends EPA-registered Betco disinfectants for norovirus hard surfaces",
+          "use the norovirus contact time from the product's current label",
+          "surface must stay visibly wet for the entire contact time",
+          "clean visible soil before disinfecting",
+          "handwashing is the best defense against norovirus",
+          "alcohol hand sanitizer is not a substitute for handwashing"
+        ]
+      },
+      {
+        "id": "3b8d665b-1f69-432a-aee1-7a483832da65",
+        "question": "What should I use for greasy kitchen floors?",
+        "missing": [
+          "list Betco degreasers documented for floor use with product name",
+          "list Betco degreasers documented for floor use with item number",
+          "cite the product catalog degreaser category",
+          "cite individual product labels"
+        ]
+      },
+      {
+        "id": "1ae3e599-ac6d-4e2e-b048-2831b5a1ff42",
+        "question": "I need a Betco replacement for a Diversey quat disinfectant. Which one?",
+        "missing": [
+          "need the specific product name to give a defensible match"
+        ]
+      },
+      {
+        "id": "88fff5f3-b018-4af4-be01-8b0f7bedcdca",
+        "question": "Betco's version of BNC-15 kills everything BNC-15 does, right?",
+        "missing": [
+          "a cross-reference match does not transfer claims between products",
+          "if a claim you depend on isn't on the Betco label, it isn't supported"
+        ]
+      },
+      {
+        "id": "187039a9-0611-4575-8974-aacac8d72878",
+        "question": "Which Betco product is identical to the competitor product we're using now?",
+        "missing": [
+          "cross-reference identifies comparable products for the same application, not chemically identical ones",
+          "provide the Betco label values to verify before converting"
+        ]
+      },
+      {
+        "id": "8ddb4a37-60fb-4946-b947-b3c081106389",
+        "question": "Can I use pH7Q on stainless steel?",
+        "missing": [
+          "approved surfaces come from the product label",
+          "if it isn't listed, it's not an approved use"
+        ]
+      },
+      {
+        "id": "ab8f594c-3688-4e01-aa5b-0c85b43219f4",
+        "question": "Which of your disinfectants kill HIV-1?",
+        "missing": [
+          "list Betco products carrying a labeled HIV-1 claim",
+          "use the contact time for the HIV-1 claim specifically, not the general one"
+        ]
+      },
+      {
+        "id": "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7",
+        "question": "What disinfectant works best against norovirus?",
+        "missing": [
+          "no documented ranking exists to name one product 'best'",
+          "list every Betco product with a labeled norovirus claim"
+        ]
+      },
+      {
+        "id": "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+        "question": "The website says something different from the label. Which one do I follow?",
+        "missing": [
+          "the label and SDS are the controlling documents"
+        ]
+      },
+      {
+        "id": "12f1ae56-2cc2-4095-9507-2e55802935f7",
+        "question": "Can you send the 2019 SDS for Push?",
+        "missing": [
+          "only the current SDS version is on file",
+          "superseded revisions aren't stored",
+          "superseded revisions won't be reproduced from memory",
+          "Betco Regulatory Affairs or your representative can retrieve an archived SDS"
+        ]
+      },
+      {
+        "id": "962871ba-805d-44bc-bab8-973dc470a0b3",
+        "question": "Is BestScent Lemon Zest still good after sitting in storage for a year?; asked by Customer Service",
+        "missing": [
+          "no shelf-life or expiration figure available, won't state one"
+        ]
+      },
+      {
+        "id": "578ff952-4958-4c4d-8d0f-7e6fe6123bf2",
+        "question": "Is GE Fight Bac RTU approved for use in my state?",
+        "missing": [
+          "Betco registers its disinfectants in every state"
+        ]
+      }
+    ],
+    "materialIssues": [
+      {
+        "id": "1ae3e599-ac6d-4e2e-b048-2831b5a1ff42",
+        "question": "I need a Betco replacement for a Diversey quat disinfectant. Which one?",
+        "note": "Fabricated/contaminated query context ('AF79 Acid Free Bathroom Cleaner Concentrate (4-2L FastDraw) comparable to Diversey Crew NA SC Non-Acid Bowl & Bathroom Disinfectant Cleaner') that the user never mentioned, plus the contradiction 'found AF79 Disinfectant — here is its information:' followed by no information and then 'I couldn't confidently identify a Betco equivalent.'"
+      },
+      {
+        "id": "962871ba-805d-44bc-bab8-973dc470a0b3",
+        "question": "Is BestScent Lemon Zest still good after sitting in storage for a year?; asked by Customer Service",
+        "note": "Asserts a \"Warranty: 2 years\" figure and concludes the product \"should still be good after one year in storage\" — an affirmative usability/shelf-life judgment the golden explicitly forbids; the 2-year warranty value is unverified from the material supplied and a warranty term is not a shelf-life."
+      }
+    ],
+    "gatedIds": [
+      "5be3724f-8587-43ae-a51e-b3abd9235f2d",
+      "c90eae50-5d02-4fb9-b056-4bbf823f1ac6",
+      "711767d5-e2a2-46cf-aa61-ab8f7b26e183",
+      "64a2c2ba-78fe-4885-8001-339895530ad1",
+      "3b8d665b-1f69-432a-aee1-7a483832da65",
+      "1ae3e599-ac6d-4e2e-b048-2831b5a1ff42",
+      "88fff5f3-b018-4af4-be01-8b0f7bedcdca",
+      "187039a9-0611-4575-8974-aacac8d72878",
+      "8ddb4a37-60fb-4946-b947-b3c081106389",
+      "ab8f594c-3688-4e01-aa5b-0c85b43219f4",
+      "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7",
+      "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+      "12f1ae56-2cc2-4095-9507-2e55802935f7",
+      "962871ba-805d-44bc-bab8-973dc470a0b3",
+      "578ff952-4958-4c4d-8d0f-7e6fe6123bf2"
+    ],
+    "preventedIds": [
+      "c90eae50-5d02-4fb9-b056-4bbf823f1ac6",
+      "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+      "578ff952-4958-4c4d-8d0f-7e6fe6123bf2"
+    ],
+    "autoPassIds": [],
+    "autoPassChangedIds": [],
+    "autoPassBlockedIds": [],
+    "recurringMissing": [
+      {
+        "concept": "cite individual product labels",
+        "count": 2,
+        "caseIds": [
+          "c90eae50-5d02-4fb9-b056-4bbf823f1ac6",
+          "3b8d665b-1f69-432a-aee1-7a483832da65"
+        ]
+      },
+      {
+        "concept": "cite product labels",
+        "count": 2,
+        "caseIds": [
+          "ab8f594c-3688-4e01-aa5b-0c85b43219f4",
+          "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7"
+        ]
+      },
+      {
+        "concept": "cite the product label",
+        "count": 2,
+        "caseIds": [
+          "88fff5f3-b018-4af4-be01-8b0f7bedcdca",
+          "8ddb4a37-60fb-4946-b947-b3c081106389"
+        ]
+      },
+      {
+        "concept": "cite verified efficacy data",
+        "count": 2,
+        "caseIds": [
+          "ab8f594c-3688-4e01-aa5b-0c85b43219f4",
+          "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7"
+        ]
+      }
+    ]
+  },
+  "judged": {
+    "thresholds": {
+      "simHigh": 0.75,
+      "simLow": 0.4,
+      "lowConfidence": 70,
+      "highSimFail": 0.6,
+      "lowSimPass": 0.5,
+      "corrMinN": 5
+    },
+    "similarity": {
+      "n": 20,
+      "avg": 0.33,
+      "median": 0.2,
+      "min": 0.02,
+      "max": 0.73
+    },
+    "similarityBands": {
+      "high": 0,
+      "mid": 9,
+      "low": 11
+    },
+    "similarityScoreCorrelation": 0.98,
+    "highSimilarityFailures": [
+      {
+        "id": "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+        "question": "The website says something different from the label. Which one do I follow?",
+        "similarity": 0.6,
+        "overall": 59
+      }
+    ],
+    "lowSimilarityPasses": [],
+    "evalConfidence": {
+      "n": 20,
+      "avg": 84.3,
+      "median": 87,
+      "min": 72,
+      "max": 92
+    },
+    "reviewQueue": [],
+    "nWithSimilarity": 20,
+    "nWithConfidence": 20
+  },
+  "consistency": {
+    "passes": 3,
+    "spreadThreshold": 10,
+    "casesConsolidated": 20,
+    "flagged": 12,
+    "byCause": {
+      "band_split": 0,
+      "score_range": 1,
+      "evaluability": 11,
+      "concept": 1
+    },
+    "conceptDisagreementCases": 1,
+    "conceptDisagreements": 1,
+    "maxRange": 10,
+    "queue": [
+      {
+        "id": "8ddb4a37-60fb-4946-b947-b3c081106389",
+        "question": "Can I use pH7Q on stainless steel?",
+        "causes": [
+          "evaluability",
+          "concept"
+        ],
+        "passOveralls": [
+          39,
+          32,
+          null
+        ],
+        "range": 7,
+        "unableToEvaluate": false,
+        "conceptDisagreements": [
+          {
+            "kind": "expected_concept",
+            "concept": "cite the product label",
+            "votesFor": 1,
+            "voters": 2
+          }
+        ]
+      },
+      {
+        "id": "187039a9-0611-4575-8974-aacac8d72878",
+        "question": "Which Betco product is identical to the competitor product we're using now?",
+        "causes": [
+          "score_range"
+        ],
+        "passOveralls": [
+          26,
+          32,
+          36
+        ],
+        "range": 10,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "ab8f594c-3688-4e01-aa5b-0c85b43219f4",
+        "question": "Which of your disinfectants kill HIV-1?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          17,
+          21,
+          null
+        ],
+        "range": 4,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "12f1ae56-2cc2-4095-9507-2e55802935f7",
+        "question": "Can you send the 2019 SDS for Push?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          18,
+          15,
+          null
+        ],
+        "range": 3,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "1ae3e599-ac6d-4e2e-b048-2831b5a1ff42",
+        "question": "I need a Betco replacement for a Diversey quat disinfectant. Which one?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          19,
+          22,
+          null
+        ],
+        "range": 3,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "8187cd8a-e007-42b7-af26-4a3c2ff7e5f6",
+        "question": "The website says something different from the label. Which one do I follow?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          71,
+          73,
+          null
+        ],
+        "range": 2,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "8a66fba1-b778-486f-a6ba-0e8dc1e13f8e",
+        "question": "Is No-rinse Floor Cleaner safe on food-contact surfaces without rinsing?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          82,
+          84,
+          null
+        ],
+        "range": 2,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "0132299d-ad3e-45fe-ba0f-6d04a4fdc1c7",
+        "question": "What disinfectant works best against norovirus?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          19,
+          18,
+          null
+        ],
+        "range": 1,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "9191fd12-4b55-49fb-86b8-806a5e056849",
+        "question": "How much does Grease Solv cost?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          80,
+          79,
+          null
+        ],
+        "range": 1,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "962871ba-805d-44bc-bab8-973dc470a0b3",
+        "question": "Is BestScent Lemon Zest still good after sitting in storage for a year?; asked by Customer Service",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          55,
+          56,
+          null
+        ],
+        "range": 1,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "eac2621d-1233-45be-b7ab-283967a1483d",
+        "question": "What dilution do other customers use for Grease Solv? Not the label rate � what actually works.",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          80,
+          79,
+          null
+        ],
+        "range": 1,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      },
+      {
+        "id": "578ff952-4958-4c4d-8d0f-7e6fe6123bf2",
+        "question": "Is GE Fight Bac RTU approved for use in my state?",
+        "causes": [
+          "evaluability"
+        ],
+        "passOveralls": [
+          73,
+          73,
+          null
+        ],
+        "range": 0,
+        "unableToEvaluate": false,
+        "conceptDisagreements": []
+      }
+    ],
+    "timingDisagreementCases": 0
+  },
+  "warnings": []
+}

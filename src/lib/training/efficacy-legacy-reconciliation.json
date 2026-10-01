@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-07-24",
+  "ticket": "B0-225",
+  "summary": "Reconciliation of the 24 legacy efficacy markdown sheets (efficacy/markdown/legacy/*.md, product-code-keyed) against the 70 new formula-keyed reports (efficacy/markdown/hygiene-skin-care/**, M000xxx formulas). Finding: the two sets cover ENTIRELY DIFFERENT product categories with zero overlap. The legacy 24 are hard-surface/general-purpose disinfectants, sanitizers, and virucides (floor/bathroom/food-contact-surface cleaners: Rest Stop, AF79, Pine Quat, Fight-Bac, GE Fight Bac, Glybet, Cide-bet, Sure Bet, Triforce, Quat-Stat, pH7Q, Sanibet, VersiFect, Daily Disinfectant Dual). The new 70 are all M000xxx hand-hygiene/skin-care formulas (Winning Hands hand soaps, Clario Ultra Blue, ethanol hand sanitizers). Different EPA registration numbers, different formula codes, different product identities, different label-claim families. As a result, NONE of the 24 legacy sheets are superseded by anything in the new 70-report set — classification instead reduces to internal duplicate detection within the legacy 24 themselves.",
+  "cross_reference_method": "Read all 24 legacy files' frontmatter (formula_code, product_name, epa_reg_no) and body (organism/claim tables), and all 54 Master Version Table rows / 70 raw PDF filenames from B0-223. Matched on formula_code, product name, and EPA registration number. No formula_code, product name, or EPA reg number match was found between the legacy 24 and the new 70/54.",
+  "sql_footgun_check": "Grepped all 24 legacy .md files for SELECT/INSERT/UPDATE/CREATE TABLE/document_chunks/snowflake (case-insensitive) — none found embedded in any of the 24 files. The ticket's warned-about legacy Snowflake document_chunks SQL was not present in this batch of files; if it exists it lives elsewhere and was not touched or adapted here.",
+  "classification_counts": {
+    "superseded-by-new-report": 0,
+    "unique-still-valuable": 22,
+    "drop": 2
+  },
+  "files": [
+    {
+      "key": "efficacy/markdown/legacy/070-efficacy-sheet.md",
+      "formula_code": "070",
+      "product_name": "Rest Stop",
+      "epa_reg_no": "47371-97-4170",
+      "classification": "drop",
+      "reason": "Byte-for-byte identical content to efficacy/markdown/legacy/Efficacy_Data_070_Rest_Stop.md (diff shows only the source_pdf frontmatter field differs). Redundant duplicate — recommend keeping the Efficacy_Data_*-named copy (matches the naming convention used by 20 of the 24 files) and dropping this one."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_070_Rest_Stop.md",
+      "formula_code": "070",
+      "product_name": "Rest Stop",
+      "epa_reg_no": "47371-97-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match anywhere in the new 70-report set or B0-223 version table. Hard-surface disinfectant (household/institutional floors, walls, countertops) — distinct product category from the M000xxx hand-hygiene formulas. Keep as the canonical copy of this legacy sheet (see the dropped duplicate above)."
+    },
+    {
+      "key": "efficacy/markdown/legacy/af79-efficacy-sheet.md",
+      "formula_code": "079",
+      "product_name": "AF79",
+      "epa_reg_no": "6836-193-4170",
+      "classification": "drop",
+      "reason": "Byte-for-byte identical content to efficacy/markdown/legacy/Efficacy_Data_079_AF79.md (diff shows only the source_pdf frontmatter field differs). Redundant duplicate — recommend keeping the Efficacy_Data_*-named copy and dropping this one."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_079_AF79.md",
+      "formula_code": "079",
+      "product_name": "AF79",
+      "epa_reg_no": "6836-193-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match anywhere in the new 70-report set. Distinct product/registration from '331 — AF79 Concentrate' (different EPA reg 6836-73-4170) despite the shared 'AF79' brand name — both kept as separate SKUs. Keep as the canonical copy (see the dropped duplicate above)."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_087_Cidebet_II.md",
+      "formula_code": "087",
+      "product_name": "Betco Cide-bet II",
+      "epa_reg_no": "706-65-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. No duplicate legacy sibling. Distinct hospital/healthcare-facility disinfectant with a large bactericidal/virucidal/fungicidal claim list not otherwise represented."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_1086_Glybet_III.md",
+      "formula_code": "1086",
+      "product_name": "Betco Glybet III",
+      "epa_reg_no": "67603-4-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. No duplicate legacy sibling. Mold/mildew/disinfectant claim set not otherwise represented."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_237_Sanibet_Multi_Range.md",
+      "formula_code": "237",
+      "product_name": "Symplicity Sanibet Multi-Range",
+      "epa_reg_no": "6836-266-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. Food-contact-surface sanitizer claim set (dilution/hard-water/contact-time table format, distinct from the bactericidal/virucidal table format used elsewhere) — not otherwise represented. Distinct product/registration from 'Sanibet RTU' (342, different EPA reg)."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_304_Pine_Quat.md",
+      "formula_code": "304",
+      "product_name": "Betco Pine Quat",
+      "epa_reg_no": "47371-192-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. Very large (50+ organism) bactericidal/virucidal/fungicidal/mildewstat claim list including SARS-CoV-2 — not otherwise represented."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_311_Fight_Bac.md",
+      "formula_code": "311",
+      "product_name": "Betco Disinfectant Fight-Bac™ RTU",
+      "epa_reg_no": "1839-83-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. US label-claim sheet; paired with the Canadian variant below (same formula_code 311, no EPA reg listed, slightly different organism list) — both kept, per US+Canada label/regulatory scope."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_311_Fight_Bac_Canada.md",
+      "formula_code": "311",
+      "product_name": "Fight-Bac™ RTU Disinfectant Cleaner",
+      "epa_reg_no": null,
+      "classification": "unique-still-valuable",
+      "reason": "Canadian counterpart to Efficacy_Data_311_Fight_Bac.md (same formula_code, no EPA reg printed — expected for a Canadian sheet, which would carry a DIN/PCP number instead, not captured on this sheet). Organism list differs slightly from the US sheet (e.g. adds Klebsiella pneumoniae NDM-1, drops a few US-only strains) — not a pure duplicate, keep both."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_314_Surebet_II.md",
+      "formula_code": "314",
+      "product_name": "Sure Bet II",
+      "epa_reg_no": "6836-86-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. No duplicate legacy sibling."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_315_AF315.md",
+      "formula_code": "315",
+      "product_name": "AF315",
+      "epa_reg_no": "6836-165-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. Distinct registration from AF79 (079) and AF79 Concentrate (331) despite the shared 'AF' naming convention."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_316_PH7q.md",
+      "formula_code": "316",
+      "product_name": "pH7Q",
+      "epa_reg_no": "47371-131-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. Distinct formula_code and EPA reg from 'pH7Q Dual' (355, EPA 10324-141-4170) despite the shared 'pH7Q' brand name — kept as a separate SKU."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_331_AF79_Concentrate.md",
+      "formula_code": "331",
+      "product_name": "AF79 Concentrate",
+      "epa_reg_no": "6836-73-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. Distinct registration from AF79 (079) — different EPA reg number, concentrate vs. ready-to-use — kept as a separate SKU."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_333_Triforce.md",
+      "formula_code": "333",
+      "product_name": "Triforce",
+      "epa_reg_no": "6836-349-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. Large modern claim list (includes SARS-CoV-2, animal-premise virucidal, sanitizer assay types) not otherwise represented."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_341_Quat-Stat_5.md",
+      "formula_code": "341",
+      "product_name": "Quat-Stat 5",
+      "epa_reg_no": "6836-361-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. No duplicate legacy sibling."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_342_Sanibet_RTU.md",
+      "formula_code": "342",
+      "product_name": "Sanibet RTU",
+      "epa_reg_no": "6836-290-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. Distinct registration from 'Symplicity Sanibet Multi-Range' (237) despite the shared 'Sanibet' brand name — kept as a separate SKU."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_355_pH7Q_Dual.md",
+      "formula_code": "355",
+      "product_name": "pH7Q Dual",
+      "epa_reg_no": "10324-141-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. US sheet; paired with the Canadian counterpart below (same formula_code 355, sold under a different brand name in Canada, per the Canadian sheet's own DIN# text) — both kept."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_3820_VersiFect.md",
+      "formula_code": "3820",
+      "product_name": "VersiFect™",
+      "epa_reg_no": "1839-224-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. No duplicate legacy sibling."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_390_Ge_Fight_Bac_RTU.md",
+      "formula_code": "390",
+      "product_name": "GE Fight Bac™ RTU",
+      "epa_reg_no": "34810-35-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. US sheet; paired with the Canadian counterpart below (same formula_code, no EPA reg listed, a few organism differences) — both kept."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_390_Ge_Fight_Bac_RTU_Canadian.md",
+      "formula_code": "390",
+      "product_name": "GE Fight Bac™ RTU - Canadian",
+      "epa_reg_no": null,
+      "classification": "unique-still-valuable",
+      "reason": "Canadian counterpart to Efficacy_Data_390_Ge_Fight_Bac_RTU.md (same formula_code, no EPA reg printed as expected for a Canadian sheet). Organism list differs (drops a few US-only claims, adds 'Pandemic 2009 H1N1') — not a pure duplicate, keep both."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_392_Ge_Fight_Bac_Wipes_Canada.md",
+      "formula_code": "392",
+      "product_name": "GE Fight-Bac™ Wipes",
+      "epa_reg_no": null,
+      "classification": "unique-still-valuable",
+      "reason": "Canadian counterpart to Efficacy_Data_Ge_Fight_Bac_Wipes.md (same formula_code 392, no EPA reg printed). Organism list is a subset of the US sheet's — not a pure duplicate, keep both per US+Canada scope."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficacy_Data_Ge_Fight_Bac_Wipes.md",
+      "formula_code": "392",
+      "product_name": "GE Fight-Bac™ Wipes",
+      "epa_reg_no": "34810-36-4170",
+      "classification": "unique-still-valuable",
+      "reason": "No formula/EPA-reg match in the new 70-report set. US sheet; paired with the Canadian counterpart above."
+    },
+    {
+      "key": "efficacy/markdown/legacy/Efficay_Datasheet_355_Daily_Disinfectant_Dual.md",
+      "formula_code": "355",
+      "product_name": "Daily Disinfectant Dual",
+      "epa_reg_no": null,
+      "classification": "unique-still-valuable",
+      "reason": "Canadian counterpart to Efficacy_Data_355_pH7Q_Dual.md — same formula_code 355, and the sheet's own body text confirms it: 'Legacy label-claim datasheet (Canadian, DIN# 02451263) for Daily Disinfectant Dual' with an organism table matching pH7Q Dual's almost exactly. Sold under a different brand name in Canada. Not a pure duplicate (dilution/use-rate directions differ slightly between the two sheets) — keep both."
+    }
+  ],
+  "notable_cross_references_within_legacy_set": [
+    "070 (Rest Stop) and 079 (AF79) each have an exact-duplicate file pair — see 'drop' entries above.",
+    "311, 390, 392, and 355 each have a US/Canada regional pair sharing one formula_code — all 8 files kept, none dropped, since US and Canada are both in-scope per the org's label/regulatory rule.",
+    "079 (AF79) and 331 (AF79 Concentrate) share a brand name but are registered as distinct products (different EPA reg numbers) — both kept as separate SKUs, not merged.",
+    "316 (pH7Q) and 355 (pH7Q Dual) share a brand name but are registered as distinct products (different EPA reg numbers, different formula codes) — both kept as separate SKUs.",
+    "237 (Symplicity Sanibet Multi-Range) and 342 (Sanibet RTU) share a brand name but are registered as distinct products — both kept as separate SKUs."
+  ]
+}
