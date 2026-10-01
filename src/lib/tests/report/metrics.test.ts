@@ -1333,6 +1333,31 @@ describe('report invariants (B0-714 / B0-815 / B0-835)', () => {
     expect(() => assertReportInvariants(context())).not.toThrow();
   });
 
+  it('B0-1128 — mandatory_subset_of_expected compares phrases under normConcept identity', () => {
+    // `requiredConcepts` dedups the expected union by normalized text, so a mandatory phrase that
+    // differs from its expected twin only by punctuation/case is never appended to expected. The
+    // invariant must use the same identity or every report for that item is refused
+    // (test item f225e2d8, 2026-09-30).
+    const punctuated = `${CONCEPT.dilution.toUpperCase()},`;
+    expect(() =>
+      assertReportInvariants(
+        context({
+          evaluated: [
+            {
+              ...PASSING,
+              concepts: {
+                mandatory: coverage([punctuated], []),
+                expected: coverage([CONCEPT.dilution, CONCEPT.metric], []),
+                materialIssue: false,
+                materialIssueNote: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
   it('passes a correctly gated, correctly capped case', () => {
     expect(() =>
       assertReportInvariants(

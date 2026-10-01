@@ -27,8 +27,22 @@
  * itself) and, since B0-899, never a `claude-*` tag either — the Anthropic default lives in its own
  * row (`BEX_ANTHROPIC_MODEL`, validated against `ANTHROPIC_MODEL_TAGS`) and `BEX_LLM_PROVIDER`
  * picks which of the two `preview` reads. Same order as they appear in `BEX_MODEL_TAGS`.
+ *
+ * B0-1118 — the explicit gpt-5.6 tiers (`-sol` frontier, `-terra` balanced, `-luna` cost-optimized)
+ * and `gpt-5.4-nano` are first-class tags, so each can be selected and cost-reported on its own
+ * instead of only through the `gpt-5.6` alias or an env pin. `gpt-5.6` is kept: this is additive.
  */
-export const OPENAI_MODEL_TAGS = ['gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5', 'gpt-5.6'] as const;
+export const OPENAI_MODEL_TAGS = [
+  'gpt-4o',
+  'gpt-4.1-mini',
+  'gpt-4.1',
+  'gpt-5.5',
+  'gpt-5.6',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.4-nano',
+] as const;
 
 export type OpenAiModelTag = (typeof OPENAI_MODEL_TAGS)[number];
 
@@ -146,7 +160,16 @@ export const MODEL_DESCRIPTIONS: Record<BexModelTag, string> = {
   'gpt-5.5':
     'Resolves to gpt-5.5-2026-04-23. Candidate validator model (B0-603). $5.00 → $30.00 per Mtok — ~2.5x gpt-4.1 in, ~3.75x out.',
   'gpt-5.6':
-    'Alias for gpt-5.6-sol. Candidate orchestrator/routing model (B0-604). $5.00 → $30.00 per Mtok. Pin an explicit -sol/-terra/-luna id if the alias target matters.',
+    'Alias for gpt-5.6-sol. Candidate orchestrator/routing model (B0-604). $5.00 → $30.00 per Mtok. The explicit gpt-5.6-sol / -terra / -luna tiers are now selectable as their own tags (B0-1118); pick one of those if the alias target matters.',
+  // B0-1118 — explicit gpt-5.6 tiers and gpt-5.4-nano; all four live-verified servable 2026-09-30.
+  'gpt-5.6-sol':
+    'Frontier gpt-5.6 tier; the id the gpt-5.6 alias currently resolves to. $5.00 → $30.00 per Mtok. Use for the highest-quality comparison arm.',
+  'gpt-5.6-terra':
+    'Balanced gpt-5.6 tier. $2.00 → $12.00 per Mtok — 2.5x cheaper than sol in and out. Use when sol-level quality is not needed but 5.6 behaviour is.',
+  'gpt-5.6-luna':
+    'Cost-optimized gpt-5.6 tier. $0.20 → $1.20 per Mtok — 25x cheaper than sol; cheaper than gpt-4.1-mini. Use for high-volume or single-shot calls (router, classifier).',
+  'gpt-5.4-nano':
+    'Fastest and cheapest gpt-5.4 tier; resolves to the dated gpt-5.4-nano snapshot. Pricing is NOT yet seeded in model_pricing, so runs on this tag are dropped from cost reporting until it is. Use for latency-sensitive evaluation arms.',
   // B0-908 — Anthropic first-party Claude API standard rates (model table cached 2026-06-24).
   'claude-haiku-4-5':
     'Anthropic equivalent of gpt-4.1-mini. Cheapest Claude tier; 200K context. $1.00 → $5.00 per Mtok. Called on the Anthropic Messages API; needs ANTHROPIC_API_KEY.',
@@ -175,6 +198,11 @@ const supportedModels: SupportedModel[] = [
   },
   { name: 'gpt-5.5', label: 'Model: gpt-5.5' },
   { name: 'gpt-5.6', label: 'Model: gpt-5.6' },
+  // B0-1118 — explicit gpt-5.6 tiers and gpt-5.4-nano, same order as OPENAI_MODEL_TAGS.
+  { name: 'gpt-5.6-sol', label: 'Model: gpt-5.6-sol' },
+  { name: 'gpt-5.6-terra', label: 'Model: gpt-5.6-terra' },
+  { name: 'gpt-5.6-luna', label: 'Model: gpt-5.6-luna' },
+  { name: 'gpt-5.4-nano', label: 'Model: gpt-5.4-nano' },
   // B0-908 — Anthropic equivalents, same order as ANTHROPIC_MODEL_TAGS.
   { name: 'claude-haiku-4-5', label: 'Model: claude-haiku-4-5' },
   { name: 'claude-sonnet-4-6', label: 'Model: claude-sonnet-4-6' },
