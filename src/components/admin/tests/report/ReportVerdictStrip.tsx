@@ -119,19 +119,18 @@ function ExceptionRow({ row }: { row: ReportExceptionRow }) {
         </span>
 
         <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-sm font-medium text-slate-900">{row.question}</p>
+          <Link
+            className="line-clamp-2 text-sm font-medium text-slate-900 underline decoration-slate-300 underline-offset-4 hover:text-slate-700"
+            href={`#${row.anchorId}`}
+            title={row.id}
+          >
+            {row.question}
+          </Link>
           <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
             {row.tier} · {row.category}
             {row.reason ? ` · ${row.reason}` : ''}
           </p>
         </div>
-
-        <Link
-          className="shrink-0 font-mono text-[11px] text-slate-500 underline decoration-slate-300 underline-offset-4 hover:text-slate-900"
-          href={`#${row.anchorId}`}
-        >
-          {row.id}
-        </Link>
       </div>
     </li>
   );
