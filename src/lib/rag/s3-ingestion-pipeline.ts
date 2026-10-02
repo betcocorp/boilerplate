@@ -18,6 +18,7 @@ const DEFAULT_BATCH_SIZE = 2;
 const MAX_BATCH_SIZE = 10;
 const MAX_EMBEDDING_RUNS = 25;
 const MAX_DASHBOARD_DOCUMENT_ROWS = 300;
+const DATABASE_SCAN_PAGE_SIZE = 1000;
 
 export type JsonObject = { [key: string]: RagJson | undefined };
 
@@ -49,6 +50,14 @@ export type S3IngestionPipelineConfig<TSeed extends S3IngestionSeedDocument> = {
   getS3Bucket: () => string;
   getS3Prefix: () => string;
   getS3Client: () => S3Client;
+  /** Optional canonical source URI when the downloaded object is a derived artifact. */
+  getSourceUri?: (seed: TSeed) => string;
+  /** Optional existing document UUID. When set, ingestion updates that row and never inserts. */
+  getExistingDocumentId?: (seed: TSeed) => string;
+  /** Keep the existing title when a manifest maps a derived artifact to an existing document. */
+  preserveExistingDocumentTitle?: boolean;
+  /** Optional corpus-specific freshness check used to decide whether a mapped document needs ingestion. */
+  isDocumentCurrent?: (seed: TSeed, metadata: JsonObject | null) => boolean;
   /** Lists+maps S3 keys to seed docs. Bucket/prefix listing stays pipeline-specific. */
   discoverSeedDocuments: () => Promise<TSeed[]>;
   /** Pluggable per-file parsing step (PDF text extraction, markdown passthrough, ...). */
@@ -193,7 +202,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
   }
 
   function toSourceUri(seed: TSeed) {
-    return `s3://${config.getS3Bucket()}/${seed.s3Key}`;
+    return config.getSourceUri?.(seed) ?? `s3://${config.getS3Bucket()}/${seed.s3Key}`;
   }
 
   function asIngestionMetadata(value: JsonObject | null) {
@@ -217,21 +226,31 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
 
   async function getExistingSourceRecords() {
     const supabase = getSupabaseServiceRoleClient();
-    const { data, error } = await supabase
-      .schema('rag')
-      .from('source_record')
-      .select(
-        'id, source_pk, source_uri, checksum, metadata, last_seen_at, updated_at, is_active',
-      )
-      .eq('source_schema', sourceSchema)
-      .eq('source_table', sourceTable)
-      .eq('source_type', sourceType);
+    const rows: SourceRecordRow[] = [];
 
-    if (error) {
-      throw new Error(`Failed to load ${sourceLabel} source records: ${error.message}`);
+    for (let from = 0; ; from += DATABASE_SCAN_PAGE_SIZE) {
+      const { data, error } = await supabase
+        .schema('rag')
+        .from('source_record')
+        .select(
+          'id, source_pk, source_uri, checksum, metadata, last_seen_at, updated_at, is_active',
+        )
+        .eq('source_schema', sourceSchema)
+        .eq('source_table', sourceTable)
+        .eq('source_type', sourceType)
+        .order('id', { ascending: true })
+        .range(from, from + DATABASE_SCAN_PAGE_SIZE - 1);
+
+      if (error) {
+        throw new Error(`Failed to load ${sourceLabel} source records: ${error.message}`);
+      }
+
+      const page = (data ?? []) as SourceRecordRow[];
+      rows.push(...page);
+      if (page.length < DATABASE_SCAN_PAGE_SIZE) break;
     }
 
-    return (data ?? []) as SourceRecordRow[];
+    return rows;
   }
 
   async function ensureSeedSourceRecord(seed: TSeed) {
@@ -326,16 +345,28 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
       ...(parsed.extraMetadata ?? {}),
     } as JsonObject;
 
-    const { data: existing, error: existingError } = await supabase
+    const existingDocumentId = config.getExistingDocumentId?.(seed);
+    let existingQuery = supabase
       .schema('rag')
       .from('document')
-      .select('id')
-      .eq('document_key', documentKey)
-      .maybeSingle();
+      .select('id, document_kind');
+    existingQuery = existingDocumentId
+      ? existingQuery.eq('id', existingDocumentId)
+      : existingQuery.eq('document_key', documentKey);
+    const { data: existing, error: existingError } = await existingQuery.maybeSingle();
 
     if (existingError) {
       throw new Error(
-        `Failed to inspect document ${documentKey}: ${existingError.message}`,
+        `Failed to inspect document ${existingDocumentId ?? documentKey}: ${existingError.message}`,
+      );
+    }
+
+    if (existingDocumentId && !existing?.id) {
+      throw new Error(`Manifest document ${existingDocumentId} does not exist.`);
+    }
+    if (existingDocumentId && existing?.document_kind !== documentKind) {
+      throw new Error(
+        `Manifest document ${existingDocumentId} is ${existing?.document_kind ?? 'unknown'}, expected ${documentKind}.`,
       );
     }
 
@@ -345,7 +376,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
         .from('document')
         .update({
           source_record_id: sourceRecordId,
-          title: seed.title,
+          ...(config.preserveExistingDocumentTitle ? {} : { title: seed.title }),
           language_code: seed.locale.toUpperCase(),
           body_text: parsed.bodyText,
           body_markdown: parsed.bodyMarkdown,
@@ -481,17 +512,27 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
 
   async function loadDocumentRows() {
     const supabase = getSupabaseServiceRoleClient();
-    const { data, error } = await supabase
-      .schema('rag')
-      .from('document')
-      .select('id, source_record_id, title, updated_at, metadata, token_count')
-      .eq('document_kind', documentKind);
+    const rows: DocumentRow[] = [];
 
-    if (error) {
-      throw new Error(`Failed to load ${sourceLabel} documents: ${error.message}`);
+    for (let from = 0; ; from += DATABASE_SCAN_PAGE_SIZE) {
+      const { data, error } = await supabase
+        .schema('rag')
+        .from('document')
+        .select('id, source_record_id, title, updated_at, metadata, token_count')
+        .eq('document_kind', documentKind)
+        .order('id', { ascending: true })
+        .range(from, from + DATABASE_SCAN_PAGE_SIZE - 1);
+
+      if (error) {
+        throw new Error(`Failed to load ${sourceLabel} documents: ${error.message}`);
+      }
+
+      const page = (data ?? []) as DocumentRow[];
+      rows.push(...page);
+      if (page.length < DATABASE_SCAN_PAGE_SIZE) break;
     }
 
-    return (data ?? []) as DocumentRow[];
+    return rows;
   }
 
   function sortStatusRows(rows: S3IngestionDashboardDocument[]) {
@@ -711,11 +752,17 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
           ? metadataChunkCount
           : 0;
       const metadataStatus = metadata?.status ?? null;
+      const documentCurrent = document
+        ? (config.isDocumentCurrent?.(seed, document.metadata) ?? true)
+        : false;
 
       let status: S3IngestionDashboardDocumentStatus = 'missing';
       if (metadataStatus === 'failed') {
         status = 'failed';
-      } else if (metadataStatus === 'ingested' || (document && chunkCount > 0)) {
+      } else if (documentCurrent) {
+        // A matching derived-artifact marker is the durable ingestion signal. Registration
+        // refreshes source_record metadata to `registered`, but must not make an already-current
+        // document appear pending or trigger a redundant download.
         status = 'ingested';
       } else if (source) {
         status = 'registered';

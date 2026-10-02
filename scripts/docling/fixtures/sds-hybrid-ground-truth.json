@@ -1,0 +1,129 @@
+{
+  "schema": "sds-hybrid-ground-truth/v1",
+  "documents": [
+    {
+      "source_suffix": "Finished Good SDS/Push (Mint)_M000133.pdf",
+      "scopes": [
+        {
+          "name": "section-9-simple-properties",
+          "include_all_actual": true,
+          "pages": [5],
+          "expected": [
+            {"label": "Physical state", "value": "Liquid."},
+            {"label": "Color", "value": "Opaque. Off-white."},
+            {"label": "Odor", "value": "Wintergreen."},
+            {"label": "Odor threshold", "value": "Not available."},
+            {"label": "pH", "value": "6.5 to 8.5"},
+            {"label": "Melting point/freezing point", "value": "Not available."},
+            {"label": "Boiling point, initial boiling point, and boiling range", "value": "Not available."},
+            {"label": "Flash point", "value": "Closed cup: >100°C (>212°F) [Tagliabue] [Product does not sustain combustion.]"},
+            {"label": "Flammability", "value": "Not available."},
+            {"label": "Lower and upper explosion limit/flammability limit", "value": "Not available."}
+          ],
+          "optional": [],
+          "forbidden": []
+        }
+      ]
+    },
+    {
+      "source_suffix": "Finished Good SDS/Push (Fresh Mist)_MSP0133.pdf",
+      "scopes": [
+        {
+          "name": "section-9-simple-properties",
+          "include_all_actual": true,
+          "pages": [5],
+          "expected": [
+            {"label": "Physical state", "value": "Liquid."},
+            {"label": "Color", "value": "Opaque. Off-white."},
+            {"label": "Odor", "value": "Wintergreen."},
+            {"label": "Odor threshold", "value": "Not available."},
+            {"label": "pH", "value": "6.5 to 8.5"},
+            {"label": "Melting point/freezing point", "value": "Not available."},
+            {"label": "Boiling point, initial boiling point, and boiling range", "value": "Not available."},
+            {"label": "Flash point", "value": "Closed cup: >100°C (>212°F) [Tagliabue] [Product does not sustain combustion.]"},
+            {"label": "Flammability", "value": "Not available."},
+            {"label": "Lower and upper explosion limit/flammability limit", "value": "Not available."}
+          ],
+          "optional": [],
+          "forbidden": []
+        }
+      ]
+    },
+    {
+      "source_suffix": "Finished Good SDS/Push (Fragrance Free)_MSP0134.pdf",
+      "scopes": [
+        {
+          "name": "section-9-simple-properties",
+          "include_all_actual": true,
+          "pages": [5],
+          "expected": [
+            {"label": "Physical state", "value": "Liquid."},
+            {"label": "Color", "value": "Opaque. Off-white."},
+            {"label": "Odor", "value": "Wintergreen."},
+            {"label": "Odor threshold", "value": "Not available."},
+            {"label": "pH", "value": "6.5 to 8.5"},
+            {"label": "Melting point/freezing point", "value": "Not available."},
+            {"label": "Boiling point, initial boiling point, and boiling range", "value": "Not available."},
+            {"label": "Flash point", "value": "Closed cup: >100°C (>212°F) [Tagliabue] [Product does not sustain combustion.]"},
+            {"label": "Flammability", "value": "Not available."},
+            {"label": "Lower and upper explosion limit/flammability limit", "value": "Not available."}
+          ],
+          "optional": [],
+          "forbidden": []
+        }
+      ]
+    },
+    {
+      "source_suffix": "Finished Good SDS/Push (Lemon and Sage)_M002607.pdf",
+      "scopes": [
+        {
+          "name": "section-9-simple-properties",
+          "include_all_actual": true,
+          "pages": [5],
+          "expected": [
+            {"label": "Physical state", "value": "Liquid."},
+            {"label": "Color", "value": "Not available."},
+            {"label": "Odor", "value": "Not available."},
+            {"label": "Odor threshold", "value": "Not available."},
+            {"label": "pH", "value": "6.5 to 8.5"},
+            {"label": "Melting point/freezing point", "value": "Not available."},
+            {"label": "Boiling point, initial boiling point, and boiling range", "value": "Not available."},
+            {"label": "Flash point", "value": "Closed cup: >100°C (>212°F) [Tagliabue] [Product does not sustain combustion.]"},
+            {"label": "Flammability", "value": "Not available."},
+            {"label": "Lower and upper explosion limit/flammability limit", "value": "Not available."}
+          ],
+          "optional": [],
+          "forbidden": []
+        }
+      ]
+    },
+    {
+      "source_suffix": "Finished Good SDS/Push (Mango)_M002608.pdf",
+      "scopes": [
+        {
+          "name": "section-9-simple-properties",
+          "include_all_actual": true,
+          "pages": [5, 6],
+          "expected": [
+            {"label": "Physical state", "value": "Liquid."},
+            {"label": "Color", "value": "Off-white."},
+            {"label": "Odor", "value": "Fruity. Mango"},
+            {"label": "Odor threshold", "value": "Not available."},
+            {"label": "pH", "value": "6.5 to 8.5"},
+            {"label": "Melting point/freezing point", "value": "Not available."},
+            {"label": "Boiling point, initial boiling point, and boiling range", "value": "Not available."},
+            {"label": "Flammability", "value": "Not available."},
+            {"label": "Lower and upper explosion limit/flammability limit", "value": "Not available."},
+            {"label": "Relative vapor density", "value": "Not available."},
+            {"label": "Relative density", "value": "Not available."},
+            {"label": "Density", "value": "0.98 to 1 g/cm³"},
+            {"label": "Solubility in water", "value": "Not available."},
+            {"label": "Partition coefficient: n-octanol/water", "value": "Not applicable."}
+          ],
+          "optional": [],
+          "forbidden": []
+        }
+      ]
+    }
+  ]
+}
