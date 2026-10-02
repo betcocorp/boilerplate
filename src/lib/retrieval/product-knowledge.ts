@@ -8,6 +8,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
   assembleChunkIndexSetBody,
+  assembleDocumentSectionBodies,
   assembleNeighborChunkBodies,
   chunkWindowKey,
   fetchDocumentSourceRefs,
@@ -32,12 +33,12 @@ import {
 } from '~/lib/retrieval/product-facts';
 import { suppressNearDuplicateMatches } from '~/lib/retrieval/near-duplicate-suppression';
 import { MODEL_DOCUMENT_BODY_MAX_CHARS } from '~/lib/tools/model-tool-payload';
+import { logWarn } from '~/lib/observability/logger';
 
 /**
- * The new RAG strategy returns at most this many sources, where each source is a
- * full document (assembled from every one of its chunks) rather than a single
- * fragmented chunk. The matches behind each source come from different parent
- * documents to maximize topical coverage.
+ * The RAG strategy returns at most this many curated sources. Each source is anchored to a
+ * matched chunk and hydrated with its neighboring chunk window; it is not a full document.
+ * The default per-document cap favors sources from different parent documents.
  */
 const DEFAULT_UNIQUE_DOCUMENT_LIMIT = 3;
 
@@ -90,6 +91,11 @@ export type CuratedSource = {
    * Falls back to the single matched chunk id when windowed assembly wasn't available.
    */
   documentBodyChunkIds: string[];
+  /** Original similarity-selected chunk when an SDS section override changed the grounding anchor. */
+  originalMatchedChunkId: string | null;
+  /** Fine-grained SDS section requested by query intent when a same-document override was applied. */
+  requestedSectionType: string | null;
+  sectionOverrideApplied: boolean;
   // B0-548: `matchedChunkText` (the untruncated matched chunk) used to live here too, but it was
   // always a substring of `documentBody` (or, when body assembly fell back to the single chunk,
   // byte-identical to it) with no downstream reader — `snippet` already covers the short-preview
@@ -426,6 +432,7 @@ function buildCuratedSource(
   body: AssembledDocumentBody | undefined,
   sourceRef: DocumentSourceRef | undefined,
   webUrl: string | undefined,
+  sectionOverride?: { originalMatchedChunkId: string; requestedSectionType: string },
 ): CuratedSource {
   const fallbackBody = match.chunk_text;
   const documentBody = body && body.body.length > 0 ? body.body : fallbackBody;
@@ -441,6 +448,9 @@ function buildCuratedSource(
     documentBodyTruncated: body?.truncated ?? false,
     documentBodyTokenEstimate: body?.estimatedTokens ?? null,
     documentBodyChunkIds: body?.chunkIds ?? (fallbackBody ? [match.chunk_id] : []),
+    originalMatchedChunkId: sectionOverride?.originalMatchedChunkId ?? null,
+    requestedSectionType: sectionOverride?.requestedSectionType ?? null,
+    sectionOverrideApplied: sectionOverride !== undefined,
     similarity: match.similarity,
     rerankScore: match.rerank_score ?? null,
     rerankRank: match.rerank_rank ?? null,
@@ -505,6 +515,8 @@ type CurationOptions = {
   maxPerDocument?: number;
   /** B0-974 — see `selectCuratedMatches`'s option of the same name (`./source-selection.ts`). */
   productAnchored?: boolean;
+  /** Replace each selected SDS's generic window with chunks from this section in the same document. */
+  preferredSdsSectionType?: string | null;
 };
 
 /**
@@ -546,7 +558,10 @@ async function selectCuratedSourceMatches(
  * is grounded by the chunk that actually matched, and the 1-2 chunks immediately around it, not
  * every section of the source document.
  */
-async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<CuratedSource[]> {
+async function hydrateCuratedSources(
+  selected: RagSearchMatch[],
+  preferredSdsSectionType?: string | null,
+): Promise<CuratedSource[]> {
   if (selected.length === 0) {
     return [];
   }
@@ -563,27 +578,77 @@ async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<Curate
         .filter((key): key is string => Boolean(key)),
     ),
   ];
-  const [bodies, sourceRefs, webUrls] = await Promise.all([
+  const normalizedSectionType = preferredSdsSectionType?.trim() || null;
+  const sdsDocumentIds = normalizedSectionType
+    ? selected
+        .filter((match) => match.document_kind.toLowerCase() === 'sds')
+        .map((match) => match.document_id)
+    : [];
+  const sectionBodiesPromise = normalizedSectionType
+    ? assembleDocumentSectionBodies(sdsDocumentIds, normalizedSectionType).catch((error) => {
+        logWarn('rag.retrieval.section_override_failed', {
+          section_type: normalizedSectionType,
+          document_ids: sdsDocumentIds,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return new Map();
+      })
+    : Promise.resolve(new Map());
+
+  const [bodies, sectionBodies, sourceRefs, webUrls] = await Promise.all([
     assembleNeighborChunkBodies(windowRequests),
+    sectionBodiesPromise,
     fetchDocumentSourceRefs(documentIds),
     fetchProductLineWebUrls(productLineKeys),
   ]);
+  const overriddenDocuments = new Set<string>();
 
-  return selected.map((match) =>
-    buildCuratedSource(
-      match,
-      bodies.get(chunkWindowKey({ documentId: match.document_id, chunkIndex: match.chunk_index })),
+  return selected.map((match) => {
+    const section =
+      normalizedSectionType &&
+      match.document_kind.toLowerCase() === 'sds' &&
+      !overriddenDocuments.has(match.document_id)
+        ? sectionBodies.get(match.document_id)
+        : undefined;
+    const anchor = section?.chunks[0];
+    if (anchor) overriddenDocuments.add(match.document_id);
+    const effectiveMatch: RagSearchMatch = anchor
+      ? {
+          ...match,
+          chunk_id: anchor.id,
+          chunk_key: anchor.chunkKey,
+          chunk_index: anchor.chunk_index,
+          heading: anchor.heading,
+          chunk_text: anchor.chunk_text,
+          section_path: anchor.sectionPath,
+          section_type: anchor.sectionType,
+          token_count: anchor.token_count,
+        }
+      : match;
+    const body =
+      section?.body ??
+      bodies.get(chunkWindowKey({ documentId: match.document_id, chunkIndex: match.chunk_index }));
+
+    return buildCuratedSource(
+      effectiveMatch,
+      body,
       sourceRefs.get(match.document_id),
       match.product_line_key ? webUrls.get(match.product_line_key.toUpperCase()) : undefined,
-    ),
-  );
+      anchor && normalizedSectionType
+        ? { originalMatchedChunkId: match.chunk_id, requestedSectionType: normalizedSectionType }
+        : undefined,
+    );
+  });
 }
 
 async function curateUniqueDocumentSources(
   matches: RagSearchMatch[],
   options: CurationOptions,
 ): Promise<CuratedSource[]> {
-  return hydrateCuratedSources(await selectCuratedSourceMatches(matches, options));
+  return hydrateCuratedSources(
+    await selectCuratedSourceMatches(matches, options),
+    options.preferredSdsSectionType,
+  );
 }
 
 async function entityContextBlockForSources(sources: CuratedSource[]): Promise<string | null> {
@@ -996,8 +1061,8 @@ export async function ragQueryForProductKnowledge(input: {
 async function runProductKnowledgeQuery(input: {
   query: string;
   /**
-   * Maximum number of unique-document sources to return. Each source represents
-   * a full document, not a single chunk. Defaults to 3.
+   * Maximum number of curated matched-chunk windows to return. The default per-document cap is
+   * one, but callers may raise it for multiple windows from the same document. Defaults to 3.
    */
   limit?: number;
   productLineKey?: string | null;
@@ -1132,7 +1197,7 @@ async function runProductKnowledgeQuery(input: {
     let usedLineKindSupplement = false;
     // Every similarity search performed on this path, so `searchMs` below counts the B0-250
     // fallback / B0-958 line-tier search too instead of silently under-reporting it.
-    let searchMsTotal =
+    const searchMsTotal =
       result.timings.similaritySearchMs +
       (knowledgeResult?.timings.similaritySearchMs ?? 0) +
       (lineTierResult?.timings.similaritySearchMs ?? 0);
@@ -1187,11 +1252,12 @@ async function runProductKnowledgeQuery(input: {
     const explicitPool = mergeKnowledgeSupplement(rawMatches, supplementMatches);
     const curated =
       supplementMatches.length === 0
-        ? await hydrateCuratedSources(lineSelected)
+        ? await hydrateCuratedSources(lineSelected, sectionType)
         : await curateUniqueDocumentSources(explicitPool, {
             limit,
             requiredDocumentKinds,
             maxPerDocument,
+            preferredSdsSectionType: sectionType,
           });
     const { sources: explicitSources, expansion: explicitExpansion } =
       await expandTopKnowledgeSource(curated, explicitPool, { proceduralIntent });
@@ -1369,7 +1435,7 @@ async function runProductKnowledgeQuery(input: {
   });
 
   if (resolution.lockedProductLineKey == null) {
-    const broadHydrated = await hydrateCuratedSources(await broadSelectedPromise);
+    const broadHydrated = await hydrateCuratedSources(await broadSelectedPromise, sectionType);
     // B0-556 — corpus-wide search with no line filter and nothing resolved: every SDS here belongs
     // to an arbitrary product line, so none of it may ground a hazard answer.
     const { sources: broadCurated, withheldCount: withheldSds } = withholdUnanchoredSafetySources(
@@ -1462,6 +1528,7 @@ async function runProductKnowledgeQuery(input: {
   // that is about to be discarded was the single largest piece of provably wasted retrieval work.
   const finalHydrated = await hydrateCuratedSources(
     shouldUseBroadFallback ? broadSelected : anchoredSelected,
+    sectionType,
   );
   const strategy = shouldUseBroadFallback
     ? 'anchored_with_broad_fallback'
