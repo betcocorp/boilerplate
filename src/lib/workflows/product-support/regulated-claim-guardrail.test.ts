@@ -2514,3 +2514,85 @@ describe('evaluateRegulatedClaimGrounding — B0-1131 claim phrases are not prod
     expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] }).ungroundedCategories).not.toContain('efficacy_claim');
   });
 });
+
+describe('evaluateRegulatedClaimGrounding — B0-1143 contact time per product', () => {
+  const QUAT = { documentId: 'q5', title: 'Quat Stat 5', documentKind: 'label', documentBody: 'Effective against SARS-CoV-2 in 1 minute. Kills Pseudomonas aeruginosa in 10 minutes contact time.' };
+  const GE = { documentId: 'ge', title: 'GE Fight Bac RTU', documentKind: 'label', documentBody: 'Effective against SARS-CoV-2 with a 30 second contact time.' };
+  const FACTS = { documentId: 'verified-facts', title: 'Verified Product Facts (structured)', documentBody: 'GE Fight Bac RTU — SARS CoV 2: contact time 60 seconds' };
+
+  it('fails a contact time stated for one product but printed only on another product label', () => {
+    const line = '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 10 minutes contact time.';
+    const draft = `${line}\n\nConfirm the label in hand before use.\n\nSources: [doc:q5] [doc:ge]`;
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] });
+    const detail = result.ungroundedDetails.find((d) => d.category === 'contact_time');
+    expect(detail?.snippet).toBe(line);
+    expect(detail?.evidenceCheck).toBe('contact_time_not_in_claimed_product_documents:GE Fight Bac RTU');
+  });
+
+  it('passes the contact time printed on the claimed product own label', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 30 second contact time.',
+      sources: [QUAT, GE],
+    });
+    expect(result.ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('keeps verified-facts rows eligible (1 minute = 60 seconds in the facts block)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 1 minute contact time.',
+      sources: [QUAT, GE, FACTS],
+    });
+    expect(result.ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('keeps the pool-wide check for a sentence attributed to no product', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Surfaces must stay wet for the full 10 minutes contact time.',
+      sources: [QUAT, GE],
+    });
+    expect(result.ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('withholds only the failing product line, not another line repeating the same value', () => {
+    const quatLine = '- **Quat-Stat 5**: Effective against SARS-CoV-2 with a 10 minutes contact time.';
+    const geLine = '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 10 minutes contact time.';
+    const draft = ['Two Betco disinfectants list SARS-CoV-2 on their labels; confirm the label in hand before use.', quatLine, geLine, '', 'Confirm the label in hand before use.', '', 'Sources: [doc:q5] [doc:ge]'].join('\n');
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] });
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: draft,
+      userMessage: 'Which Betco disinfectants are effective against SARS-CoV-2?',
+      grounding: { ...grounding, ungroundedCategories: ['contact_time'], ungroundedDetails: grounding.ungroundedDetails.filter((d) => d.category === 'contact_time') },
+      productLineLock: null,
+      sources: [{ documentKind: 'label' }],
+    });
+    expect(plan.mode).not.toBe('decline');
+    if (plan.mode === 'decline') return;
+    expect(plan.redactedText).toContain(quatLine);
+    expect(plan.redactedText).not.toContain(geLine);
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1143 product line and spelled-out times', () => {
+  const PROFILE = { documentId: 'vprd', title: 'Value Priced Restroom Disinfectant', documentKind: 'product_line_profile', productLineKey: 'A5FC', documentBody: 'Kills HIV-1 (AIDS Virus).' };
+  const LABEL = { documentId: 'rs', title: 'Rest Stop', documentKind: 'label', productLineKey: 'A5FC', documentBody: 'Effective against HIV-1 (AIDS Virus) for a contact time of five minutes at room temperature.' };
+  const OTHER = { documentId: 'b1', title: 'Betco One RTU', documentKind: 'label', productLineKey: '5567', documentBody: 'Kills HIV-1 in 5 minutes contact time.' };
+  const line = '- **Value Priced Restroom Disinfectant**: HIV-1 claim with a 5 minutes contact time.';
+  const draft = `${line}\n\nConfirm the label in hand.\n\nSources: [doc:vprd] [doc:b1]`;
+
+  it('grounds on a same-line label that spells the time out ("five minutes" = "5 minutes")', () => {
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [PROFILE, LABEL, OTHER] }).ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('fails when only ANOTHER product line prints the time (the B0-1143 cross-product pass)', () => {
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [PROFILE, OTHER] });
+    expect(result.ungroundedDetails.find((d) => d.category === 'contact_time')?.snippet).toBe(line);
+  });
+
+  it('reads "ten (10) minutes" as 10 minutes, comparison only', () => {
+    const tenLabel = { ...LABEL, documentBody: 'Allow surfaces to remain wet for ten (10) minutes contact time.' };
+    const ten = '- **Value Priced Restroom Disinfectant**: 10 minutes contact time.';
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer: `${ten}\n\nConfirm the label in hand.\n\nSources: [doc:vprd]`, sources: [PROFILE, tenLabel] }).ungroundedCategories,
+    ).not.toContain('contact_time');
+  });
+});

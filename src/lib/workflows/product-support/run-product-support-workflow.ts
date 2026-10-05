@@ -5314,6 +5314,12 @@ export async function runProductSupportWorkflow(input: {
             .map((c) => c.document_id)
         : [],
     );
+    const productLineKeyByDocumentId = new Map<string, string>();
+    for (const chunk of retrieved_document_chunks) {
+      if (chunk.product_line_key && !productLineKeyByDocumentId.has(chunk.document_id)) {
+        productLineKeyByDocumentId.set(chunk.document_id, chunk.product_line_key);
+      }
+    }
     const regulatedClaimGroundingSources = sourceMeta.map((s) => ({
       documentId: s.documentId,
       title: s.title,
@@ -5321,6 +5327,8 @@ export async function runProductSupportWorkflow(input: {
       isLockedProductLineSource: lockedProductLineDocumentIds.has(s.documentId),
       // B0-1131 — lets attribution recognise a product's own label / efficacy / SDS by the name it prints.
       documentKind: s.documentKind,
+      // B0-1143 — groups a product's profile, label and SDS for per-product contact-time grounding.
+      productLineKey: productLineKeyByDocumentId.get(s.documentId) ?? null,
     }));
     /**
      * B0-1144 — the exact pool the guardrail judged this turn against, persisted on every

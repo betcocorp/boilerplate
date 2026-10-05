@@ -284,6 +284,12 @@ export type RegulatedClaimSource = {
    * mention many products and never qualify.
    */
   documentKind?: string | null;
+  /**
+   * B0-1143 — the product line this document belongs to (from the turn's retrieved chunks), so
+   * "the claimed product's own documents" covers its profile, label and SDS together even when only
+   * one of their titles matches the name the answer uses.
+   */
+  productLineKey?: string | null;
 };
 
 export type RegulatedClaimGroundingResult = {
@@ -360,8 +366,22 @@ function normalizeSentenceForGroundingCompare(value: string): string {
  *    "1 minute" and a facts row stored as 60 seconds. This is a unit equivalence inside the
  *    comparator, decided for B0-986; it never changes what the user sees.
  */
+/**
+ * B0-1143 — a label that spells a time out ("for a contact time of five minutes", "ten (10)
+ * minutes") states the same value as "5 minutes" / "10 minutes". COMPARISON ONLY, like B0-986's
+ * minute/second equivalence: the displayed answer is never rewritten. Only a number word directly
+ * before a time unit (optionally followed by its own "(10)") is read as digits.
+ */
+const NUMBER_WORDS: Record<string, string> = {
+  one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9',
+  ten: '10', fifteen: '15', twenty: '20', thirty: '30', sixty: '60',
+};
+const NUMBER_WORD_TIME_PATTERN =
+  /\b(one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|sixty)\s*(?:\(\s*\d+\s*\)\s*)?(?=(?:seconds?|secs?|minutes?|mins?)\b)/g;
+
 export function normalizeUnitToken(value: string): string {
   return normalizeForGroundingCompare(value)
+    .replace(NUMBER_WORD_TIME_PATTERN, (_, word: string) => `${NUMBER_WORDS[word] ?? word} `)
     .replace(/\bounces?\b/g, 'oz')
     .replace(/\bfl\.?\s*oz\.?/g, 'oz')
     .replace(/\bgallons?\b/g, 'gal')
@@ -1730,6 +1750,67 @@ export function evaluateRegulatedClaimGrounding(input: {
   };
 
   /**
+   * B0-1143 — a contact time is a label- and product-specific value. Each sentence that states one
+   * and NAMES a product (bullet head, bold lead, "the X label", heading above) must find the value in
+   * that product's documents (title match or a label / efficacy sheet / SDS printing the name) — never in another product's label that
+   * happens to be in the same turn. `verified-facts` blocks stay eligible: they are the structured
+   * efficacy rows, and B0-699 / B0-987 already police which product a facts row belongs to. A
+   * sentence attributed to no product keeps the pool-wide check.
+   */
+  const checkContactTimeTokens = (tokens: string[]) => {
+    if (tokens.length === 0) return;
+    categoriesDetected.push('contact_time');
+    const allSentences = splitIntoSentences(input.draftAnswer);
+    const unitBody = new Map(input.sources.map((s, i) => [s, normalizedSourceBodiesUnit[i] ?? '']));
+    // Keyed by snippet: the bare token for a pool-wide miss; the SENTENCE for a product-specific one,
+    // so the planner withholds only that product's line, not every line repeating the same value.
+    const failed = new Map<string, string>();
+    for (const token of new Set(tokens)) {
+      const normalized = normalizeUnitToken(token);
+      if (!normalized) continue;
+      if (!isTokenGrounded(token, normalizedSourceBodiesUnit)) {
+        failed.set(token, input.sources.length === 0 ? 'no_sources_retrieved' : 'value_not_found_verbatim_in_any_source');
+        continue;
+      }
+      for (let idx = 0; idx < allSentences.length; idx += 1) {
+        const sentence = allSentences[idx];
+        if (!sentence.toLowerCase().includes(token.toLowerCase())) continue;
+        // Attributed ONLY by the product the sentence itself names (bullet head, bold lead, "the X
+        // label", the heading above), matched to a document's title or to a label that prints the
+        // name. A neighbouring sentence's [doc:] citation or the locked-line fallback is NOT used
+        // here: in a product list the next bullet's citation belongs to a different product, and
+        // measuring this against stored answers showed exactly that misattribution.
+        const names = productNamesInSentence(sentence, input.draftAnswer);
+        const attributed = input.sources.filter((s) =>
+          names.some((n) => titleNamesBulletHead(s.title, n) || documentPrintsProductName(s, n)),
+        );
+        if (attributed.length === 0) continue;
+        // Every retrieved document on the same product line as a named one is that product's too.
+        const lines = new Set(attributed.map((s) => s.productLineKey).filter((k): k is string => Boolean(k)));
+        const candidates = [
+          ...attributed,
+          ...input.sources.filter((s) => !attributed.includes(s) && s.productLineKey && lines.has(s.productLineKey)),
+        ];
+        for (const s of input.sources) {
+          if (s.documentId.startsWith('verified-facts') && !candidates.includes(s)) candidates.push(s);
+        }
+        if (!candidates.some((s) => (unitBody.get(s) ?? '').includes(normalized))) {
+          failed.set(
+            sentence.slice(0, 240),
+            `contact_time_not_in_claimed_product_documents:${candidates.map((s) => s.title).join('|')}`,
+          );
+        }
+      }
+    }
+    if (failed.size > 0) {
+      ungroundedCategories.push('contact_time');
+      for (const [snippet, evidenceCheck] of failed) {
+        ungroundedDetails.push({ category: 'contact_time', snippet, evidenceCheck });
+      }
+    }
+  };
+
+  /**
    * B0-888 — `first_aid` walks this unchanged (full sentence list, filtered by the trigger,
    * verbatim/quoted-span grounding only); `hazard` adds the B0-923 value-term path. `compatibility`/`efficacy_claim` additionally try the
    * key-term fallback, then a check on the textually NEXT sentence: a grounded verbatim quote
@@ -1835,7 +1916,7 @@ export function evaluateRegulatedClaimGrounding(input: {
   checkTokenCategory('epa_registration', extractEpaRegTokens(input.draftAnswer));
   checkTokenCategory('din_registration', extractDinRegTokens(input.draftAnswer));
   checkTokenCategory('dilution_ratio', extractDilutionTokens(input.draftAnswer));
-  checkTokenCategory('contact_time', extractContactTimeTokens(input.draftAnswer));
+  checkContactTimeTokens(extractContactTimeTokens(input.draftAnswer));
   checkTokenCategory('cas_number', extractCasNumberTokens(input.draftAnswer));
   checkSentenceCategory('hazard', isHazardClaimSentence);
   checkSentenceCategory('first_aid', isFirstAidClaimSentence);
