@@ -64,6 +64,7 @@ import {
   webSearchToolInputSchema,
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
+import { runEscalationSpecialistTool } from '~/lib/escalations/escalation-tool';
 import { lookupCrossReferenceDeduped } from '~/lib/recommendations/legacy-lookup-cache';
 import { detectCategorySearchTerms } from '~/lib/tools/category-search-terms';
 import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
@@ -989,6 +990,12 @@ export async function executeProductTool(
         issueType: p.issueType,
         policy,
       };
+    }
+    case 'escalation_specialist': {
+      // B0-528 — writes a durable `public.escalations` row (gated by BEX_ESCALATION_TOOL_ENABLED)
+      // and returns the acknowledgment the model relays. Run context (workflow run, conversation,
+      // specialist, run source) comes off `auditCtx`; see ~/lib/escalations/escalation-tool.ts.
+      return runEscalationSpecialistTool(args, auditCtx);
     }
     case 'lookup_cross_reference': {
       const p = lookupCrossReferenceInputSchema.parse(args);

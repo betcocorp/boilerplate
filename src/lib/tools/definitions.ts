@@ -250,6 +250,61 @@ export const productSupportTools: Tool[] = [
   },
   {
     type: 'function',
+    name: 'escalation_specialist',
+    strict: false,
+    description: [
+      'Log an ESCALATION — a durable record for the Betco team to follow up on a question Bex cannot answer from its approved documents — and return the reference to relay to the user. Call at most ONCE per turn, and only AFTER the retrieval tools have been tried.',
+      'USE WHEN: the question is within Betco\'s scope but, after calling the retrieval tools, no supporting document or structured value exists; a REGULATED value the user needs (dilution ratio, contact time, kill claim, EPA registration number) is not on file; or the question describes a safety/exposure incident that needs a human.',
+      'NOT FOR: anything a retrieval tool answered or can still answer; out-of-scope requests (decline instead, no escalation); a substitute for calling retrieval first; the internal checklist text → `get_escalation_policy`.',
+      'RETURNS `reference` (e.g. "ESC-0042"), `escalationId`, `status`, and `message` — relay `message` to the user VERBATIM as the acknowledgment; never promise a response time or invent an answer alongside it. `status: "disabled"` means no record was created: say you have no verified answer and do not quote a reference.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          enum: [
+            'no_evidence',
+            'low_confidence',
+            'regulated_value_not_on_file',
+            'out_of_scope',
+            'compatibility_unverified',
+            'safety_incident',
+            'user_requested',
+            'other',
+          ],
+          description: 'Why Bex cannot answer. `regulated_value_not_on_file` for a missing dilution/contact time/kill claim/EPA number; `safety_incident` for an exposure or injury; `no_evidence` when retrieval returned nothing relevant.',
+        },
+        summary: {
+          type: 'string',
+          description: 'One or two sentences: what the user asked and why Bex cannot answer it from the documents on file (which tools were tried, what came back).',
+        },
+        question: {
+          type: 'string',
+          description: 'The user\'s question, verbatim.',
+        },
+        specialist: {
+          type: 'string',
+          description: 'Optional SME agent id handling the turn (e.g. "bathroom", "dilution").',
+        },
+        retrievedSources: {
+          type: 'array',
+          description: 'Documents already retrieved and ruled out this turn, so a reviewer sees what was checked.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              documentId: { type: 'string' },
+            },
+            required: ['title'],
+          },
+        },
+      },
+      required: ['reason', 'summary'],
+    },
+  },
+  {
+    type: 'function',
     name: 'get_products_in_category',
     strict: false,
     description: [
@@ -589,7 +644,28 @@ const BASE_ROUTE_TOOL_NAMES: readonly ProductToolName[] = [
   'list_disallowed_uses',
   'get_escalation_policy',
   'web_search',
+  // B0-528 — shared by every specialist (epic B0-525 "SME Shared Tooling Gaps"): any route can
+  // reach a question the corpus cannot answer. Whether it is actually SENT is decided per turn by
+  // `applyEscalationToolGate` below, off the `BEX_ESCALATION_TOOL_ENABLED` settings row.
+  'escalation_specialist',
 ];
+
+/**
+ * B0-528 — removes `escalation_specialist` from a tool set when the settings flag is off, so the
+ * model never sees a tool whose executor would only answer "disabled". Pure and synchronous: the
+ * caller reads the flag once per turn (`runProductSupportWorkflow`) and passes it in, which keeps
+ * `productSupportToolsForRoute` itself a pure function of the route (B0-324 cache-prefix rule) —
+ * the gate is a second, explicit step on top. Returns the SAME array instance when enabled, so an
+ * enabled deployment's tool list is byte-identical to the ungated one.
+ */
+export function applyEscalationToolGate(tools: Tool[], enabled: boolean): Tool[] {
+  if (enabled) {
+    return tools;
+  }
+  return tools.filter(
+    (tool) => !(tool.type === 'function' && tool.name === 'escalation_specialist'),
+  );
+}
 
 /** Website-taxonomy navigation — only meaningful for "what products do you have" style questions. */
 const CATEGORY_ROUTE_TOOL_NAMES: readonly ProductToolName[] = [

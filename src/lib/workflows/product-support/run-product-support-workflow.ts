@@ -131,7 +131,7 @@ import {
   fetchRecommendationContext,
 } from '~/lib/tools/cross-reference-lookup';
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
-import { productSupportToolsForRoute } from '~/lib/tools/definitions';
+import { applyEscalationToolGate, productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
 import type { ProductToolTurnOptions } from '~/lib/tools/product-tools';
 import { asRagDocumentKind } from '~/lib/rag/document-kind';
@@ -584,6 +584,17 @@ export function shouldForceCrossReferenceLookup(userMessage: string) {
  */
 async function isEarlyDeclineGateEnabled(): Promise<boolean> {
   return getBooleanSetting('BEX_EARLY_DECLINE_GATE_ENABLED', false);
+}
+
+/**
+ * B0-528 — gate for the `escalation_specialist` tool, read the same way as the early-decline gate
+ * above (a local wrapper over `getBooleanSetting`, which every workflow test's settings mock
+ * already provides) rather than importing `isEscalationToolEnabled` from the settings service.
+ * The KEY must stay identical to that getter's (`~/lib/settings/settings-service.ts`): the executor
+ * in `~/lib/escalations/escalation-tool.ts` re-checks the flag through it, and the two must agree.
+ */
+async function isEscalationToolEnabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_ESCALATION_TOOL_ENABLED', false);
 }
 
 /**
@@ -2950,7 +2961,18 @@ export async function runProductSupportWorkflow(input: {
    * cacheable prefix — instructions + tool schemas — stays byte-identical for every call that shares
    * the key, both within this tool loop and across later turns routed the same way.
    */
-  const routeTools = productSupportToolsForRoute(routingDecision);
+  /**
+   * B0-528 — `escalation_specialist` is in every route's set but is only SENT while the
+   * `BEX_ESCALATION_TOOL_ENABLED` settings row is true (default false, so eval/harness runs create
+   * no `escalations` rows until it is deliberately switched on). Read once per turn so the tool list
+   * cannot change between rounds; flipping the flag changes the cacheable prefix exactly as any
+   * definitions change would, and the executor re-checks the flag independently.
+   */
+  const escalationToolEnabled = await isEscalationToolEnabled();
+  const routeTools = applyEscalationToolGate(
+    productSupportToolsForRoute(routingDecision),
+    escalationToolEnabled,
+  );
 
   /**
    * B0-392 — the specialist policy that ACTUALLY ran, which is not always `routingDecision`:
@@ -3199,7 +3221,13 @@ export async function runProductSupportWorkflow(input: {
   // B0-780 — carries which specialist policy is running down into `executeProductTool` (via
   // `executeToolCall`'s `auditCtx`), so retrieval can bind to that specialist's product category
   // (see `resolveKnowledgeCategoryExclusions` in `~/lib/tools/product-tools.ts`).
-  const wfCtx = { ...ctx, workflowRunId: run.id, specialistId: effectivePromptId as string };
+  // B0-528 — `runSource` rides along the same way for the `escalation_specialist` executor.
+  const wfCtx = {
+    ...ctx,
+    workflowRunId: run.id,
+    specialistId: effectivePromptId as string,
+    runSource: input.source,
+  };
 
   /**
    * B0-386 — ids of steps inserted `running` and not yet completed, oldest first. Every step

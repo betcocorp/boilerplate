@@ -27,6 +27,7 @@ import {
   getRagChunkStrategy,
   getRouterType,
   getStringSetting,
+  isEscalationToolEnabled,
   resetSettingsCacheForTest,
   resolveSettingValue,
 } from '~/lib/settings/settings-service';
@@ -372,6 +373,25 @@ describe('getRagBoostWeights (B0-686)', () => {
   });
 });
 
+describe('isEscalationToolEnabled (B0-528)', () => {
+  it('is OFF when the row is missing, errored, or anything but "true"', async () => {
+    mockRow(null);
+    await expect(isEscalationToolEnabled()).resolves.toBe(false);
+    resetSettingsCacheForTest();
+    mockRow(null, { message: 'boom' });
+    await expect(isEscalationToolEnabled()).resolves.toBe(false);
+    resetSettingsCacheForTest();
+    mockRow('1');
+    await expect(isEscalationToolEnabled()).resolves.toBe(false);
+  });
+
+  it('is ON only for the stored string "true"', async () => {
+    mockRow('true');
+    await expect(isEscalationToolEnabled()).resolves.toBe(true);
+    expect(from).toHaveBeenCalledWith('settings');
+  });
+});
+
 describe('caching', () => {
   it('serves a second call to the same key from cache, without re-querying', async () => {
     mockRow('true');
@@ -409,6 +429,8 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_DISABLE_CONFIDENCE_GATING',
     // B0-734 — the early-decline gate switch, moved off process.env; defaults to false.
     'BEX_EARLY_DECLINE_GATE_ENABLED',
+    // B0-528 — read through isEscalationToolEnabled(); new flag, never a process.env read.
+    'BEX_ESCALATION_TOOL_ENABLED',
     // B0-984 — read through isFactToolEnforcementEnabled(); new flag, never a process.env read.
     'BEX_FACT_TOOL_ENFORCEMENT_ENABLED',
     // B0-886 — read through isRevisionSkipForRegulatedClaimOnlyEnabled(); never had a process.env

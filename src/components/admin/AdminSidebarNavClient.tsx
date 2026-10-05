@@ -118,6 +118,12 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
+            // B0-528 — escalation records written by the escalation_specialist tool.
+            label: 'Escalations',
+            href: '/admin/escalations',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+          },
+          {
             label: 'Compare conversations',
             href: '/admin/bex/compare',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_COMPARE,

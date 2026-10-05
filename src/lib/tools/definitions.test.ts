@@ -8,6 +8,7 @@ import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-sp
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import {
+  applyEscalationToolGate,
   productSupportTools,
   productSupportToolsForRoute,
 } from '~/lib/tools/definitions';
@@ -15,6 +16,8 @@ import { RETRIEVAL_TOOL_NAMES } from '~/lib/llm/generation-shared';
 import { getToolExample } from '~/lib/tools/examples';
 import { DEFAULT_TOOL_TIMEOUT_MS, resolveToolTimeoutMs } from '~/lib/tools/tool-timeouts';
 import {
+  ESCALATION_REASONS,
+  escalationSpecialistInputSchema,
   getDispenserAssetInputSchema,
   getFloorAssetInputSchema,
   PRODUCT_TOOL_NAMES,
@@ -219,13 +222,80 @@ describe('get_dispenser_asset / get_floor_asset wiring (B0-529)', () => {
 });
 
 /**
+ * B0-528 — same every-site-at-once check for `escalation_specialist`, plus the settings gate that
+ * decides whether the model actually receives it.
+ */
+describe('escalation_specialist wiring (B0-528)', () => {
+  const NAME = 'escalation_specialist';
+
+  it('is a real product tool with a definition in the shared skeleton', () => {
+    expect(PRODUCT_TOOL_NAMES as readonly string[]).toContain(NAME);
+    const def = productSupportTools.find((t) => 'name' in t && t.name === NAME);
+    expect(def).toBeDefined();
+    const description = (def as { description: string }).description;
+    expect(description).toMatch(/USE WHEN:/);
+    expect(description).toMatch(/NOT FOR:/);
+    expect(description).toMatch(/at most ONCE per turn/);
+    expect(description).toMatch(/VERBATIM/);
+  });
+
+  it('is shared by every route (epic B0-525), including the pruned ones', () => {
+    for (const route of ROUTES) {
+      expect(toolNames(route), `${route} should carry ${NAME}`).toContain(NAME);
+    }
+  });
+
+  it('is NOT a retrieval tool for the unproductive-retrieval guard', () => {
+    expect(RETRIEVAL_TOOL_NAMES.has(NAME)).toBe(false);
+  });
+
+  it('resolves a tool-execution timeout (no unbounded call)', () => {
+    expect(resolveToolTimeoutMs(NAME)).toBe(DEFAULT_TOOL_TIMEOUT_MS);
+  });
+
+  it('has an admin example payload that satisfies its own schema', () => {
+    expect(escalationSpecialistInputSchema.safeParse(getToolExample(NAME)).success).toBe(true);
+  });
+
+  it('requires only reason + summary, and the reason enum mirrors the Zod schema', () => {
+    const def = productSupportTools.find((t) => 'name' in t && t.name === NAME);
+    const params = (def as {
+      parameters: { required?: string[]; properties: { reason: { enum: string[] } } };
+    }).parameters;
+    expect(params.required).toEqual(['reason', 'summary']);
+    expect(params.properties.reason.enum).toEqual([...ESCALATION_REASONS]);
+  });
+
+  describe('applyEscalationToolGate', () => {
+    it('withholds the tool from the model when the settings flag is off', () => {
+      for (const route of ROUTES) {
+        const gated = applyEscalationToolGate(productSupportToolsForRoute(route), false);
+        const names = gated.map((tool) => (tool.type === 'function' ? tool.name : ''));
+        expect(names).not.toContain(NAME);
+        // Nothing else is touched, and definition order is preserved.
+        expect(names).toEqual(toolNames(route).filter((name) => name !== NAME));
+      }
+    });
+
+    it('returns the identical route set when the flag is on', () => {
+      for (const route of ROUTES) {
+        const base = productSupportToolsForRoute(route);
+        expect(applyEscalationToolGate(base, true)).toBe(base);
+      }
+    });
+  });
+});
+
+/**
  * B0-983 — the descriptions were rewritten for disambiguation, which grew the serialized tool set
  * from ~18k to ~28.5k chars. These schemas ride on every model call (B0-437), so pin a ceiling: a
  * new tool or a longer description must consciously raise this number, not drift past it.
  */
 describe('tool schema size budget (B0-983)', () => {
   it('keeps the full serialized tool set under the ceiling', () => {
-    expect(JSON.stringify(productSupportTools).length).toBeLessThan(30_000);
+    // B0-528 raised this from 30k to 32k consciously: `escalation_specialist` (~2.3k serialized,
+    // measured 28,719 → ~31.0k) is the one new tool since B0-983.
+    expect(JSON.stringify(productSupportTools).length).toBeLessThan(32_000);
   });
 
   it('gives every tool a description with the shared USE WHEN / NOT FOR skeleton', () => {

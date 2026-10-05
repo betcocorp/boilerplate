@@ -253,6 +253,44 @@ export const webSearchToolInputSchema = z.object({
   maxResults: z.number().int().min(1).max(20).optional(),
 });
 
+/**
+ * B0-528 — `escalation_specialist`: logs a durable escalation record (`public.escalations`) when
+ * Bex cannot answer from approved documents. The reason enum mirrors the table's CHECK constraint
+ * exactly; `question` is optional because nothing in the executor's context carries the user's
+ * message, so the model transcribes it — when omitted the executor falls back to `summary` rather
+ * than failing the call (B0-362 lesson: a hard-required field the model often omits is a 400).
+ */
+export const ESCALATION_REASONS = [
+  'no_evidence',
+  'low_confidence',
+  'regulated_value_not_on_file',
+  'out_of_scope',
+  'compatibility_unverified',
+  'safety_incident',
+  'user_requested',
+  'other',
+] as const;
+
+export type EscalationReason = (typeof ESCALATION_REASONS)[number];
+
+export const escalationRetrievedSourceSchema = z.object({
+  title: z.string().min(1).max(512),
+  documentId: z.string().max(128).optional(),
+});
+
+export const escalationSpecialistInputSchema = z.object({
+  reason: z.enum(ESCALATION_REASONS),
+  /** What the user asked and why Bex cannot answer it from the documents on file. */
+  summary: z.string().trim().min(1).max(4000),
+  /** The user's question, verbatim. Falls back to `summary` in the executor when omitted. */
+  question: z.string().trim().max(4000).optional(),
+  /** SME agent id; the executor prefers the running specialist from the audit context. */
+  specialist: z.string().trim().max(64).optional(),
+  retrievedSources: z.array(escalationRetrievedSourceSchema).max(20).optional(),
+});
+
+export type EscalationSpecialistInput = z.infer<typeof escalationSpecialistInputSchema>;
+
 export const PRODUCT_TOOL_NAMES = [
   'search_product_docs',
   'get_product_spec',
@@ -271,6 +309,7 @@ export const PRODUCT_TOOL_NAMES = [
   'get_dispenser_asset',
   'get_floor_asset',
   'web_search',
+  'escalation_specialist',
 ] as const;
 
 export type ProductToolName = (typeof PRODUCT_TOOL_NAMES)[number];

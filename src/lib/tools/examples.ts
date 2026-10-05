@@ -88,6 +88,16 @@ export const TOOL_EXAMPLES: Record<string, Record<string, unknown>> = {
     domains: [],
     maxResults: 5,
   },
+  // B0-528 — running this from the admin tool runner creates a REAL escalation row when the
+  // BEX_ESCALATION_TOOL_ENABLED flag is on (and a "disabled" result when it is off).
+  escalation_specialist: {
+    reason: 'no_evidence',
+    summary:
+      'Admin tool-runner test: the user asked for the contact time of a product with no label on file; search_product_docs and get_efficacy_data returned nothing.',
+    question: 'What is the contact time for product X on stainless steel?',
+    specialist: 'product',
+    retrievedSources: [],
+  },
 };
 
 export function getToolExample(toolName: string): Record<string, unknown> {
