@@ -216,6 +216,7 @@ import {
   computePromptVersion,
   PROMPT_BUNDLE_VERSION,
 } from '~/lib/workflows/product-support/prompt-version';
+import { REGULATED_CLAIM_GOVERNING_RULES } from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
 import { REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/validator';
 import {
   EARLY_DECLINE_CONFIDENCE,
@@ -1560,6 +1561,8 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
 
 describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
   const DC_QUESTION = 'Do dilution control systems require plumbing or electrical work?';
+  /** B0-1131 — a safety question keeps the full decline for an unverifiable hazard / first-aid sentence. */
+  const DC_SAFETY_QUESTION = 'Is the concentrate in a dilution control system hazardous if it splashes in my eyes?';
   const GROUNDED_PARA =
     'Dilution control systems usually need a water connection but not electrical work. A licensed plumber is typically required for new lines, backflow prevention, or hard-plumbed runs. Local code and the authority having jurisdiction decide whether an approved backflow preventer or an air gap is required.';
   const COMPAT_SENTENCE =
@@ -1691,7 +1694,35 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
     expect(out.answerText).toContain(GROUNDED_PARA);
   });
 
-  it('never redacts an ungrounded hazard or first_aid sentence — full decline, even on a knowledge answer', async () => {
+  it('never redacts an ungrounded hazard or first_aid sentence on a SAFETY question — full decline, even on a knowledge answer (B0-1131)', async () => {
+    for (const [category, sentence] of [
+      ['hazard', 'Causes severe skin burns and eye damage.'],
+      ['first_aid', 'If swallowed, rinse mouth and call a poison center immediately.'],
+    ] as const) {
+      arrangeKnowledgeTurn(`${GROUNDED_PARA} ${sentence}`);
+      regulatedClaimGroundingMock.mockReturnValueOnce({
+        categoriesDetected: [category],
+        ungroundedCategories: [category],
+        ungroundedDetails: [{ category, snippet: sentence }],
+        keyTermGroundedCategories: [],
+      });
+
+      const out = await run({ userMessage: DC_SAFETY_QUESTION });
+
+      expect(out.answerProvenance).toBe('validator_fallback');
+      expect(out.answerText).toContain("I can't verify the");
+      expect(out.answerText).not.toContain(GROUNDED_PARA);
+      expect(out.answerText).not.toContain(sentence);
+      expect(regulatedGateRecord().verdict).toBe('rejected');
+      expect(regulatedGateRecord().inputs).toMatchObject({
+        declineReason: 'safety_critical_sentence_category',
+      });
+      expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'rejected' });
+      fake = createFakeSupabase();
+    }
+  });
+
+  it('withholds only the hazard / first_aid sentence on a non-safety knowledge question, with the SDS pointer (B0-1131)', async () => {
     for (const [category, sentence] of [
       ['hazard', 'Causes severe skin burns and eye damage.'],
       ['first_aid', 'If swallowed, rinse mouth and call a poison center immediately.'],
@@ -1706,15 +1737,11 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
 
       const out = await run({ userMessage: DC_QUESTION });
 
-      expect(out.answerProvenance).toBe('validator_fallback');
-      expect(out.answerText).toContain("I can't verify the");
-      expect(out.answerText).not.toContain(GROUNDED_PARA);
+      expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+      expect(out.answerText).toContain(GROUNDED_PARA);
       expect(out.answerText).not.toContain(sentence);
-      expect(regulatedGateRecord().verdict).toBe('rejected');
-      expect(regulatedGateRecord().inputs).toMatchObject({
-        declineReason: 'safety_critical_sentence_category',
-      });
-      expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'rejected' });
+      expect(out.answerText).toContain(REGULATED_CLAIM_GOVERNING_RULES[category]);
+      expect(out.validation.requires_human_review).toBe(true);
       fake = createFakeSupabase();
     }
   });
@@ -1903,6 +1930,8 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
 describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-923)', () => {
   const WOOD_QUESTION =
     "What's the difference between a wood floor sealer and a wood floor finish?";
+  /** B0-1131 — the decline-path cases need a safety question; elsewhere a hazard sentence is withheld. */
+  const WOOD_SAFETY_QUESTION = 'Are oil-based wood floor finishes flammable, and what PPE do I need?';
   /** The model's own draft: substantive, and it asserts nothing regulated the guardrail rejects. */
   const MODEL_DRAFT =
     'A sealer penetrates the wood and blocks the grain so the finish above it stays uniform. A finish is the wear layer that takes the traffic and carries the gloss level. Basic Coatings systems pair one sealer coat with two or more finish coats.';
@@ -2027,7 +2056,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
     // Every draft this turn is rejected for hazard, pre-revision included.
     groundingByDraft([], HAZARD_REJECTION);
 
-    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+    const out = await run({ userMessage: WOOD_SAFETY_QUESTION, useValidator: true });
 
     expect(out.answerProvenance).toBe('validator_fallback');
     expect(out.answerText).toContain("I can't verify the");
@@ -2091,7 +2120,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
       ],
     ]);
 
-    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+    const out = await run({ userMessage: WOOD_SAFETY_QUESTION, useValidator: true });
 
     expect(out.answerProvenance).not.toBe('pre_revision_draft_restored');
     expect(out.answerText).not.toContain('4 oz per gallon');
@@ -2128,7 +2157,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
     );
     groundingByDraft([], HAZARD_REJECTION);
 
-    const out = await run({ userMessage: WOOD_QUESTION });
+    const out = await run({ userMessage: WOOD_SAFETY_QUESTION });
 
     expect(runRevisionPassMock).not.toHaveBeenCalled();
     expect(regulatedClaimGroundingMock).toHaveBeenCalledTimes(1);

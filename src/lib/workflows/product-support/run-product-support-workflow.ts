@@ -1869,8 +1869,8 @@ const TOKEN_SHAPED_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = n
 
 /**
  * B0-871 — sentence-shaped categories that MAY be withheld sentence-by-sentence on a KNOWLEDGE
- * answer (see `planRegulatedClaimRedaction`). `hazard` and `first_aid` are deliberately absent:
- * an ungrounded GHS hazard statement or first-aid instruction always keeps the full decline.
+ * answer (see `planRegulatedClaimRedaction`). `hazard` and `first_aid` are absent here: they are
+ * redactable only on a non-safety question (B0-1131, `SAFETY_SENTENCE_REGULATED_CATEGORIES`).
  *
  * PROPOSED RULE IMPLEMENTED, PENDING TOM'S CONFIRMATION (B0-871). B0-829 excluded every
  * sentence-shaped category from partial redaction by design, decided against a contact-time
@@ -1881,6 +1881,30 @@ const TOKEN_SHAPED_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = n
 const REDACTABLE_SENTENCE_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
   RegulatedClaimCategory
 >(['compatibility', 'efficacy_claim']);
+
+/**
+ * B0-1131 — `hazard` / `first_aid`: withheld sentence-by-sentence ONLY when the question is not
+ * itself a safety / exposure question (`isSafetyOrExposureQuestion`); otherwise the full decline.
+ */
+const SAFETY_SENTENCE_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
+  RegulatedClaimCategory
+>(['hazard', 'first_aid']);
+
+/**
+ * B0-1131 — the message asks about safety, PPE, hazards, first aid or an exposure incident. Wider
+ * than `hasUsageSafetyQuestionShape` on purpose: an exposure report ("got floor stripper splashed in
+ * their eyes", "swallowed", "breathed in") names no safety keyword but is the most safety-critical
+ * question there is. Errs toward declining.
+ */
+export function isSafetyOrExposureQuestion(userMessage: string): boolean {
+  const text = userMessage.toLowerCase();
+  return (
+    hasUsageSafetyQuestionShape(text) ||
+    /\b(?:hazards?|hazardous|dangerous|danger|toxic|poison\w*|flammab\w*|combustib\w*|corrosiv\w*|burns?|burned|irritat\w*|exposure|exposed|splash\w*|spill\w*|swallow\w*|ingest\w*|inhal\w*|breath\w*|fumes?|vapou?rs?|eyes?|skin|gloves?|goggles|respirator|protective|mix(?:ed|ing)?|emergency)\b/.test(
+      text,
+    )
+  );
+}
 
 /**
  * B0-871 — `evaluateRegulatedClaimGrounding` (`validator.ts`) reports a sentence-shaped claim as
@@ -1984,7 +2008,8 @@ export type RegulatedClaimRedactionPlan =
  * requires_human_review=true) identically for both outcomes.
  *
  * Policy, in evaluation order:
- * 1. Any ungrounded `hazard` or `first_aid` ⇒ decline. Always.
+ * 1. Any ungrounded `hazard` or `first_aid` ⇒ decline when the question is a safety / exposure
+ *    question (`isSafetyOrExposureQuestion`); otherwise withheld sentence-by-sentence as in 3 (B0-1131).
  * 2. Every ungrounded category token-shaped (B0-829) and nothing else on the draft grounded ⇒
  *    decline (`nothing_grounded_to_keep`); otherwise withhold each token-shaped claim (mode
  *    `token_redaction`) — see B0-1000 below for HOW.
@@ -2044,11 +2069,17 @@ export function planRegulatedClaimRedaction(input: {
   const ungrounded = grounding.ungroundedCategories;
   const orderedWithheldCategories = [...new Set(ungrounded)].sort();
 
-  if (
-    ungrounded.some(
-      (c) => !TOKEN_SHAPED_REGULATED_CATEGORIES.has(c) && !REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(c),
-    )
-  ) {
+  // B0-1131 — an unverifiable hazard / first-aid sentence still declines the whole answer when the
+  // QUESTION is about safety or exposure (there, that sentence is the answer, and a partial reply
+  // could read as "no precaution needed"). On any other question it is withheld sentence-by-sentence
+  // like `compatibility` / `efficacy_claim`, so it no longer erases unrelated, supported content
+  // (live ROW-01: "Where do I find the SDS for Push?" lost its SDS-location answer).
+  const safetySentencesRedactable = !isSafetyOrExposureQuestion(input.userMessage);
+  const isSentenceRedactable = (c: RegulatedClaimCategory) =>
+    REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(c) ||
+    (safetySentencesRedactable && SAFETY_SENTENCE_REGULATED_CATEGORIES.has(c));
+
+  if (ungrounded.some((c) => !TOKEN_SHAPED_REGULATED_CATEGORIES.has(c) && !isSentenceRedactable(c))) {
     return { mode: 'decline', reason: 'safety_critical_sentence_category' };
   }
 
@@ -2124,7 +2155,7 @@ export function planRegulatedClaimRedaction(input: {
       }
     }
   };
-  withholdPass((category) => REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(category));
+  withholdPass(isSentenceRedactable);
   withholdPass((category) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(category));
 
   if (redactedText === input.draftAnswer) {
@@ -5999,7 +6030,8 @@ export async function runProductSupportWorkflow(input: {
            * answer (no locked product line, or knowledge-kind sources dominate), with substantive
            * content left. Each ungrounded sentence was replaced VERBATIM by
            * `regulatedClaimWithheldMarker` — the removed sentence is never rephrased, summarised
-           * or hinted at. `hazard` / `first_aid` never take this path (see the planner).
+           * or hinted at. `hazard` / `first_aid` take this path only on a non-safety question
+           * (B0-1131, see the planner).
            *
            * PROPOSED RULE IMPLEMENTED, PENDING TOM'S CONFIRMATION — see
            * `REDACTABLE_SENTENCE_REGULATED_CATEGORIES` and `src/docs/generation-runtimes.md`.
@@ -6009,6 +6041,11 @@ export async function runProductSupportWorkflow(input: {
             '',
             buildRegulatedClaimSentenceRedactionFooter(flagged),
             ...(compatibilityCaveat ? ['', compatibilityCaveat] : []),
+            // B0-1131 — a withheld hazard / first-aid sentence still points at SDS Section 2 / 4
+            // (and poison control for first aid), so the safety direction is never just dropped.
+            ...plan.withheldCategories
+              .filter((c) => SAFETY_SENTENCE_REGULATED_CATEGORIES.has(c))
+              .flatMap((c) => ['', REGULATED_CLAIM_GOVERNING_RULES[c]]),
           ].join('\n');
           answerProvenance = 'regulated_claim_partial_redaction';
         } else {

@@ -1258,6 +1258,29 @@ function attributedSources(
   return attributed;
 }
 
+/** Words that can follow an organism noun without being its species epithet. */
+const NON_EPITHET_WORDS = new Set([
+  'and', 'or', 'on', 'in', 'with', 'for', 'from', 'is', 'are', 'was', 'were', 'the', 'a', 'an', 'to',
+  'at', 'as', 'by', 'of', 'that', 'which', 'when', 'claim', 'claims', 'contact', 'per', 'under',
+  'surrogate', 'strain', 'strains', 'type', 'virus', 'viruses', 'bacteria', 'spores',
+]);
+
+/**
+ * B0-1131 — every organism `EFFICACY_ORGANISM_PATTERN` finds in a sentence, extended with the
+ * lowercase species epithet that directly follows a genus ("Klebsiella aerogenes"), so a species
+ * swap ("Klebsiella pneumoniae" for "aerogenes") cannot ground on the genus alone.
+ */
+function efficacyOrganismTerms(sentence: string): string[] {
+  const text = stripSentenceMarkup(sentence);
+  const terms: string[] = [];
+  for (const m of text.matchAll(new RegExp(EFFICACY_ORGANISM_PATTERN.source, 'gi'))) {
+    const after = /^\s+([a-z][a-z-]{3,})\b/.exec(text.slice((m.index ?? 0) + m[0].length));
+    const epithet = after?.[1];
+    terms.push(epithet && !NON_EPITHET_WORDS.has(epithet) ? `${m[0]} ${epithet}` : m[0]);
+  }
+  return [...new Set(terms)];
+}
+
 /**
  * B0-888 — key-term fallback grounding for `compatibility` / `efficacy_claim` ONLY: a PARAPHRASE of
  * a verbatim source line ("Labeled to kill HIV-1 on pre-cleaned environmental surfaces" vs. the
@@ -1276,6 +1299,17 @@ function isKeyTermGrounded(
   draftAnswer: string,
 ): boolean {
   const candidates = attributedSources(sentence, contextText, sources, draftAnswer);
+  // B0-1131 — `attributedSources` only falls back to the locked product line when it has exactly
+  // ONE document, so a product with a label, SDS and efficacy sheet all locked (live: AF79, five
+  // locked documents) attributed nothing and every organism bullet failed. For `efficacy_claim`,
+  // each of the locked line's own documents is also a candidate; the organism and claim verb must
+  // still both appear in ONE of them. Never when the sentence attributes some OTHER product's
+  // document ("per the Sanibet label") — that claim must ground in what it cites.
+  if (category === 'efficacy_claim' && candidates.every((s) => s.isLockedProductLineSource)) {
+    for (const source of sources) {
+      if (source.isLockedProductLineSource && !candidates.includes(source)) candidates.push(source);
+    }
+  }
   if (candidates.length === 0) return false;
 
   const keyTermPattern =
@@ -1289,12 +1323,17 @@ function isKeyTermGrounded(
     (category === 'efficacy_claim' && EFFICACY_STRONG_PATTERN.test(sentence));
   if (!hasClaimVerb) return false;
 
-  const normalizedKeyTerm = normalizeSentenceForGroundingCompare(keyTermMatch);
-  if (!normalizedKeyTerm) return false;
+  // B0-1131 — efficacy: EVERY organism the sentence names (with its species epithet when one follows,
+  // "Klebsiella aerogenes") must be in the same document, not just the first match; otherwise
+  // "kills Klebsiella aerogenes and Candida auris" grounded on a label listing only Klebsiella.
+  const keyTerms = (
+    category === 'efficacy_claim' ? efficacyOrganismTerms(sentence) : [keyTermMatch]
+  ).map((term) => normalizeSentenceForGroundingCompare(term));
+  if (keyTerms.length === 0 || keyTerms.some((term) => !term)) return false;
 
   return candidates.some((source) => {
     const normalizedBody = normalizeSentenceForGroundingCompare(source.documentBody);
-    if (!normalizedBody.includes(normalizedKeyTerm)) return false;
+    if (!keyTerms.every((term) => normalizedBody.includes(term))) return false;
     return (
       verbPattern.test(source.documentBody) ||
       (category === 'efficacy_claim' && EFFICACY_STRONG_PATTERN.test(source.documentBody))

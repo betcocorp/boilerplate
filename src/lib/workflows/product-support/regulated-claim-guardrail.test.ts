@@ -1275,27 +1275,51 @@ describe('planRegulatedClaimRedaction — product-usage-specific requires a usag
     }
   });
 
-  it('still declines outright for an ungrounded hazard sentence, whatever the question shape', () => {
+  function hazardPlan(question: string, category: 'hazard' | 'first_aid', sentence: string) {
+    return planRegulatedClaimRedaction({
+      draftAnswer: `${IDENTITY_ANSWER} ${sentence}`,
+      userMessage: question,
+      grounding: {
+        categoriesDetected: [category],
+        ungroundedCategories: [category],
+        ungroundedDetails: [{ category, snippet: sentence }],
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: LOCKED,
+      sources: LABEL_LED_SOURCES,
+    });
+  }
+
+  it('still declines outright for an ungrounded hazard / first-aid sentence on a safety or exposure question (B0-1131)', () => {
     const hazard = 'Causes severe skin burns and eye damage.';
+    const firstAid = 'If in eyes, rinse cautiously with water for 15 minutes.';
     for (const question of [
-      'Do you have a product called Hard as Nailz?',
       'How do I use Hard As Nails safely?',
+      'What PPE does Hard As Nails require?',
+      'Someone got floor stripper splashed in their eyes. What do I do?',
+      'Is Hard As Nails flammable?',
+      'My employee breathed in the fumes, is that dangerous?',
+      'Can I mix Hard As Nails with bleach?',
     ]) {
-      const plan = planRegulatedClaimRedaction({
-        draftAnswer: `${IDENTITY_ANSWER} ${hazard}`,
-        userMessage: question,
-        grounding: {
-          categoriesDetected: ['hazard'],
-          ungroundedCategories: ['hazard'],
-          ungroundedDetails: [{ category: 'hazard', snippet: hazard }],
-          keyTermGroundedCategories: [],
-        },
-        productLineLock: LOCKED,
-        sources: LABEL_LED_SOURCES,
-      });
-      expect(plan.mode, question).toBe('decline');
-      if (plan.mode !== 'decline') continue;
-      expect(plan.reason, question).toBe('safety_critical_sentence_category');
+      for (const [category, sentence] of [['hazard', hazard], ['first_aid', firstAid]] as const) {
+        const plan = hazardPlan(question, category, sentence);
+        expect(plan.mode, `${category}: ${question}`).toBe('decline');
+        if (plan.mode !== 'decline') continue;
+        expect(plan.reason, question).toBe('safety_critical_sentence_category');
+      }
+    }
+  });
+
+  it('withholds only the hazard / first-aid sentence on a non-safety question, keeping the rest (B0-1131 ROW-01)', () => {
+    const hazard = 'For Push, there are no known significant hazards, and no special signal word or hazard statements are required.';
+    for (const question of ['Do you have a product called Hard as Nailz?', 'Where do I find the SDS for Push?']) {
+      const plan = hazardPlan(question, 'hazard', hazard);
+      expect(plan.mode, question).toBe('sentence_redaction');
+      if (plan.mode === 'decline') continue;
+      expect(plan.redactedText).toContain(IDENTITY_ANSWER);
+      expect(plan.redactedText).not.toContain(hazard);
+      expect(plan.redactedText).toContain('[one hazard statement withheld — not verifiable against a retrieved label]');
+      expect(plan.withheldCategories).toEqual(['hazard']);
     }
   });
 
@@ -2078,5 +2102,83 @@ describe('evaluateRegulatedClaimGrounding — B0-923 attribution refinements (hi
     const draftAnswer =
       'Solvent-based finishes are durable. Marathane 45 is a classic choice. Some are flammable, affecting storage.';
     expect(evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] }).ungroundedCategories).toContain('hazard');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 efficacy claims across the locked product line', () => {
+  const AF79_LABEL = {
+    documentId: 'doc-af79-label',
+    title: 'AF 79',
+    isLockedProductLineSource: true,
+    documentBody: 'Acid Free Bathroom Cleaner. Disinfects hard non-porous surfaces.',
+  };
+  const AF79_EFFICACY = {
+    documentId: 'doc-af79-efficacy',
+    title: 'af79 efficacy sheet',
+    isLockedProductLineSource: true,
+    documentBody: 'BACTERICIDAL: Pseudomonas aeruginosa, Staphylococcus aureus. Contact time: 1 minute.',
+  };
+  const OTHER_PRODUCT = {
+    documentId: 'doc-sanibet',
+    title: 'Sanibet RTU',
+    documentBody: 'Kills Norovirus. BACTERICIDAL: Salmonella enterica.',
+  };
+
+  it('grounds an organism bullet in one of several locked documents (live ROW-08)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'AF79 organisms:\n- Pseudomonas aeruginosa — bactericidal',
+      sources: [AF79_LABEL, AF79_EFFICACY],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still fails an organism no locked document lists', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'AF79 organisms:\n- Mycobacterium tuberculosis — tuberculocidal',
+      sources: [AF79_LABEL, AF79_EFFICACY],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('never grounds a claim attributed to another product on the locked product documents', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Per the Sanibet RTU label, it kills Pseudomonas aeruginosa.',
+      sources: [AF79_LABEL, AF79_EFFICACY, OTHER_PRODUCT],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 every organism must be in the document', () => {
+  const GE_FIGHT_BAC_LABEL = {
+    documentId: 'doc-ge-fight-bac',
+    title: 'GE Fight Bac RTU',
+    isLockedProductLineSource: true,
+    documentBody:
+      'FOR SOFT SURFACE SANITIZATION: Preclean. Spray GE Fight Bac 6-8 inches from soft surface until wet. Let stand for 60 seconds. Allow to air dry. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+
+  it('grounds a paraphrase naming only organisms the document lists', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella aerogenes and Staphylococcus aureus on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('fails when a second organism is not in the document (was: only the first was checked)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella aerogenes and Candida auris on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('fails a species swap on the same genus', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella pneumoniae on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
   });
 });
