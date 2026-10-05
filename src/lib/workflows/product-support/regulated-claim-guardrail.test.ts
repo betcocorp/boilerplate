@@ -2182,3 +2182,113 @@ describe('evaluateRegulatedClaimGrounding — B0-1131 every organism must be in 
     expect(result.ungroundedCategories).toContain('efficacy_claim');
   });
 });
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 ROW-09/23 and ROW-25 attribution', () => {
+  const QUAT_STAT_LABEL = {
+    documentId: '59987b46-0000-4000-8000-000000000001',
+    title: 'Quat Stat 5',
+    documentBody: 'Effective against SARS-Related Coronavirus 2\n(SARS-CoV-2) in 1 minute. Kills Pseudomonas aeruginosa.',
+  };
+  const GE_LABEL = {
+    documentId: '3d46dbf6-76fe-41a1-8c62-5dfc09c7e298',
+    title: 'GE Fight Bac RTU',
+    documentBody:
+      'FOR SOFT SURFACE SANITIZATION: Preclean. Spray GE Fight Bac 6-8 inches from soft surface until wet. Let stand for 60 seconds. Allow to air dry. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+  const SUSTAINABILITY = {
+    documentId: 'd8d099ed-0000-4000-8000-000000000002',
+    title: 'Betco Sustainability in Action',
+    documentBody: 'Our commitment to people and planet.',
+  };
+
+  it('matches a hyphenated product name to its un-hyphenated document title ("Quat-Stat 5" / "Quat Stat 5")', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `- **Quat-Stat 5**: Effective against SARS-CoV-2 with a 1-minute contact time.\n\nSource: [doc:${QUAT_STAT_LABEL.documentId}]`,
+      sources: [QUAT_STAT_LABEL, GE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('takes the product from a numbered heading above the bullet', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**3. Quat-Stat 5**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        '',
+        `Sources: [doc:${QUAT_STAT_LABEL.documentId}] [doc:${GE_LABEL.documentId}]`,
+      ].join('\n'),
+      sources: [QUAT_STAT_LABEL, GE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still fails a heading product whose document does not list the organism', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**GE Fight Bac RTU**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        '',
+        'Always confirm the organism claim on the label in hand before relying on it.',
+        '',
+        `Sources: [doc:${QUAT_STAT_LABEL.documentId}] [doc:${GE_LABEL.documentId}]`,
+      ].join('\n'),
+      sources: [QUAT_STAT_LABEL, GE_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('attributes the single document a draft cites (ROW-25 paraphrase, no lock)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `Yes, for soft surfaces.\n- It is effective against Klebsiella aerogenes and Staphylococcus aureus on soft surfaces.\n\nSource: [doc:${GE_LABEL.documentId}]`,
+      sources: [GE_LABEL, SUSTAINABILITY],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('does not guess when the draft cites more than one document', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `Yes, for soft surfaces.\n- It is effective against Klebsiella aerogenes and Staphylococcus aureus on soft surfaces.\n\nAlways confirm the organism claim on the label in hand before relying on it.\n\nSources: [doc:${GE_LABEL.documentId}] [doc:${QUAT_STAT_LABEL.documentId}]`,
+      sources: [GE_LABEL, QUAT_STAT_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('grounds a verbatim quote the sentence splitter left with a stray quote mark', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Effective against Klebsiella aerogenes and Staphylococcus aureus."',
+      sources: [GE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still fails the single cited document when it does not list the organism', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `Yes.\n- It is effective against Candida auris on soft surfaces.\n\nSource: [doc:${GE_LABEL.documentId}]`,
+      sources: [GE_LABEL, SUSTAINABILITY],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 single-cited attribution never crosses products', () => {
+  it('does not ground a lowercase-initial product bullet on the one document the draft cites', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        'Several Betco disinfectants are documented for hard-surface disinfection.',
+        '- pH7Q Dual: The label explicitly states it kills Marburg virus.',
+        '',
+        'Always confirm the organism claim on the label in hand.',
+        '',
+        'Source: Rest Stop product label [doc:7117c7a4-2558-473f-9063-4bd25229bbdc].',
+      ].join('\n'),
+      sources: [
+        {
+          documentId: '7117c7a4-2558-473f-9063-4bd25229bbdc',
+          title: 'Rest Stop',
+          documentBody: 'Rest Stop. Virucidal. Kills Pseudomonas aeruginosa, *Influenza Type A/Brazil Virus.',
+        },
+      ],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});

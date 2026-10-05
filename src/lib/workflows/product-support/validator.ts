@@ -1105,7 +1105,12 @@ function isSentenceGrounded(
   normalizedSources: string[],
   isClaimTrigger?: (sentence: string) => boolean,
 ): boolean {
-  const normalized = normalizeSentenceForGroundingCompare(sentence);
+  // B0-1131 — a verbatim label quote the sentence splitter cut in half keeps a stray opening or
+  // closing quote mark ('Effective against Klebsiella aerogenes and Staphylococcus aureus."'),
+  // which no source contains. Edge quote marks only; the words themselves still match verbatim.
+  const normalized = normalizeSentenceForGroundingCompare(sentence)
+    .replace(/^["“”'‘’]+|["“”'‘’]+$/g, '')
+    .trim();
   if (!normalized) return false;
   if (normalizedSources.some((body) => body.includes(normalized))) return true;
 
@@ -1157,6 +1162,8 @@ function normalizeProductNameForCompare(value: string): string {
   return value
     .toLowerCase()
     .replace(/[™®©*_`]/g, '')
+    // B0-1131 — "Quat-Stat 5" (draft) vs "Quat Stat 5" (document title) are the same product.
+    .replace(/[-‐‑–—]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/[\s:;,.]+$/, '')
     .trim();
@@ -1225,9 +1232,9 @@ function attributedSources(
 
   const perLabel = PER_LABEL_ATTRIBUTION_PATTERN.exec(contextText);
   if (perLabel?.[1]) {
-    const fragment = perLabel[1].toLowerCase().trim();
+    const fragment = normalizeProductNameForCompare(perLabel[1]);
     for (const source of sources) {
-      const title = source.title.toLowerCase();
+      const title = normalizeProductNameForCompare(source.title);
       if ((title.includes(fragment) || fragment.includes(title)) && !attributed.includes(source)) {
         attributed.push(source);
       }
@@ -1235,7 +1242,7 @@ function attributedSources(
   }
 
   if (attributed.length === 0) {
-    const head = bulletHeadProductName(sentence);
+    const head = bulletHeadProductName(sentence) ?? headingProductAbove(draftAnswer, sentence);
     if (head) {
       const cited = citedDocumentIds(draftAnswer);
       const sentenceAssertsSource = SOURCE_ASSERTION_ATTRIBUTION_PATTERN.test(sentence);
@@ -1250,12 +1257,62 @@ function attributedSources(
     }
   }
 
+  // B0-1131 — the draft cites exactly ONE retrieved document anywhere (typically its closing
+  // "Source:" line) and nothing else names a source: that document is the one the answer is about.
+  // Same "exactly one, no guessing" rule as the locked-line fallback below. Only for a sentence
+  // whose subject is a pronoun ("It is effective against ...", "This product ..."): a sentence that
+  // names any product of its own ("- pH7Q Dual: ... kills Marburg virus.") must ground in THAT
+  // product's document, never in whichever single document the draft happens to cite.
+  if (
+    attributed.length === 0 &&
+    PRONOUN_SUBJECT_PATTERN.test(stripSentenceMarkup(sentence)) &&
+    !headingProductAbove(draftAnswer, sentence)
+  ) {
+    const citedSources = sources.filter((s) =>
+      citedDocumentIds(draftAnswer).some((id) => id === s.documentId || id.endsWith(`:${s.documentId}`)),
+    );
+    if (citedSources.length === 1) attributed.push(citedSources[0]);
+  }
+
   if (attributed.length === 0) {
     const locked = sources.filter((s) => s.isLockedProductLineSource);
     if (locked.length === 1) attributed.push(locked[0]);
   }
 
   return attributed;
+}
+
+/** B0-1131 — a sentence whose subject points back at the answer's product rather than naming one. */
+const PRONOUN_SUBJECT_PATTERN = /^(?:it|its|this product|the product|this disinfectant|this sanitizer)\b/i;
+
+/** A markdown heading line: "## X", "**3. X**", "**X:**", or plain text ending in a colon. */
+const HEADING_LINE_PATTERN = /^(?:#{1,6}\s+\S.*|\*\*[^*]+\*\*:?|[^-*•\d].*:)$/;
+
+/**
+ * B0-1131 — the product a list bullet sits UNDER when the bullet itself does not name one:
+ * "**3. Quat-Stat 5**" / "- Effective against SARS-CoV-2 with a 1-minute contact time." Walks up
+ * past sibling bullets (at most 12 lines) to the nearest non-bullet line, and only accepts it when
+ * it reads as a heading. Null for a sentence that is not itself a list bullet.
+ */
+function headingProductAbove(draftAnswer: string, sentence: string): string | null {
+  const at = draftAnswer.indexOf(sentence.trim());
+  if (at < 0) return null;
+  const lines = draftAnswer.slice(0, at).split('\n');
+  const currentLine = (lines.pop() ?? '') + sentence.trim();
+  if (!BULLET_ITEM_PREFIX_PATTERN.test(currentLine)) return null;
+  for (let i = lines.length - 1, seen = 0; i >= 0 && seen < 12; i -= 1, seen += 1) {
+    const line = lines[i].trim();
+    if (!line || BULLET_ITEM_PREFIX_PATTERN.test(lines[i])) continue;
+    if (!HEADING_LINE_PATTERN.test(line)) return null;
+    const name = normalizeProductNameForCompare(
+      stripSentenceMarkup(line).replace(/^\d{1,2}[.)]\s*/, '').replace(/:\s*$/, ''),
+    );
+    const firstWord = name.split(' ')[0] ?? '';
+    if (name.length < 3 || name.length > 80) return null;
+    if (SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) || IMPERATIVE_OPENER_WORDS.has(firstWord)) return null;
+    return name;
+  }
+  return null;
 }
 
 /** Words that can follow an organism noun without being its species epithet. */
