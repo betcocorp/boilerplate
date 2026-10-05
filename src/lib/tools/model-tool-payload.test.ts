@@ -23,6 +23,10 @@ function fullSource(overrides: Record<string, unknown> = {}) {
     documentBodyTruncated: false,
     documentBodyTokenEstimate: 900,
     documentBodyChunkIds: ['chunk-7', 'chunk-8', 'chunk-9'],
+    requestedSectionType: 'organism_contact_time',
+    selectedSectionTypes: ['directions', 'dilution'],
+    sectionOverrideApplied: true,
+    sectionFallbackReason: null,
     matchedChunkText: 'Directions for use: 2 oz per gallon.',
     confidence: 0.81,
     documentKind: 'label',
@@ -60,6 +64,10 @@ describe('buildModelToolPayload — model vs full payload split (B0-437)', () =>
       productKey: null,
       s3Key: 'labels/betco/ph7q.md',
       sourceUri: 's3://retool-360/labels/betco/ph7q.md',
+      requestedSectionType: 'organism_contact_time',
+      selectedSectionTypes: ['directions', 'dilution'],
+      sectionOverrideApplied: true,
+      sectionFallbackReason: null,
     });
   });
 

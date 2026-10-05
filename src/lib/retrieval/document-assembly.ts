@@ -397,6 +397,200 @@ export async function assembleDocumentSectionBodies(
   return result;
 }
 
+export type DocumentPassageRequest = {
+  documentId: string;
+  documentKind: string;
+  sectionTypes: string[];
+  query?: string;
+};
+
+export type AssembledDocumentPassage = AssembledDocumentSection & {
+  selectedSectionTypes: string[];
+};
+
+const LABEL_SECTION_MARKER = /<!--\s*section_type:\s*([a-z0-9_-]+)\s*-->/i;
+
+export function labelSectionTypeFromHeading(heading: string | null): string | null {
+  const match = heading?.match(LABEL_SECTION_MARKER);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+const LABEL_SECTION_ALIASES: Array<[RegExp, string]> = [
+  [/\b(direction|instruction|use direction)/i, 'directions'],
+  [/\b(dilution|mixing|mix rate)/i, 'dilution'],
+  [/\b(surface|use site)/i, 'surfaces'],
+  [/\b(epa claim|claim|efficacy)/i, 'epa_claims'],
+  [/\b(hazard|warning|precaution)/i, 'hazards'],
+  [/\b(first aid|medical)/i, 'first_aid'],
+  [/\b(storage|disposal)/i, 'storage_disposal'],
+  [/\b(technical|physical propert)/i, 'technical_properties'],
+];
+
+function inferLabelSectionTypeFromMetadata(
+  heading: string | null,
+  sectionPath: string[] | null,
+): string | null {
+  const marker = labelSectionTypeFromHeading(heading);
+  if (marker) return marker;
+  const metadata = [...(sectionPath ?? []), heading ?? '']
+    .join(' ')
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ');
+  return LABEL_SECTION_ALIASES.find(([pattern]) => pattern.test(metadata))?.[1] ?? null;
+}
+
+const PASSAGE_RANKING_TERMS: Record<string, string[]> = {
+  directions: ['directions', 'use', 'apply', 'wet', 'contact time'],
+  dilution: ['dilution', 'dilute', 'mix', 'ratio', 'per gallon', 'oz/gal'],
+  surfaces: ['surface', 'upholstery', 'curtain', 'fabric', 'textile'],
+  epa_claims: ['epa', 'claim', 'effective against', 'kills'],
+  hazards: ['danger', 'warning', 'hazard', 'corrosive', 'protective'],
+  first_aid: ['first aid', 'swallowed', 'inhaled', 'eyes', 'skin'],
+  storage_disposal: ['storage', 'store', 'disposal', 'dispose'],
+  technical_properties: ['ph', 'physical', 'specific gravity', 'viscosity'],
+};
+
+/**
+ * Hydrates fine-grained passages from already-selected SDS and label documents. SDS selectors use
+ * the stored `section_type`; label selectors use the converter's heading marker because label rows
+ * deliberately retain the coarse database type `label`.
+ */
+export async function assembleSelectedDocumentPassages(
+  requests: DocumentPassageRequest[],
+  options?: { maxCharsPerDocument?: number },
+): Promise<Map<string, AssembledDocumentPassage>> {
+  const result = new Map<string, AssembledDocumentPassage>();
+  const merged = new Map<string, DocumentPassageRequest>();
+
+  for (const request of requests) {
+    const documentId = request.documentId.trim();
+    const sectionTypes = request.sectionTypes.map((value) => value.trim().toLowerCase()).filter(Boolean);
+    if (!documentId || sectionTypes.length === 0) continue;
+    const existing = merged.get(documentId);
+    merged.set(documentId, {
+      documentId,
+      documentKind: request.documentKind.toLowerCase(),
+      sectionTypes: [...new Set([...(existing?.sectionTypes ?? []), ...sectionTypes])],
+      query: existing?.query ?? request.query,
+    });
+  }
+
+  if (merged.size === 0) return result;
+
+  type PassageRow = DocumentChunkRow & {
+    chunk_key: string;
+    section_path: string[] | null;
+    section_type: string;
+  };
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select(
+      'id, document_id, chunk_key, chunk_index, heading, chunk_text, section_path, section_type, token_count',
+    )
+    .in('document_id', [...merged.keys()])
+    .order('document_id', { ascending: true })
+    .order('chunk_index', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load selected document passages: ${error.message}`);
+  }
+
+  const rowsByDocument = new Map<string, PassageRow[]>();
+  for (const row of (data ?? []) as PassageRow[]) {
+    if (!merged.has(row.document_id) || isNonEnglishMarkedChunk(row.chunk_text)) continue;
+    const list = rowsByDocument.get(row.document_id) ?? [];
+    list.push(row);
+    rowsByDocument.set(row.document_id, list);
+  }
+
+  const maxChars = options?.maxCharsPerDocument ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
+  for (const [documentId, request] of merged) {
+    const documentRows = (rowsByDocument.get(documentId) ?? [])
+      .slice()
+      .sort((a, b) => a.chunk_index - b.chunk_index);
+    let carriedSection: string | null = null;
+    const resolvedRows = documentRows.map((row) => {
+      if (request.documentKind === 'label') {
+        const directSection = inferLabelSectionTypeFromMetadata(row.heading, row.section_path);
+        if (directSection) carriedSection = directSection;
+        return { ...row, resolvedSectionType: directSection ?? carriedSection };
+      }
+
+      const directSection = row.section_type?.trim().toLowerCase() || null;
+      if (request.documentKind === 'sds' && directSection && directSection !== 'sds') {
+        carriedSection = directSection;
+      }
+      return {
+        ...row,
+        resolvedSectionType:
+          request.documentKind === 'sds' && directSection === 'sds'
+            ? carriedSection ?? directSection
+            : directSection,
+      };
+    });
+    let ordered = resolvedRows
+      .filter(
+        (row): row is PassageRow & { resolvedSectionType: string } =>
+          row.resolvedSectionType !== null && request.sectionTypes.includes(row.resolvedSectionType),
+      )
+      .sort(
+        (a, b) =>
+          request.sectionTypes.indexOf(a.resolvedSectionType) -
+            request.sectionTypes.indexOf(b.resolvedSectionType) ||
+          a.chunk_index - b.chunk_index,
+      );
+
+    // Older label conversions do not always carry section markers. Rank a small same-document set
+    // by passage-family terms instead of widening to an unrelated document.
+    if (ordered.length === 0 && request.documentKind === 'label') {
+      const rankingTerms = request.sectionTypes.flatMap(
+        (sectionType) => PASSAGE_RANKING_TERMS[sectionType] ?? [],
+      );
+      const queryTerms = (request.query?.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []).filter(
+        (term) => !['what', 'when', 'using', 'does', 'need', 'with', 'such', 'that', 'this'].includes(term),
+      );
+      ordered = resolvedRows
+        .map((row) => {
+          const text = `${row.heading ?? ''} ${(row.section_path ?? []).join(' ')} ${row.chunk_text}`.toLowerCase();
+          const sectionHits = rankingTerms.filter((term) => text.includes(term)).length;
+          const queryHits = queryTerms.filter((term) => text.includes(term)).length;
+          return { ...row, resolvedSectionType: 'ranked_same_document', score: sectionHits * 10 + queryHits };
+        })
+        .filter((row) => row.score >= 10)
+        .sort((a, b) => b.score - a.score || a.chunk_index - b.chunk_index)
+        .slice(0, 3)
+        .sort((a, b) => a.chunk_index - b.chunk_index);
+    }
+
+    if (ordered.length === 0) continue;
+    const body = stitchChunkRows(documentId, ordered, maxChars);
+    const includedChunkIds = new Set(body.chunkIds);
+    const includedRows = ordered.filter((row) => includedChunkIds.has(row.id));
+    result.set(documentId, {
+      body,
+      chunks: includedRows.map((row) => ({
+        id: row.id,
+        document_id: row.document_id,
+        chunk_index: row.chunk_index,
+        heading: row.heading,
+        chunk_text: row.chunk_text,
+        token_count: row.token_count,
+        chunkKey: row.chunk_key,
+        sectionPath: row.section_path,
+        sectionType: row.resolvedSectionType,
+      })),
+      selectedSectionTypes: [
+        ...new Set(includedRows.map((row) => row.resolvedSectionType)),
+      ],
+    });
+  }
+
+  return result;
+}
+
 /** How many chunks on each side of the matched chunk `assembleNeighborChunkBodies` includes by default. */
 export const NEIGHBOR_CHUNK_RADIUS = 1;
 

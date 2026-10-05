@@ -121,6 +121,52 @@ describe('executeToolCall — model vs persisted payload (B0-437)', () => {
 });
 
 describe('executeToolCall — matched chunk window diagnostics', () => {
+  it('fails model-visible chunk provenance closed when model projection truncates a body', async () => {
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      sources: [
+        {
+          documentId: 'doc-capped',
+          chunkId: 'chunk-capped',
+          documentKind: 'label',
+          documentBody: 'x'.repeat(12_000),
+          documentBodyChars: 12_000,
+          documentBodyChunkCount: 2,
+          documentBodyChunkIds: ['chunk-capped', 'chunk-hidden'],
+          documentBodyTruncated: false,
+          selectedSectionTypes: ['directions'],
+        },
+      ],
+    });
+
+    try {
+      await executeToolCall({
+        name: 'search_product_docs',
+        argumentsJson: '{}',
+        callId: 'call_capped',
+      });
+
+      const diagnostic = consoleLog.mock.calls
+        .map(([entry]) => JSON.parse(String(entry)) as Record<string, unknown>)
+        .find((entry) => entry.event === 'rag.retrieval.matched_chunk_windows');
+      expect(diagnostic).toMatchObject({
+        windows: [
+          {
+            document_id: 'doc-capped',
+            model_context_present: true,
+            model_window_chunk_ids: null,
+            model_window_chunk_count: null,
+            model_window_truncated: true,
+            model_chunk_provenance_complete: false,
+          },
+        ],
+      });
+    } finally {
+      consoleLog.mockRestore();
+    }
+  });
+
   it('logs the document, matched chunk, and hydrated window chunk UUIDs', async () => {
     const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     executeProductToolMock.mockResolvedValueOnce({
@@ -136,7 +182,9 @@ describe('executeToolCall — matched chunk window diagnostics', () => {
           documentBodyTruncated: false,
           originalMatchedChunkId: 'original-chunk-uuid',
           requestedSectionType: 'physical_properties',
+          selectedSectionTypes: ['physical_properties'],
           sectionOverrideApplied: true,
+          sectionFallbackReason: null,
         },
       ],
     });
@@ -168,12 +216,24 @@ describe('executeToolCall — matched chunk window diagnostics', () => {
             matched_chunk_id: 'matched-chunk-uuid',
             original_matched_chunk_id: 'original-chunk-uuid',
             requested_section_type: 'physical_properties',
+            selected_section_types: ['physical_properties'],
             section_override_applied: true,
+            section_fallback_reason: null,
             document_kind: 'sds',
             window_chunk_ids: ['previous-uuid', 'matched-chunk-uuid', 'next-uuid'],
             window_chunk_count: 3,
             window_chars: 11,
             window_truncated: false,
+            model_context_present: true,
+            model_window_chunk_ids: [
+              'previous-uuid',
+              'matched-chunk-uuid',
+              'next-uuid',
+            ],
+            model_window_chunk_count: 3,
+            model_window_chars: 11,
+            model_window_truncated: false,
+            model_chunk_provenance_complete: true,
           },
         ],
       });

@@ -6,8 +6,10 @@ import {
   assembleChunkIndexSetBody,
   assembleDocumentSectionBodies,
   assembleNeighborChunkBodies,
+  assembleSelectedDocumentPassages,
   chunkWindowKey,
   fetchProductLineWebUrls,
+  labelSectionTypeFromHeading,
   NEIGHBOR_CHUNK_RADIUS,
 } from '~/lib/retrieval/document-assembly';
 
@@ -156,6 +158,234 @@ describe('assembleDocumentSectionBodies', () => {
     );
     await expect(assembleDocumentSectionBodies(['doc-1'], '   ')).resolves.toEqual(new Map());
     expect(getSupabaseServiceRoleClient).not.toHaveBeenCalled();
+  });
+});
+
+describe('assembleSelectedDocumentPassages', () => {
+  it('reads fine-grained label sections from heading markers and preserves document order', async () => {
+    const rows = [
+      {
+        ...row({ id: 'identity', document_id: 'label-1', chunk_index: 0 }),
+        chunk_key: 'identity',
+        section_path: ['label'],
+        section_type: 'label',
+      },
+      {
+        ...row({
+          id: 'directions',
+          document_id: 'label-1',
+          chunk_index: 1,
+          heading: 'Directions for Use   <!-- section_type: directions -->',
+          chunk_text: 'Keep the surface wet for 10 minutes.',
+        }),
+        chunk_key: 'directions',
+        section_path: ['label', 'directions'],
+        section_type: 'label',
+      },
+      {
+        ...row({
+          id: 'dilution',
+          document_id: 'label-1',
+          chunk_index: 2,
+          heading: 'Dilution <!-- section_type: dilution -->',
+          chunk_text: 'Use 2 oz per gallon (1:64).',
+        }),
+        chunk_key: 'dilution',
+        section_path: ['label', 'dilution'],
+        section_type: 'label',
+      },
+    ];
+    mockSectionQuery(rows);
+
+    const result = await assembleSelectedDocumentPassages([
+      {
+        documentId: 'label-1',
+        documentKind: 'label',
+        sectionTypes: ['directions', 'dilution'],
+      },
+    ]);
+
+    expect(result.get('label-1')?.body.chunkIds).toEqual(['directions', 'dilution']);
+    expect(result.get('label-1')?.selectedSectionTypes).toEqual(['directions', 'dilution']);
+    expect(result.get('label-1')?.body.body).toContain('10 minutes');
+    expect(result.get('label-1')?.body.body).toContain('1:64');
+  });
+
+  it('selects multiple stored SDS section types without changing documents', async () => {
+    const rows = [
+      {
+        ...row({ id: 'hazard', document_id: 'sds-1', chunk_index: 2 }),
+        chunk_key: 'hazard',
+        section_path: ['sds', 'section_2'],
+        section_type: 'hazard',
+      },
+      {
+        ...row({ id: 'ppe', document_id: 'sds-1', chunk_index: 8 }),
+        chunk_key: 'ppe',
+        section_path: ['sds', 'section_8'],
+        section_type: 'exposure_ppe',
+      },
+    ];
+    mockSectionQuery(rows);
+
+    const result = await assembleSelectedDocumentPassages([
+      {
+        documentId: 'sds-1',
+        documentKind: 'sds',
+        sectionTypes: ['hazard', 'exposure_ppe'],
+      },
+    ]);
+
+    expect(result.get('sds-1')?.body.chunkIds).toEqual(['hazard', 'ppe']);
+    expect(result.get('sds-1')?.selectedSectionTypes).toEqual(['hazard', 'exposure_ppe']);
+  });
+
+  it('carries a fine SDS section across following coarse legacy chunks', async () => {
+    const rows = [
+      {
+        ...row({
+          id: 'ppe-heading',
+          document_id: 'sds-1',
+          chunk_index: 12,
+          heading: 'SECTION 8: Exposure controls/personal protection',
+          chunk_text: 'SECTION 8',
+        }),
+        chunk_key: 'ppe-heading',
+        section_path: ['sds', 'section_8'],
+        section_type: 'exposure_ppe',
+      },
+      {
+        ...row({
+          id: 'ppe-content',
+          document_id: 'sds-1',
+          chunk_index: 13,
+          heading: null,
+          chunk_text: 'Wear chemical-resistant gloves and splash goggles.',
+        }),
+        chunk_key: 'ppe-content',
+        section_path: ['sds'],
+        section_type: 'sds',
+      },
+      {
+        ...row({
+          id: 'physical-properties',
+          document_id: 'sds-1',
+          chunk_index: 14,
+          heading: 'SECTION 9: Physical properties',
+          chunk_text: 'pH 7',
+        }),
+        chunk_key: 'physical-properties',
+        section_path: ['sds', 'section_9'],
+        section_type: 'physical_properties',
+      },
+    ];
+    mockSectionQuery(rows);
+
+    const result = await assembleSelectedDocumentPassages([
+      { documentId: 'sds-1', documentKind: 'sds', sectionTypes: ['exposure_ppe'] },
+    ]);
+
+    expect(result.get('sds-1')?.body.chunkIds).toEqual(['ppe-heading', 'ppe-content']);
+    expect(result.get('sds-1')?.body.body).toContain('splash goggles');
+  });
+
+  it('uses section_path and contiguous chunks when heading markers are absent', async () => {
+    const rows = [
+      {
+        ...row({
+          id: 'directions-a',
+          document_id: 'label-1',
+          chunk_index: 1,
+          heading: 'Directions for Use',
+          chunk_text: 'Apply to the surface.',
+        }),
+        chunk_key: 'directions-a',
+        section_path: ['label', 'directions'],
+        section_type: 'label',
+      },
+      {
+        ...row({
+          id: 'directions-b',
+          document_id: 'label-1',
+          chunk_index: 2,
+          heading: null,
+          chunk_text: 'Keep the surface wet for 10 minutes.',
+        }),
+        chunk_key: 'directions-b',
+        section_path: ['label'],
+        section_type: 'label',
+      },
+    ];
+    mockSectionQuery(rows);
+
+    const result = await assembleSelectedDocumentPassages([
+      { documentId: 'label-1', documentKind: 'label', sectionTypes: ['directions'] },
+    ]);
+
+    expect(result.get('label-1')?.body.chunkIds).toEqual(['directions-a', 'directions-b']);
+  });
+
+  it('uses bounded same-document passage ranking when label section metadata is absent', async () => {
+    const rows = [
+      {
+        ...row({
+          id: 'identity',
+          document_id: 'label-1',
+          chunk_index: 0,
+          heading: null,
+          chunk_text: 'Speedex Concentrate product label.',
+        }),
+        chunk_key: 'identity',
+        section_path: ['label'],
+        section_type: 'label',
+      },
+      {
+        ...row({
+          id: 'decisive-rate',
+          document_id: 'label-1',
+          chunk_index: 4,
+          heading: null,
+          chunk_text: 'For heavy soil, dilute at a 1:20 ratio or 6.4 oz per gallon.',
+        }),
+        chunk_key: 'decisive-rate',
+        section_path: ['label'],
+        section_type: 'label',
+      },
+    ];
+    mockSectionQuery(rows);
+
+    const result = await assembleSelectedDocumentPassages([
+      {
+        documentId: 'label-1',
+        documentKind: 'label',
+        sectionTypes: ['dilution'],
+        query: 'What is the heavy soil dilution for Speedex Concentrate?',
+      },
+    ]);
+
+    expect(result.get('label-1')?.body.chunkIds).toEqual(['decisive-rate']);
+    expect(result.get('label-1')?.selectedSectionTypes).toEqual(['ranked_same_document']);
+  });
+
+  it('returns no override when the selected document lacks the requested section', async () => {
+    mockSectionQuery([]);
+
+    await expect(
+      assembleSelectedDocumentPassages([
+        {
+          documentId: 'label-1',
+          documentKind: 'label',
+          sectionTypes: ['directions'],
+        },
+      ]),
+    ).resolves.toEqual(new Map());
+  });
+
+  it('parses only explicit label section markers', () => {
+    expect(
+      labelSectionTypeFromHeading('Directions <!-- section_type: directions -->'),
+    ).toBe('directions');
+    expect(labelSectionTypeFromHeading('Directions for Use')).toBeNull();
   });
 });
 
