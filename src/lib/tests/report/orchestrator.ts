@@ -23,6 +23,7 @@ import {
   resolveGradingModel,
 } from './grading-model';
 import { renderReportMarkdown } from './render';
+import { resolveReportCategory } from './report-category';
 import {
   GRADING_CALL_FAILED_PREFIX,
   emptyReportState,
@@ -185,7 +186,8 @@ async function scoreOnePass(
   return scoreCase(
     {
       question: item.prompt,
-      category: item.prompt_category,
+      // B0-853 — the same category of record the assembled report prints for this case.
+      category: resolveReportCategory(item),
       priorityRaw: item.priority,
       idealResponse: item.ideal_response,
       expectedSources: resolveExpectedSourceRefs(item.expected_sources, expectedSourceIndex),

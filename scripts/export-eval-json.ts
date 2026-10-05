@@ -60,6 +60,7 @@ import {
   type ReportMetrics,
 } from '~/lib/tests/report/metrics';
 import { hydrateLegacyPassScores } from '~/lib/tests/report/orchestrator';
+import { resolveReportCategory } from '~/lib/tests/report/report-category';
 import type { CaseScore, ReportState } from '~/lib/tests/report/schemas';
 import { parseReportState } from '~/lib/tests/report/schemas';
 import {
@@ -379,7 +380,7 @@ function rebuildCaseInputs(loaded: LoadedRun): ReportCaseInput[] {
       testItemId: item.id,
       question: item.prompt,
       priorityRaw: item.priority,
-      category: item.prompt_category,
+      category: resolveReportCategory(item), // B0-853 — must match assembleReportCases byte-for-byte
       score,
       latencySeconds,
       ttftSeconds,

@@ -17,6 +17,12 @@ export type RunExportItem = {
   prompt: string;
   /** Item priority rank (lower = more important); null when unset. */
   priority: number | null;
+  /**
+   * B0-853 — the category of record: the dataset's human-authored `question_category`, falling
+   * back to the classifier's `prompt_category`, else `Uncategorized`. The same label the run report
+   * groups by and the grader was shown (`resolveReportCategory`).
+   */
+  category: string;
   passed: boolean;
   status: string;
   similarity: number | null;

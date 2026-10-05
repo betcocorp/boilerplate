@@ -30,6 +30,7 @@ import {
 } from './metrics';
 import type { CaseHarnessAside } from './render';
 import { caseAnchorId, orderCasesByTier } from './render';
+import { resolveReportCategory } from './report-category';
 import {
   gradingConfigFromState,
   parseReportState,
@@ -235,7 +236,8 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       testItemId: item.id,
       question: item.prompt,
       priorityRaw: item.priority,
-      category: item.prompt_category,
+      // B0-853 — the dataset's `question_category`, the same label the grader was handed.
+      category: resolveReportCategory(item),
       score,
       latencySeconds,
       ttftSeconds,
@@ -299,7 +301,7 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       question: item.prompt,
       tier: tierLabel(item.priority),
       priorityRaw: item.priority,
-      category: item.prompt_category ?? 'Uncategorized',
+      category: resolveReportCategory(item),
       idealResponse: item.ideal_response,
       // B0-933 — `text[]` columns, one phrase per element, copied by reference and never re-split.
       expectedConcepts: item.expected_concepts,
