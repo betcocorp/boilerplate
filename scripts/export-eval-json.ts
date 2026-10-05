@@ -50,24 +50,18 @@ import {
   type AssembledReportCases,
 } from '~/lib/tests/report/assemble';
 import { consolidateCasePasses } from '~/lib/tests/report/consolidate';
+import { buildEvalRunDocument } from '~/lib/tests/report/eval-json-export';
 import {
-  completenessFromCoverage,
   computeReportMetrics,
-  NO_EXPECTED_CONCEPTS_UTE_REASON,
-  tierLabel,
   type ComputeReportMetricsOptions,
   type ReportCaseInput,
   type ReportMetrics,
 } from '~/lib/tests/report/metrics';
 import { hydrateLegacyPassScores } from '~/lib/tests/report/orchestrator';
 import { resolveReportCategory } from '~/lib/tests/report/report-category';
-import type { CaseScore, ReportState } from '~/lib/tests/report/schemas';
+import type { ReportState } from '~/lib/tests/report/schemas';
 import { parseReportState } from '~/lib/tests/report/schemas';
-import {
-  DEFAULT_PASS_MARK,
-  DEFAULT_SCORING_RULES,
-  type ScoringRules,
-} from '~/lib/tests/report/scoring-config';
+import { DEFAULT_PASS_MARK } from '~/lib/tests/report/scoring-config';
 import {
   getTestById,
   getTestItemsByTestId,
@@ -146,174 +140,23 @@ async function loadRun(runId: string): Promise<LoadedRun> {
 
 // ---------------------------------------------------------------------------------- eval.json
 
-/** The skill's `concepts` block, field for field, phrases copied by reference (regulated text). */
-function conceptsBlock(concepts: NonNullable<CaseScore['concepts']>) {
-  return {
-    minimal_required: concepts.mandatory.required,
-    minimal_satisfied: concepts.mandatory.satisfied,
-    minimal_missing: concepts.mandatory.missing,
-    expected_required: concepts.expected.required,
-    expected_satisfied: concepts.expected.satisfied,
-    expected_missing: concepts.expected.missing,
-    material_issue: concepts.materialIssue,
-    material_issue_note: concepts.materialIssueNote,
-  };
-}
-
-/** Bex's synthesis, when the report finished; the skill's keys are snake_case. Omitted otherwise. */
-function synthesisBlock(state: ReportState) {
-  const s = state.synthesis;
-  if (!s) return {};
-  return {
-    failure_patterns: s.failurePatterns,
-    strengths: s.strengths,
-    weaknesses: s.weaknesses,
-    top3: s.top3.map((r) => ({
-      priority: r.priority,
-      what: r.what,
-      why_first: r.whyFirst,
-      evidence: r.evidence,
-      affected: r.affected,
-      change: r.change,
-      impact: r.impact,
-    })),
-    exec: {
-      strongest_areas: s.exec.strongestAreas,
-      improvement_areas: s.exec.improvementAreas,
-      most_significant_failure: s.exec.mostSignificantFailure,
-      major_risk: s.exec.majorRisk,
-      readiness: s.exec.readiness,
-    },
-  };
-}
-
 /**
- * B0-835 — `scoring_config` in the skill's `concept_rules.py` `SCORING_DEFAULTS` shape, key for
- * key, from the rules this run was actually scored under. Every rule is declared, on or off, so the
- * skill's per-run overalls are computed under the rulebook these grades were produced by.
+ * B0-854 — the per-pass shape lives in `~/lib/tests/report/eval-json-export` so the re-grade script
+ * writes the same bytes for the same judgments. This stays a thin call: Bex's own per-pass scores,
+ * the exporter's own comment, nothing else.
  */
-function toSkillScoringConfig(rules: ScoringRules, passMark: number) {
-  return {
-    pass_mark: { score: passMark },
-    minimal_gate: { enabled: rules.minimalGate.enabled },
-    minimal_floor: {
-      enabled: rules.minimalFloor.enabled,
-      score: rules.minimalFloor.score,
-      respect_material_issue: rules.minimalFloor.respectMaterialIssue,
-    },
-    minimal_ceiling: { enabled: rules.minimalCeiling.enabled, score: rules.minimalCeiling.score },
-    expected_coverage: { enabled: rules.expectedCoverage.enabled },
-  };
-}
-
 function buildEvalRun(loaded: LoadedRun, passIndex: number, exportedAt: string) {
   const { run, test, items, state, assembled } = loaded;
-  const caseById = new Map(assembled.cases.map((c) => [c.id, c]));
-  const passMark = state.passMark ?? DEFAULT_PASS_MARK;
-
-  const cases = [];
-  for (const item of items) {
-    const pass = state.casePassScores[item.id]?.[passIndex];
-    if (!pass) continue;
-    const rc = caseById.get(item.id);
-    if (!rc) throw new Error(`assembly produced no case for item ${item.id}`);
-
-    // Evaluability under Bex's rules for THIS pass: the grader said so, or the pass has no
-    // expected concepts — a concept-less case is never graded holistically (B0-826 / B0-835).
-    const coverage = pass.unableToEvaluate ? null : completenessFromCoverage(pass.concepts);
-    const unableToEvaluate = pass.unableToEvaluate || coverage == null;
-    // B0-835 — Completeness as the grader judged it, uncapped: the skill's own expected-coverage
-    // rule caps it under `scoring_config`, exactly as `deriveCaseScoreline` does here. A pass graded
-    // in the B0-813 window emitted no judged value; coverage is then its only Completeness — the
-    // same fallback the report applies.
-    const completeness = unableToEvaluate ? null : (pass.completeness ?? coverage);
-    const uteReason = pass.unableToEvaluate
-      ? (pass.uteReason ?? 'unspecified')
-      : unableToEvaluate
-        ? NO_EXPECTED_CONCEPTS_UTE_REASON
-        : null;
-
-    cases.push({
-      id: item.id,
-      question: rc.question,
-      priority_raw: rc.priorityRaw,
-      tier: rc.tier,
-      category: rc.category,
-      expected: rc.idealResponse,
-      actual: rc.actual,
-      ...(unableToEvaluate
-        ? {}
-        : {
-            accuracy: pass.accuracy,
-            completeness,
-            relevance: pass.relevance,
-            clarity: pass.clarity,
-            explanation: pass.explanation,
-            missed: pass.missed,
-            incorrect: pass.incorrect,
-            improvement: pass.improvement,
-          }),
-      ...(rc.ttftSeconds != null ? { ttft_seconds: rc.ttftSeconds } : {}),
-      ...(rc.latencySeconds != null ? { latency_seconds: rc.latencySeconds } : {}),
-      ...(pass.concepts ? { concepts: conceptsBlock(pass.concepts) } : {}),
-      unable_to_evaluate: unableToEvaluate,
-      ute_reason: uteReason,
-      ...(pass.similarity != null ? { similarity: pass.similarity } : {}),
-      ...(pass.similarityNote != null ? { similarity_note: pass.similarityNote } : {}),
-      ...(pass.evalConfidence != null ? { eval_confidence: pass.evalConfidence } : {}),
-      ...(pass.confidenceNote != null ? { confidence_note: pass.confidenceNote } : {}),
-    });
-  }
-
-  // Priority → tier, from the priorities this dataset actually uses, in dataset order.
-  const tierLabels: Record<string, string> = {};
-  for (const item of items) {
-    if (item.priority != null) tierLabels[tierLabel(item.priority)] = String(item.priority);
-  }
-
-  return {
-    meta: {
-      workbook: test.name,
-      ...(test.intended_agent ? { workflow: test.intended_agent } : {}),
-      prepared_for: 'Betco / Bex',
-      run_url: `/admin/tests/${test.id}/runs/${run.id}`,
-      $comment:
-        'Exported from Bex (scripts/export-eval-json.ts, B0-823 / B0-835). Bex’s grader judges all ' +
-        'four sub-scores — Accuracy, Completeness, Relevance, Clarity — plus the per-concept verdicts. ' +
-        '`completeness` is the judged value, UNCAPPED: apply `scoring_config` (expected-coverage cap, ' +
-        'weights 40/30/20/10, mandatory floor, mandatory ceiling, automatic Pass, mandatory gate) to ' +
-        'reproduce Bex’s numbers. A pass graded between 2026-09-03 and 2026-09-04 (the B0-813 window) ' +
-        'carries no judged Completeness; its `completeness` is the expected-concept coverage share ' +
-        '(100 × expected_satisfied / expected_required, half-up), exactly as Bex scores such a pass. ' +
-        'A pass with no expected concepts is unable_to_evaluate under Bex’s rules and is exported as ' +
-        'such. Bex is the spec.',
-      bex: {
-        run_id: run.id,
-        test_id: test.id,
-        app_version: run.app_version,
-        pass: passIndex + 1,
-        passes: state.passes,
-        grading: {
-          model: state.model,
-          effort: state.gradingEffort,
-          pass_mark: passMark,
-          spread_threshold: state.spreadThreshold,
-          grading_prompt_hash: state.gradingPromptHash,
-          judged_thresholds: state.judgedThresholds,
-          // B0-835 — Bex's own record of the rules; null on a report_state that predates the field.
-          scoring_rules: state.scoringRules,
-        },
-        exported_at: exportedAt,
-      },
-    },
-    tier_labels: tierLabels,
-    // B0-835 — the concept rules these grades were actually scored under, declared explicitly
-    // (never left to the skill's defaults). A report_state persisted before the field existed was
-    // produced under the shipped defaults, which is what the read path applies to it too.
-    scoring_config: toSkillScoringConfig(state.scoringRules ?? DEFAULT_SCORING_RULES, passMark),
-    cases,
-    ...synthesisBlock(state),
-  };
+  return buildEvalRunDocument({
+    test,
+    run,
+    items,
+    state,
+    cases: assembled.cases,
+    passScores: state.casePassScores,
+    passIndex,
+    exportedAt,
+  });
 }
 
 async function writeEvalRuns(loaded: LoadedRun, outDir: string): Promise<void> {
