@@ -2009,3 +2009,74 @@ describe('evaluateRegulatedClaimGrounding — B0-923 generic chemistry-class pro
     expect(result.ungroundedCategories).toContain('hazard');
   });
 });
+
+describe('evaluateRegulatedClaimGrounding — B0-923 attribution refinements (historical replay)', () => {
+  const MARATHANE_LABEL = {
+    documentId: 'doc-marathane-45',
+    title: 'Marathane 45',
+    documentBody: 'WARNING: COMBUSTIBLE. Always use a respirator when applying this product. 480 g/L VOC.',
+  };
+  const OTHER_FINISH = {
+    documentId: 'doc-other',
+    title: 'Players Choice One',
+    documentBody: 'Waterbased. Low odor. Non-flammable.',
+  };
+
+  it('attributes a sentence that names a source by its full title', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'For example, the Marathane 45 wood-gym-floor label labels the product **“COMBUSTIBLE,”** and requires a respirator during application.',
+      sources: [OTHER_FINISH, MARATHANE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('does not let a named title ground a value only another product prints', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Players Choice One is combustible and requires a respirator.',
+      sources: [OTHER_FINISH, MARATHANE_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('grounds across the locked product line documents when "per the X SDS" attributes the label instead', () => {
+    const label = { ...SPEEDEX_LABEL_SOURCE, documentBody: 'Speedex Concentrate. Heavy duty degreaser. Recommended: splash goggles.' };
+    const dilutedSds = {
+      documentId: 'doc-528-dil',
+      title: '528 DIL MXE',
+      isLockedProductLineSource: true,
+      documentBody: 'SKIN CORROSION - Category 1. Signal word: Danger. H314 - Causes severe skin burns and eye damage.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- **PPE:** Speedex Concentrate is classified **Skin Corrosion Category 1, Signal word Danger, H314**, so wear splash goggles — per the Speedex Concentrate SDS.',
+      sources: [label, dilutedSds],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('does not pool values across documents that are NOT the locked product line', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product is combustible and causes severe skin burns.',
+      sources: [
+        { ...MARATHANE_LABEL, isLockedProductLineSource: false },
+        { ...SPEEDEX_LABEL_SOURCE, isLockedProductLineSource: false },
+      ],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('lets "Some are flammable" reach a chemistry header two sentences back through product-free prose', () => {
+    const draftAnswer = [
+      '**Solvent-Based (Oil-Modified) Finishes:**',
+      '- Higher VOCs: These finishes can emit more VOCs and harmful chemicals, leading to stronger odors and requiring more ventilation. Some are flammable, affecting storage and handling.',
+    ].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] }).categoriesDetected).not.toContain('hazard');
+  });
+
+  it('does not reach two sentences back through a sentence that names a product', () => {
+    const draftAnswer =
+      'Solvent-based finishes are durable. Marathane 45 is a classic choice. Some are flammable, affecting storage.';
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] }).ungroundedCategories).toContain('hazard');
+  });
+});

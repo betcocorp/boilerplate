@@ -687,6 +687,8 @@ function isSubBulletOfChemistryHeader(sentence: string, precedingSentence: strin
 /** Openers that continue the previous sentence's subject rather than naming a new one. */
 const CLASS_ANAPHORA_OPENER_PATTERN =
   /^(?:some|many|most|they|these|those|both|have|has|are|may|can|often)\b/i;
+/** A bridging sentence that points back at an earlier subject instead of naming a new one. */
+const CLASS_BACK_REFERENCE_PATTERN = /\b(?:these|those|such|they|them|their)\b/i;
 
 /**
  * B0-923 — the prose twin of B0-1052. "Solvent-based finishes offer strong durability. Some are
@@ -701,16 +703,26 @@ const CLASS_ANAPHORA_OPENER_PATTERN =
 function isAnaphoricContinuationOfChemistryClass(
   sentence: string,
   precedingSentence: string | undefined,
+  sentenceBeforePreceding?: string,
 ): boolean {
   if (!precedingSentence) return false;
   const text = stripSentenceMarkup(sentence);
   if (!CLASS_ANAPHORA_OPENER_PATTERN.test(text)) return false;
   if (countDistinctMatches(text, GENERIC_CHEMISTRY_CLASS_PATTERNS) > 0) return false;
   if (hasProductSubject(sentence)) return false;
-  if (countDistinctMatches(stripSentenceMarkup(precedingSentence), GENERIC_CHEMISTRY_CLASS_PATTERNS) === 0) {
-    return false;
+  const namesChemistryClass = (s: string) =>
+    countDistinctMatches(stripSentenceMarkup(s), GENERIC_CHEMISTRY_CLASS_PATTERNS) > 0;
+  if (namesChemistryClass(precedingSentence)) {
+    return isGenericMaterialClassComparison(`${precedingSentence} ${sentence}`);
   }
-  return isGenericMaterialClassComparison(`${precedingSentence} ${sentence}`);
+  // Live: "**Solvent-Based (Oil-Modified) Finishes:**" / "- Higher VOCs: These finishes can emit
+  // more VOCs ..." / "Some are flammable, affecting storage and handling." — the chemistry class is
+  // two sentences back, reached only through a sentence that itself refers back to that class
+  // ("These finishes", "They") rather than introducing a subject of its own ("Marathane 45 is ...").
+  if (!sentenceBeforePreceding) return false;
+  if (!CLASS_BACK_REFERENCE_PATTERN.test(stripSentenceMarkup(precedingSentence))) return false;
+  if (!namesChemistryClass(sentenceBeforePreceding)) return false;
+  return isGenericMaterialClassComparison(`${sentenceBeforePreceding} ${precedingSentence} ${sentence}`);
 }
 
 /**
@@ -1012,7 +1024,11 @@ function extractContactTimeTokens(text: string): string[] {
   return extractRegexTokens(text, CONTACT_TIME_TOKEN_PATTERN);
 }
 
-function isHazardClaimSentence(sentence: string, precedingSentence?: string): boolean {
+function isHazardClaimSentence(
+  sentence: string,
+  precedingSentence?: string,
+  sentenceBeforePreceding?: string,
+): boolean {
   // B0-915: an offer/pointer/generic-safety sentence is not a transcribed hazard statement.
   if (isMetaOrPointerSafetySentence(sentence)) return false;
   // B0-928: a contrast between two generic chemistry classes is not a transcribed hazard statement.
@@ -1021,7 +1037,9 @@ function isHazardClaimSentence(sentence: string, precedingSentence?: string): bo
   // context from its immediately preceding bullet-header line before this is judged a hazard claim.
   if (isSubBulletOfChemistryHeader(sentence, precedingSentence)) return false;
   // B0-923: "Some are flammable" continuing a sentence that named the chemistry class.
-  if (isAnaphoricContinuationOfChemistryClass(sentence, precedingSentence)) return false;
+  if (isAnaphoricContinuationOfChemistryClass(sentence, precedingSentence, sentenceBeforePreceding)) {
+    return false;
+  }
   // B0-870: "Non Corrosive" (a product name) / "non-flammable" are not hazard statements.
   const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
   if (HAZARD_SENTENCE_PATTERN.test(text)) return true;
@@ -1340,10 +1358,10 @@ function sourceStatesHazardTerm(body: string, term: string): boolean {
  * (live: "Always wear chemical-resistant gloves and splash goggles ... as it can cause severe skin
  * burns and eye damage (SDS Section 2)." against the Speedex Concentrate SDS). A hazard sentence is
  * grounded here only when:
- *  - it is attributed to a specific product's own document (`attributedSources`, or — when nothing
- *    else names a source — one of the turn's LOCKED product line documents), and
- *  - it carries at least one hazard value term, and EVERY value term it carries appears in ONE of
- *    those documents, as whole words, in the same polarity.
+ *  - it carries at least one hazard value term, and EVERY value term it carries appears, as whole
+ *    words and in the same polarity, either in ONE attributed document (`attributedSources`, or a
+ *    source whose full title the sentence names) or across the turn's LOCKED product line documents
+ *    (all the same product: label, SDS, diluted-use SDS).
  * A hazard, PPE item or incompatibility the document never prints still fails, as does a sentence
  * with no attributable product document. `first_aid` and every token category stay verbatim-only.
  */
@@ -1355,15 +1373,30 @@ function isHazardValueTermGrounded(
 ): boolean {
   const terms = extractHazardValueTerms(sentence);
   if (terms.length === 0) return false;
+  const bodyOf = (source: RegulatedClaimSource) =>
+    normalizeSentenceForGroundingCompare(source.documentBody).replace(/-/g, ' ');
 
-  let candidates = attributedSources(sentence, contextText, sources, draftAnswer);
-  if (candidates.length === 0) candidates = sources.filter((s) => s.isLockedProductLineSource);
-  if (candidates.length === 0) return false;
+  // One attributed document (cited, "per the X label", bullet head, or named by its full title)
+  // that prints every value term.
+  const attributed = attributedSources(sentence, contextText, sources, draftAnswer);
+  const sentenceText = ` ${normalizeProductNameForCompare(stripSentenceMarkup(sentence))} `;
+  for (const source of sources) {
+    const title = normalizeProductNameForCompare(source.title);
+    if (title.length >= 5 && /[a-z]/.test(title) && sentenceText.includes(` ${title} `) && !attributed.includes(source)) {
+      attributed.push(source);
+    }
+  }
+  if (attributed.some((source) => terms.every((term) => sourceStatesHazardTerm(bodyOf(source), term)))) {
+    return true;
+  }
 
-  return candidates.some((source) => {
-    const body = normalizeSentenceForGroundingCompare(source.documentBody).replace(/-/g, ' ');
-    return terms.every((term) => sourceStatesHazardTerm(body, term));
-  });
+  // Or the locked product line's own documents together: every one is the SAME product (label, SDS,
+  // diluted-use SDS), so a value printed on any of them belongs to the product the turn locked.
+  // Live: "per the Speedex Concentrate SDS" attributes the label titled "Speedex Concentrate", while
+  // H314 / Category 1 are printed in the locked line's SDS titled "528 DIL MXE".
+  const lockedBodies = sources.filter((s) => s.isLockedProductLineSource).map(bodyOf);
+  if (lockedBodies.length === 0) return false;
+  return terms.every((term) => lockedBodies.some((body) => sourceStatesHazardTerm(body, term)));
 }
 
 /**
@@ -1428,8 +1461,8 @@ export function evaluateRegulatedClaimGrounding(input: {
   };
 
   /**
-   * B0-888 — `hazard`/`first_aid` walk this unchanged (full sentence list, filtered by the trigger,
-   * verbatim/quoted-span grounding only). `compatibility`/`efficacy_claim` additionally try the
+   * B0-888 — `first_aid` walks this unchanged (full sentence list, filtered by the trigger,
+   * verbatim/quoted-span grounding only); `hazard` adds the B0-923 value-term path. `compatibility`/`efficacy_claim` additionally try the
    * key-term fallback, then a check on the textually NEXT sentence: a grounded verbatim quote
    * immediately following an ungrounded paraphrase is sufficient grounding for that paraphrase too.
    * Both need the FULL (unfiltered) sentence list -- not just the claim sentences -- to know what is
@@ -1439,14 +1472,18 @@ export function evaluateRegulatedClaimGrounding(input: {
     category: RegulatedClaimCategory,
     // B0-1052: `precedingSentence` is optional and only consulted by `isHazardClaimSentence` (the
     // sub-bullet/header-context exclusion); every other trigger ignores the extra argument.
-    isClaimTrigger: (sentence: string, precedingSentence?: string) => boolean,
+    isClaimTrigger: (
+      sentence: string,
+      precedingSentence?: string,
+      sentenceBeforePreceding?: string,
+    ) => boolean,
   ) => {
     const allSentences = splitIntoSentences(input.draftAnswer);
     const claimIndices: number[] = [];
     for (let i = 0; i < allSentences.length; i += 1) {
       const precedingSentence = i > 0 ? allSentences[i - 1] : undefined;
       if (
-        isClaimTrigger(allSentences[i], precedingSentence) &&
+        isClaimTrigger(allSentences[i], precedingSentence, i > 1 ? allSentences[i - 2] : undefined) &&
         !isNonClaimScaffolding(allSentences[i])
       ) {
         claimIndices.push(i);
