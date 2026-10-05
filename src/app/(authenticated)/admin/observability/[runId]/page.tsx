@@ -209,6 +209,17 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                     </Button>
                   </>
                 ) : null}
+                {/* B0-533 — up to the conversation this run was one turn of (turn-by-turn view). */}
+                {run?.conversation_id ? (
+                  <Button asChild size="sm" variant="outline">
+                    <Link
+                      href={`/admin/bex/conversations/${run.conversation_id}`}
+                      title="Every turn of the conversation this run belongs to"
+                    >
+                      View conversation
+                    </Link>
+                  </Button>
+                ) : null}
                 <Button asChild size="sm" variant="outline">
                   <Link href="/admin/observability">All runs</Link>
                 </Button>

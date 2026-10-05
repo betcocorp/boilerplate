@@ -124,6 +124,13 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
+            // B0-533 — turn-by-turn viewer over other users' chats, so it is gated on the same
+            // selector the pages enforce (bex.chat.view-all), not a sidebar-only one.
+            label: 'Conversations',
+            href: '/admin/bex/conversations',
+            permission: PERMISSIONS.BEX_CHAT_VIEW_ALL,
+          },
+          {
             label: 'Compare conversations',
             href: '/admin/bex/compare',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_COMPARE,
@@ -285,12 +292,14 @@ function isActivePath(pathname: string, href: string) {
   }
 
   // "Bex chat" links to `/admin/bex`; without this carve-out it would also light up for the
-  // `/admin/bex/health` dashboard, which has its own sidebar entry.
+  // `/admin/bex/health` dashboard, which has its own sidebar entry. B0-533 — same for the
+  // `/admin/bex/conversations` turn-by-turn viewer.
   if (href === '/admin/bex') {
     return (
       pathname === '/admin/bex' ||
       (pathname.startsWith('/admin/bex/') &&
-        !pathname.startsWith('/admin/bex/health'))
+        !pathname.startsWith('/admin/bex/health') &&
+        !pathname.startsWith('/admin/bex/conversations'))
     );
   }
 
