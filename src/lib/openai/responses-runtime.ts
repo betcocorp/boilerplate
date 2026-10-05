@@ -9,6 +9,7 @@ import type { ResponseInputItem } from 'openai/resources/responses/responses';
 import { modelProviderFor } from '~/lib/constants/models';
 import { extractAssistantText, extractFunctionCalls } from '~/lib/openai/response-item-parsing';
 import {
+  DEFAULT_GENERATION_TEMPERATURE,
   isTemperatureUnsupportedError,
   recordTemperatureRejection,
   samplingParamsFor,
@@ -870,7 +871,7 @@ export async function runResponsesWithToolLoop(
       // B0-606 — gpt-5.5/gpt-5.6 (and the o-series) reject `temperature` outright, which failed
       // every run on those models in the agent loop, after a retrieval tool call had already
       // been paid for. Omitted entirely for those models rather than sent-and-ignored.
-      ...samplingParamsFor(opts.model, { temperature: opts.temperature ?? 0.2 }),
+      ...samplingParamsFor(opts.model, { temperature: opts.temperature ?? DEFAULT_GENERATION_TEMPERATURE }),
       input,
       ...(opts.promptCacheKey ? { prompt_cache_key: opts.promptCacheKey } : {}),
       ...(chainPrev ? { previous_response_id: chainPrev } : {}),

@@ -40,6 +40,12 @@ import {
   retryTransportFaults,
   type TransportRetryTuning,
 } from '~/lib/openai/transport-retry';
+import {
+  DEFAULT_GENERATION_TEMPERATURE,
+  isTemperatureUnsupportedError,
+  recordTemperatureRejection,
+  samplingParamsFor,
+} from '~/lib/openai/model-capabilities';
 import { logError, logWarn } from '~/lib/observability/logger';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { getErrorMessage } from '~/lib/utils';
@@ -351,17 +357,38 @@ function createTransportRetryMiddleware(
 ): LanguageModelMiddleware {
   return {
     specificationVersion: 'v3',
-    wrapStream: async ({ doStream, params, model }) =>
-      retryTransportFaults(async () => {
-        if (!requestTimeoutMs) {
-          return startModelStreamOrThrow(await doStream());
+    wrapStream: async ({ params, model }) => {
+      const open = (callParams: typeof params) =>
+        retryTransportFaults(
+          async () =>
+            requestTimeoutMs
+              ? startModelStreamWithTimeout(model, callParams, requestTimeoutMs)
+              : startModelStreamOrThrow(await model.doStream(callParams)),
+          {
+            runtime: 'ai_sdk',
+            label: 'streamText.doStream',
+            ...tuning,
+          },
+        );
+      /**
+       * B0-606 safety net, same contract as the Responses loop: a model whose sampling support we
+       * do not know yet may reject `temperature`. Remember it for the process and replay once
+       * without it. A deterministic 4xx, so deliberately outside `retryTransportFaults`;
+       * `recordTemperatureRejection` returning false once known is what bounds this to one replay.
+       */
+      try {
+        return await open(params);
+      } catch (err) {
+        if (
+          params.temperature === undefined ||
+          !isTemperatureUnsupportedError(err) ||
+          !recordTemperatureRejection(model.modelId)
+        ) {
+          throw err;
         }
-        return startModelStreamWithTimeout(model, params, requestTimeoutMs);
-      }, {
-        runtime: 'ai_sdk',
-        label: 'streamText.doStream',
-        ...tuning,
-      }),
+        return open({ ...params, temperature: undefined });
+      }
+    },
   };
 }
 
@@ -581,6 +608,11 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     // B0-459 — see `ResponsesRuntimeOptions.maxOutputTokens`; omitted (rather than `undefined`) so a
     // caller that does not pass one gets the AI SDK/provider default, matching the Responses runtime.
     ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+    // B0-1138 — same default and same capability gate as the Responses loop. Without it OpenAI fell
+    // back to its own default (1.0) here, so the same model drafted more freely on this loop and the
+    // regulated-claim guardrail fired more often. `samplingParamsFor` returns nothing for every
+    // `claude-*` id and every model verified to reject it.
+    ...samplingParamsFor(languageModel.modelId, { temperature: DEFAULT_GENERATION_TEMPERATURE }),
     // B0-324 — pin every step of the loop to the same prompt cache pool so the stable
     // system + tool-schema prefix is read from cache on the 2nd+ step. Provider-specific (B0-908 /
     // B0-900): OpenAI takes the key itself; Anthropic has no key, so the key's presence enables the

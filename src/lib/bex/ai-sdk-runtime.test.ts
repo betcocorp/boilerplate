@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
+import { __resetLearnedSamplingSupport } from '~/lib/openai/model-capabilities';
 import {
   formatPriorTurnToolContext,
   PRIOR_TURN_TOOL_CONTEXT_HEADER,
@@ -1390,10 +1391,17 @@ describe('runAiSdkWithToolLoop — ported loop behaviours (B0-901)', () => {
    * adding a `temperature` here would silently break every Claude call (Opus 5 / Sonnet 5 return
    * 400 on any sampling control).
    */
-  it('sends no sampling control on either provider, so a temperature rejection cannot arise', async () => {
-    for (const modelTag of ['gpt-4.1-mini', 'claude-sonnet-5']) {
+  it('sends the shared default temperature to a model that accepts it, and none to Claude or a rejecting model (B0-1138)', async () => {
+    const expectations: Array<[string, number | undefined]> = [
+      ['gpt-4.1-mini', 0.2],
+      ['gpt-5.5', undefined],
+      ['claude-sonnet-5', undefined],
+    ];
+    for (const [modelTag, expected] of expectations) {
       const seen: Array<Record<string, unknown>> = [];
       modelRef.current = recordingModel([answerChunks('ok')], seen);
+      // The mock model carries no real id, so route the capability gate through the tag.
+      (modelRef.current as { modelId: string }).modelId = modelTag;
 
       await runAiSdkWithToolLoop({
         modelTag,
@@ -1404,8 +1412,51 @@ describe('runAiSdkWithToolLoop — ported loop behaviours (B0-901)', () => {
       });
 
       expect(seen).toHaveLength(1);
-      expect(seen[0]!.temperature).toBeUndefined();
+      expect(seen[0]!.temperature).toBe(expected);
       expect(seen[0]!.topP).toBeUndefined();
     }
   });
+
+  it('replays once without temperature when an unfamiliar model rejects it (B0-606 parity)', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    let call = 0;
+    modelRef.current = new MockLanguageModelV3({
+      modelId: 'gpt-9-future',
+      doStream: async (options) => {
+        call += 1;
+        seen.push(options as unknown as Record<string, unknown>);
+        if (call === 1) {
+          throw Object.assign(
+            new Error("Unsupported parameter: 'temperature' is not supported with this model."),
+            { statusCode: 400 },
+          );
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'ok' },
+              { type: 'text-end', id: '0' },
+              { type: 'finish', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+            ] as const,
+          }),
+        };
+      },
+    });
+
+    const result = await runAiSdkWithToolLoop({
+      modelTag: 'gpt-9-future',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(result.assistantText).toBe('ok');
+    expect(seen).toHaveLength(2);
+    expect(seen[0]!.temperature).toBe(0.2);
+    expect(seen[1]!.temperature).toBeUndefined();
+    __resetLearnedSamplingSupport();
+  });
+
 });

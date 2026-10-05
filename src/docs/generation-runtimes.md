@@ -176,7 +176,7 @@ asserted by a test where one exists.
 | --- | --- | --- | --- |
 | B0-635 unproductive-retrieval withdrawal | yes | yes | ported (B0-901) |
 | B0-381 forced final answer | yes | yes | ported (B0-901), with the divergence below |
-| B0-606 temperature-rejection replay | yes | n/a | unreachable: never sends a sampling control |
+| B0-606 temperature-rejection replay | yes | yes | **ported (B0-1138)** — see temperature below |
 | B0-370 bounded transport retry | `retryTransportFaults` | same function, per `doStream` | present |
 | B0-550 per-attempt request timeout | `timeout: resolveOpenAiRequestTimeoutMs()` | first-chunk timeout in the retry middleware | **ported (B0-1137)**, OpenAI only |
 | B0-379 parallel tool calls | `parallel_tool_calls: true` + `Promise.all` | SDK runs a step's calls concurrently | present, asserted by test (B0-1137) |
@@ -192,8 +192,14 @@ Decisions recorded:
   first chunk, so a long answer is never cut off.
 - **B0-381 extra round (accepted).** The AI SDK executes the final round's tool calls before the
   forced answer; the Responses loop skips them. The model-visible instruction is identical.
-- **No sampling control (accepted).** The AI SDK loop never sends `temperature`. Revisit only if a
-  sampling control is wanted for a specific route.
+- **Temperature (was wrongly "accepted", fixed in B0-1138).** The Responses loop has always sent
+  `temperature: 0.2` to models that accept it; the AI SDK loop sent none, so OpenAI used its own
+  default of 1.0. On the gpt-4.1 A/B (B0-1122) the AI SDK arm drafted more freely, added specific
+  contact times the guardrail could not ground, and took `regulated_claim_partial_redaction` on
+  items where Responses answered `model_generated` (guardrail redactions 4 -> 9). Both loops now
+  send `DEFAULT_GENERATION_TEMPERATURE` (`~/lib/openai/model-capabilities`) through the same
+  `samplingParamsFor` gate, and the AI SDK loop has the same replay-once safety net for an
+  unfamiliar model that rejects it. Claude ids and models verified to reject it still get none.
 
 ## Post-generation gate: regulated-claim guardrail — redact vs. decline (B0-829 / B0-871)
 
