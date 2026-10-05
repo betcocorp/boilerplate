@@ -2292,3 +2292,225 @@ describe('evaluateRegulatedClaimGrounding — B0-1131 single-cited attribution n
     expect(result.ungroundedCategories).toContain('efficacy_claim');
   });
 });
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 ROW-05 product named by its own document', () => {
+  const BETCO_ONE_LABEL = {
+    documentId: '8214830a-282d-47e6-a25f-d132416d9180',
+    title: 'Betco One RTU',
+    documentKind: 'label',
+    documentBody:
+      '# Betco One RTU\nEFFICACY TESTS HAVE DEMONSTRATED THAT BetONE™\nRTU DISINFECTANT IS AN EFFECTIVE VIRUCIDE. Kills Norovirus in 1 minute.',
+  };
+  const FIGHT_BAC_EFFICACY = {
+    documentId: 'cbb72d77-5f55-4e2e-ba81-20dbc5155faa',
+    title: 'Efficacy Data 311 Fight Bac',
+    documentKind: 'efficacy',
+    documentBody: '---\nproduct_name: Betco Disinfectant Fight-Bac™ RTU\norganisms: [Norovirus, Staphylococcus aureus]\nvirucidal: Kills Norovirus.',
+  };
+  const NOROVIRUS_KNOWLEDGE = {
+    documentId: '5466397a-41a4-430d-8bb0-0116f4de8da6',
+    title: 'Norovirus Outbreaks: Betco® Cleaning and Hand Hygiene Solutions',
+    documentKind: 'knowledge',
+    documentBody: 'Sanibet RTU and BetONE RTU Disinfectant help during norovirus outbreaks. Kills norovirus.',
+  };
+  const SANIBET_LABEL = {
+    documentId: '4c672e2c-920e-4319-93e5-dd4d78c11ce0',
+    title: 'Sanibet RTU',
+    documentKind: 'label',
+    documentBody: '# Sanibet RTU\nSanitizer. Kills Campylobacter jejuni on food contact surfaces.',
+  };
+  const sources = [NOROVIRUS_KNOWLEDGE, BETCO_ONE_LABEL, FIGHT_BAC_EFFICACY, SANIBET_LABEL];
+
+  it('keeps supported list entries whose label / efficacy sheet prints the product name', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        'These Betco disinfectants carry a labeled norovirus claim:',
+        '- **BetONE™ RTU Disinfectant** (label explicitly lists norovirus among its virucidal claims)',
+        '- **Betco Disinfectant Fight-Bac™ RTU** (efficacy data lists norovirus among its virucidal claims)',
+        '- The BetONE™ RTU Disinfectant label explicitly lists norovirus among its virucidal claims.',
+      ].join('\n'),
+      sources,
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still removes an unsupported entry whose own label has no norovirus claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        'These Betco disinfectants carry a labeled norovirus claim:',
+        '- **Sanibet RTU** (label explicitly lists norovirus among its virucidal claims)',
+      ].join('\n'),
+      sources,
+    });
+    expect(result.ungroundedDetails.map((d) => d.snippet)).toEqual([
+      '- **Sanibet RTU** (label explicitly lists norovirus among its virucidal claims)',
+    ]);
+  });
+
+  it('never treats a knowledge document that mentions the product as its document', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- **Sanibet RTU** (label explicitly lists norovirus among its virucidal claims)',
+      sources: [NOROVIRUS_KNOWLEDGE, SANIBET_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('B0-1131 item 5 — every removed span records its claim type and the failed evidence check', () => {
+  const LABEL = {
+    documentId: 'doc-gfb',
+    title: 'GE Fight Bac RTU',
+    documentKind: 'label',
+    documentBody: 'GE Fight Bac RTU. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+
+  it('explains each ungrounded detail and lists each withheld span', () => {
+    const draft = [
+      'GE Fight Bac RTU is a ready-to-use disinfectant cleaner for hard and soft surfaces in many facilities, documented on its own label.',
+      '- It is effective against Klebsiella aerogenes and Candida auris on soft surfaces.',
+      '- Dilute at 4 oz per gallon before use.',
+      '',
+      `Source: [doc:${LABEL.documentId}]`,
+    ].join('\n');
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [LABEL] });
+    const efficacy = grounding.ungroundedDetails.find((d) => d.category === 'efficacy_claim');
+    expect(efficacy?.evidenceCheck).toBe('claim_terms_missing_from_attributed_documents:Candida auris');
+    const dilution = grounding.ungroundedDetails.find((d) => d.category === 'dilution_ratio');
+    expect(dilution?.evidenceCheck).toBe('value_not_found_verbatim_in_any_source');
+
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: draft,
+      userMessage: 'Can I use GE Fight Bac RTU on upholstery?',
+      grounding,
+      productLineLock: null,
+      sources: [{ documentKind: 'label' }],
+    });
+    expect(plan.mode).not.toBe('decline');
+    if (plan.mode === 'decline') return;
+    expect(plan.withheldSpans).toEqual([
+      {
+        category: 'efficacy_claim',
+        span: '- It is effective against Klebsiella aerogenes and Candida auris on soft surfaces.',
+        evidenceCheck: 'claim_terms_missing_from_attributed_documents:Candida auris',
+      },
+      {
+        category: 'dilution_ratio',
+        span: '- Dilute at 4 oz per gallon before use.',
+        evidenceCheck: 'value_not_found_verbatim_in_any_source',
+      },
+    ]);
+  });
+
+  it('reports no_sources_retrieved and no_attributable_product_document', () => {
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer: 'Rest Stop kills Pseudomonas aeruginosa.', sources: [] })
+        .ungroundedDetails[0]?.evidenceCheck,
+    ).toBe('no_sources_retrieved');
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'Rest Stop kills Pseudomonas aeruginosa.',
+        sources: [{ documentId: 'x', title: 'Unrelated Guide', documentBody: 'Floor care basics.' }],
+      }).ungroundedDetails[0]?.evidenceCheck,
+    ).toBe('no_attributable_product_document');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 claim-subject phrasings (ROW-25 leftovers)', () => {
+  const GE = {
+    documentId: '3d46dbf6-76fe-41a1-8c62-5dfc09c7e298',
+    title: 'GE Fight Bac RTU',
+    documentKind: 'label',
+    documentBody: 'FOR SOFT SURFACE SANITIZATION: Let stand for 60 seconds. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+  const OTHER = { documentId: 'd8d099ed-0000-4000-8000-000000000002', title: 'Betco Sustainability in Action', documentBody: 'People and planet.' };
+  for (const line of [
+    '- The soft-surface claim is effective against **Klebsiella aerogenes** and **Staphylococcus aureus**.',
+    '- Kill claims for soft surface sanitization: effective against **Klebsiella aerogenes** and **Staphylococcus aureus**',
+    '- This soft-surface claim is a sanitizing claim (effective against *Klebsiella aerogenes* and *Staphylococcus aureus*).',
+  ]) {
+    it(`grounds on the single cited label: ${line.slice(0, 40)}`, () => {
+      const result = evaluateRegulatedClaimGrounding({
+        draftAnswer: `Yes, on soft surfaces.\n${line}\n\nFollow the label directions.\n\nSource: [doc:${GE.documentId}]`,
+        sources: [GE, OTHER],
+      });
+      expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    });
+  }
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 ROW-05 list formats', () => {
+  const BETCO_ONE = {
+    documentId: 'b1-label',
+    title: 'Betco One RTU',
+    documentKind: 'label',
+    documentBody: 'THAT BetONE™\nRTU DISINFECTANT IS AN EFFECTIVE VIRUCIDE. Kills Norovirus in 1 minute.',
+  };
+  const FIGHT_BAC = {
+    documentId: 'fb-eff',
+    title: 'Efficacy Data 311 Fight Bac',
+    documentKind: 'efficacy',
+    documentBody: 'product_name: Betco Disinfectant Fight-Bac™ RTU\nvirucidal: Kills Norovirus.',
+  };
+  const SANIBET = {
+    documentId: 'sb-label',
+    title: 'Sanibet RTU',
+    documentKind: 'label',
+    documentBody: 'Sanibet RTU. Kills Campylobacter jejuni.',
+  };
+  const sources = [BETCO_ONE, FIGHT_BAC, SANIBET];
+  const check = (draftAnswer: string) => evaluateRegulatedClaimGrounding({ draftAnswer, sources }).ungroundedCategories;
+
+  it('name then parenthesis', () => {
+    expect(check('- BetONE™ RTU Disinfectant (label explicitly lists norovirus as a virucidal claim)')).not.toContain('efficacy_claim');
+    expect(check('- Sanibet RTU (label explicitly lists norovirus as a virucidal claim)')).toContain('efficacy_claim');
+  });
+
+  it('numbered bold name, no citation needed when the efficacy sheet prints the name', () => {
+    expect(check('2. **Fight Bac™ RTU** (EPA Reg. No. 1839-83-4170) — Norovirus appears on its virucidal list.')).not.toContain('efficacy_claim');
+    expect(check('2. **Sanibet RTU** — Norovirus appears on its virucidal list.')).toContain('efficacy_claim');
+  });
+
+  it('sub-bullet under a bold-led line with trailing text', () => {
+    expect(check('**BetONE™ RTU Disinfectant** (ready to use)\n- Claim: Virucidal against norovirus')).not.toContain('efficacy_claim');
+    expect(check('**Sanibet RTU** (ready to use)\n- Claim: Virucidal against norovirus')).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 numbered parent items', () => {
+  const FIGHT_BAC = { documentId: 'cbb72d77-5f55-4e2e-ba81-20dbc5155faa', title: 'Efficacy Data 311 Fight Bac', documentKind: 'efficacy', documentBody: 'product_name: Betco Disinfectant Fight-Bac™ RTU\nvirucidal: Kills Norovirus.' };
+  const BETCO_ONE = { documentId: '8214830a-282d-47e6-a25f-d132416d9180', title: 'Betco One RTU', documentKind: 'label', documentBody: 'THAT BetONE™ RTU DISINFECTANT IS AN EFFECTIVE VIRUCIDE. Kills Norovirus.' };
+  const SANIBET = { documentId: 'sb', title: 'Sanibet RTU', documentKind: 'label', documentBody: 'Sanibet RTU. Kills Campylobacter jejuni.' };
+
+  it('takes the product from a numbered bold parent above indented field bullets (live 78c41f28)', () => {
+    const draft = [
+      'Three Betco disinfectants carry verified labeled norovirus kill claims:',
+      '',
+      '1. **Fight Bac™ RTU Disinfectant**',
+      '   - Claim: Virucidal against norovirus',
+      '',
+      '2. **BetONE™ RTU Disinfectant**',
+      '   - Claim: Virucidal against norovirus',
+    ].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [FIGHT_BAC, BETCO_ONE, SANIBET] }).ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('a sibling bullet that names its own product never borrows the parent or a sibling', () => {
+    const draft = ['1. **Fight Bac™ RTU Disinfectant**', '   - Sanibet RTU: Virucidal against norovirus'].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [FIGHT_BAC, SANIBET] }).ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 claim phrases are not product names', () => {
+  const QUAT = { documentId: 'q5', title: 'Quat Stat 5', documentKind: 'label', documentBody: 'Effective against SARS-Related Coronavirus 2 (SARS-CoV-2) in 1 minute.' };
+  const GE = { documentId: 'ge', title: 'GE Fight Bac RTU', documentKind: 'label', documentBody: 'Effective against Klebsiella aerogenes and Staphylococcus aureus.' };
+
+  it('a parenthetical claim bullet still takes the product from its heading', () => {
+    const draft = ['**3. Quat-Stat 5**', '- Effective against SARS-CoV-2 with a 1-minute contact time (per label and efficacy data).', '', 'More detail follows.', '', 'Sources: [doc:q5] [doc:ge]'].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] }).ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('a "Soft-surface claim:" field bullet under the product heading grounds', () => {
+    const draft = ['**GE Fight Bac RTU**', '- **Soft-surface claim:** effective against *Klebsiella aerogenes* and *Staphylococcus aureus*.', '', 'More detail follows.', '', 'Sources: [doc:q5] [doc:ge]'].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] }).ungroundedCategories).not.toContain('efficacy_claim');
+  });
+});

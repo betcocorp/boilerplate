@@ -170,7 +170,10 @@ export const getEfficacyDataInputSchema = z
      * B0-549 — batch form: resolve the product-line set from a category name instead of an
      * explicit `productIds` list (same category resolution as `get_products_in_category`).
      */
-    category: z.string().min(1).max(256).optional(),
+    // B0-1131 — no `.min(1)`: models send `category: ""` alongside a productName, which 400'd the
+    // whole call (live ROW-09/23 runs). Every consumer already reads `category?.trim()`, so a blank
+    // value simply means "no category".
+    category: z.string().max(256).optional(),
     categoryLevel: z
       .enum(['prod_type', 'sub_prod_type', 'sub_child_prod_type', 'prod_class', 'any'])
       .optional(),

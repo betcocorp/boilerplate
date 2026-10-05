@@ -277,6 +277,13 @@ export type RegulatedClaimSource = {
    * fixture in `regulated-claim-guardrail.test.ts`).
    */
   isLockedProductLineSource?: boolean;
+  /**
+   * B0-1131 — `label` / `efficacy` / `sds` / `knowledge` / … when known. A product's own label,
+   * efficacy sheet or SDS that prints a product's full name is that product's document even when
+   * its title differs ("Betco One RTU" prints "BetONE™ RTU DISINFECTANT"); knowledge documents
+   * mention many products and never qualify.
+   */
+  documentKind?: string | null;
 };
 
 export type RegulatedClaimGroundingResult = {
@@ -284,8 +291,12 @@ export type RegulatedClaimGroundingResult = {
   categoriesDetected: RegulatedClaimCategory[];
   /** Detected categories where NO claim could be verified verbatim against any source. */
   ungroundedCategories: RegulatedClaimCategory[];
-  /** One entry per ungrounded claim, for the review-task payload. */
-  ungroundedDetails: Array<{ category: RegulatedClaimCategory; snippet: string }>;
+  /**
+   * One entry per ungrounded claim, for the review-task payload. B0-1131: `evidenceCheck` names the
+   * check that failed (see `explainUngroundedSentence`), so an eval artifact can say WHY a span was
+   * removed, not only that it was.
+   */
+  ungroundedDetails: Array<{ category: RegulatedClaimCategory; snippet: string; evidenceCheck?: string }>;
   /**
    * B0-888 — `compatibility` / `efficacy_claim` categories where at least one sentence was grounded
    * via the KEY-TERM fallback (paraphrase attributed to a source whose body carries the same
@@ -1242,18 +1253,22 @@ function attributedSources(
   }
 
   if (attributed.length === 0) {
-    const head = bulletHeadProductName(sentence) ?? headingProductAbove(draftAnswer, sentence);
-    if (head) {
-      const cited = citedDocumentIds(draftAnswer);
-      const sentenceAssertsSource = SOURCE_ASSERTION_ATTRIBUTION_PATTERN.test(sentence);
+    const cited = citedDocumentIds(draftAnswer);
+    const sentenceAssertsSource =
+      SOURCE_ASSERTION_ATTRIBUTION_PATTERN.test(sentence) || SOURCE_KIND_MENTION_PATTERN.test(sentence);
+    for (const head of productNamesInSentence(sentence, draftAnswer)) {
       for (const source of sources) {
-        if (!titleNamesBulletHead(source.title, head)) continue;
+        // A product's own label / efficacy sheet / SDS that prints the full name is evidence of
+        // identity on its own; a title match still needs the draft to cite or name the source.
+        const printsName = documentPrintsProductName(source, head);
+        if (!printsName && !titleNamesBulletHead(source.title, head)) continue;
         const citedAnywhere = cited.some(
           (id) => id === source.documentId || id.endsWith(`:${source.documentId}`),
         );
-        if (!citedAnywhere && !sentenceAssertsSource) continue;
+        if (!printsName && !citedAnywhere && !sentenceAssertsSource) continue;
         if (!attributed.includes(source)) attributed.push(source);
       }
+      if (attributed.length > 0) break;
     }
   }
 
@@ -1282,8 +1297,91 @@ function attributedSources(
   return attributed;
 }
 
+/** B0-1131 — the sentence says where its claim comes from ("(label explicitly lists …)", "efficacy data lists …"). */
+const SOURCE_KIND_MENTION_PATTERN = /\b(?:label|labels|efficacy data|efficacy sheet|sds|safety data sheet)\b/i;
+/** "- **BetONE™ RTU Disinfectant** (…)" — a bold product name leading a bullet. */
+const BOLD_LEAD_PRODUCT_PATTERN = /^\s*(?:[-*•]\s+|\d{1,2}[.)]\s+)?\*\*([^*]{3,80}?)\*\*/;
+/** "- BetONE™ RTU Disinfectant (label explicitly lists …)" — a product name, then a parenthesis. */
+const PAREN_LEAD_PRODUCT_PATTERN = /^([A-Z0-9][^():;—–.]{2,60}?)\s*\(/;
+/** "the BetONE™ RTU Disinfectant label …" — a product named as the owner of a source. */
+const OWNED_SOURCE_PRODUCT_PATTERN =
+  /\b(?:the|its)\s+(?!product\b|line\b)([A-Za-z0-9][^.,;:()]{2,60}?)\s+(?:label|sds|safety data sheet|efficacy data|efficacy sheet)\b/i;
+const PRODUCT_DOCUMENT_KINDS = new Set(['label', 'efficacy', 'sds']);
+/** Field labels a bullet head can carry ("- Claim: …", "- Contact time: …"); never product names. */
+const LABEL_FIELD_WORDS = new Set([
+  'claim', 'claims', 'contact time', 'format', 'dilution', 'epa registration', 'epa reg no', 'notes', 'note',
+  'kill claims', 'organisms', 'efficacy', 'surfaces', 'use sites', 'directions', 'ppe', 'safety',
+]);
+const normalizedBodyCache = new WeakMap<RegulatedClaimSource, string>();
+
+/**
+ * B0-1131 — every product name the sentence names, most specific first: the bullet head
+ * ("Rest Stop™: …"), a bold lead ("**BetONE™ RTU Disinfectant** (…)"), an owned source ("the
+ * BetONE™ RTU Disinfectant label …"), then the heading above the bullet.
+ */
+function productNamesInSentence(sentence: string, draftAnswer: string): string[] {
+  const usable = (names: Array<string | null | undefined>) =>
+    names
+      .filter((n): n is string => Boolean(n))
+      .map((n) => normalizeProductNameForCompare(n))
+      .filter((n) => {
+        const firstWord = n.split(' ')[0] ?? '';
+        return (
+          n.length >= 3 &&
+          !SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) &&
+          !IMPERATIVE_OPENER_WORDS.has(firstWord) &&
+          !LABEL_FIELD_WORDS.has(n) &&
+          // A claim phrase is not a product name: "Effective against SARS-CoV-2 … (per label)",
+          // "Kill claims for soft surface sanitization:", "Soft-surface claim:".
+          !/\bclaims?\b/.test(n) &&
+          !EFFICACY_VERB_PATTERN.test(n) &&
+          !EFFICACY_STRONG_PATTERN.test(n)
+        );
+      });
+  const own = usable([
+    bulletHeadProductName(sentence),
+    BOLD_LEAD_PRODUCT_PATTERN.exec(sentence)?.[1],
+    PAREN_LEAD_PRODUCT_PATTERN.exec(stripSentenceMarkup(sentence))?.[1],
+    OWNED_SOURCE_PRODUCT_PATTERN.exec(stripSentenceMarkup(sentence))?.[1],
+  ]);
+  // The heading above is only consulted when the sentence names no product of its own, so a
+  // bullet that names (say) Sanibet can never fall back to a sibling or parent product's document.
+  return [...new Set(own.length > 0 ? own : usable([headingProductAbove(draftAnswer, sentence)]))];
+}
+
+/**
+ * B0-1131 — a label / efficacy sheet / SDS that prints the product's FULL name (at least two words
+ * or eight characters, whole words) is that product's document. Knowledge and other kinds never
+ * qualify: they mention many products.
+ */
+function documentPrintsProductName(source: RegulatedClaimSource, name: string): boolean {
+  if (!PRODUCT_DOCUMENT_KINDS.has((source.documentKind ?? '').toLowerCase())) return false;
+  if (!(name.includes(' ') || name.length >= 8)) return false;
+  let body = normalizedBodyCache.get(source);
+  if (body === undefined) {
+    body = ` ${normalizeProductNameForCompare(source.documentBody).replace(/[^a-z0-9]+/g, ' ')} `;
+    normalizedBodyCache.set(source, body);
+  }
+  const words = name.replace(/[^a-z0-9]+/g, ' ').trim();
+  if (body.includes(` ${words} `)) return true;
+  // Same words, different order ("Fight Bac™ RTU Disinfectant" vs the efficacy sheet's
+  // "Betco Disinfectant Fight-Bac™ RTU"): the distinctive core (generic product words removed, at
+  // least five characters) must appear as a phrase, and every other word of the name must appear too.
+  const tokens = words.split(' ');
+  const core = tokens.filter((w) => !GENERIC_PRODUCT_NAME_WORDS.has(w)).join(' ');
+  if (core.length < 5 || !body.includes(` ${core} `)) return false;
+  return tokens.every((w) => body.includes(` ${w} `));
+}
+
+/** Words that appear in many product names and say nothing about which product it is. */
+const GENERIC_PRODUCT_NAME_WORDS = new Set([
+  'betco', 'rtu', 'ready', 'to', 'use', 'disinfectant', 'disinfectants', 'cleaner', 'cleaners', 'the',
+  'concentrate', 'sanitizer', 'spray', 'wipes',
+]);
+
 /** B0-1131 — a sentence whose subject points back at the answer's product rather than naming one. */
-const PRONOUN_SUBJECT_PATTERN = /^(?:it|its|this product|the product|this disinfectant|this sanitizer)\b/i;
+const PRONOUN_SUBJECT_PATTERN =
+  /^(?:it|its|this product|the product|this disinfectant|this sanitizer|(?:the|this|its)\s+(?:[\w-]+\s+){0,2}claims?|kill claims?)\b/i;
 
 /** A markdown heading line: "## X", "**3. X**", "**X:**", or plain text ending in a colon. */
 const HEADING_LINE_PATTERN = /^(?:#{1,6}\s+\S.*|\*\*[^*]+\*\*:?|[^-*•\d].*:)$/;
@@ -1300,12 +1398,20 @@ function headingProductAbove(draftAnswer: string, sentence: string): string | nu
   const lines = draftAnswer.slice(0, at).split('\n');
   const currentLine = (lines.pop() ?? '') + sentence.trim();
   if (!BULLET_ITEM_PREFIX_PATTERN.test(currentLine)) return null;
+  const indentOf = (line: string) => /^\s*/.exec(line)?.[0].length ?? 0;
+  const currentIndent = indentOf(currentLine);
   for (let i = lines.length - 1, seen = 0; i >= 0 && seen < 12; i -= 1, seen += 1) {
     const line = lines[i].trim();
-    if (!line || BULLET_ITEM_PREFIX_PATTERN.test(lines[i])) continue;
-    if (!HEADING_LINE_PATTERN.test(line)) return null;
+    if (!line) continue;
+    // A list item is skipped as a sibling unless it is a less-indented PARENT item
+    // ("1. **Fight Bac™ RTU Disinfectant**" above "   - Claim: Virucidal against norovirus").
+    if (BULLET_ITEM_PREFIX_PATTERN.test(lines[i]) && indentOf(lines[i]) >= currentIndent) continue;
+    // "**BetONE™ RTU Disinfectant** (EPA Reg. No. …)" — a bold lead names the product even with
+    // text after it; otherwise the whole line must read as a heading.
+    const boldLead = BOLD_LEAD_PRODUCT_PATTERN.exec(line)?.[1];
+    if (!boldLead && !HEADING_LINE_PATTERN.test(line)) return null;
     const name = normalizeProductNameForCompare(
-      stripSentenceMarkup(line).replace(/^\d{1,2}[.)]\s*/, '').replace(/:\s*$/, ''),
+      (boldLead ?? stripSentenceMarkup(line)).replace(/^\d{1,2}[.)]\s*/, '').replace(/:\s*$/, ''),
     );
     const firstWord = name.split(' ')[0] ?? '';
     if (name.length < 3 || name.length > 80) return null;
@@ -1314,6 +1420,10 @@ function headingProductAbove(draftAnswer: string, sentence: string): string | nu
   }
   return null;
 }
+
+/** Genera that are written as genus + species ("Staphylococcus aureus", "Candida auris"). */
+const BINOMIAL_GENUS_PATTERN =
+  /^(?:escherichia|salmonella|staph\w*|pseudomonas|listeria|clostridi\w*|candida|enterococcus|klebsiella|legionella|streptococcus|trichophyton|mycobacterium)$/i;
 
 /** Words that can follow an organism noun without being its species epithet. */
 const NON_EPITHET_WORDS = new Set([
@@ -1331,8 +1441,11 @@ function efficacyOrganismTerms(sentence: string): string[] {
   const text = stripSentenceMarkup(sentence);
   const terms: string[] = [];
   for (const m of text.matchAll(new RegExp(EFFICACY_ORGANISM_PATTERN.source, 'gi'))) {
+    // Only a bacterial / fungal GENUS takes a species epithet ("Klebsiella aerogenes"); a virus or
+    // generic noun followed by an ordinary word ("norovirus among …") must not.
+    const isGenus = BINOMIAL_GENUS_PATTERN.test(m[0]);
     const after = /^\s+([a-z][a-z-]{3,})\b/.exec(text.slice((m.index ?? 0) + m[0].length));
-    const epithet = after?.[1];
+    const epithet = isGenus ? after?.[1] : undefined;
     terms.push(epithet && !NON_EPITHET_WORDS.has(epithet) ? `${m[0]} ${epithet}` : m[0]);
   }
   return [...new Set(terms)];
@@ -1496,6 +1609,57 @@ function isHazardValueTermGrounded(
 }
 
 /**
+ * B0-1131 — which evidence check an ungrounded sentence failed, for the gate record / eval artifact.
+ * Mirrors the grounding paths above without changing them:
+ *  - `no_sources_retrieved` — the guardrail had nothing to check against;
+ *  - `no_verbatim_match` — first_aid (verbatim-only) or a sentence with no checkable key term;
+ *  - `no_attributable_product_document` — no cited / named / locked document the claim belongs to;
+ *  - `hazard_values_missing_from_attributed_documents:<terms>` — the attributed documents do not
+ *    print these hazard value terms (in this polarity);
+ *  - `claim_terms_missing_from_attributed_documents:<terms>` — the attributed documents do not
+ *    carry this organism / material together with a claim verb.
+ */
+function explainUngroundedSentence(
+  category: RegulatedClaimCategory,
+  sentence: string,
+  contextText: string,
+  sources: readonly RegulatedClaimSource[],
+  draftAnswer: string,
+): string {
+  if (sources.length === 0) return 'no_sources_retrieved';
+  const lockedOrAttributed = (): RegulatedClaimSource[] => {
+    const attributed = attributedSources(sentence, contextText, sources, draftAnswer);
+    const candidates = [...attributed];
+    if (attributed.every((s) => s.isLockedProductLineSource)) {
+      for (const s of sources) if (s.isLockedProductLineSource && !candidates.includes(s)) candidates.push(s);
+    }
+    return candidates;
+  };
+  if (category === 'hazard') {
+    const terms = extractHazardValueTerms(sentence);
+    if (terms.length === 0) return 'no_verbatim_match';
+    const candidates = lockedOrAttributed();
+    if (candidates.length === 0) return 'no_attributable_product_document';
+    const bodies = candidates.map((s) => normalizeSentenceForGroundingCompare(s.documentBody).replace(/-/g, ' '));
+    const missing = terms.filter((term) => !bodies.some((body) => sourceStatesHazardTerm(body, term)));
+    return `hazard_values_missing_from_attributed_documents:${missing.join('|')}`;
+  }
+  if (category === 'efficacy_claim' || category === 'compatibility') {
+    const terms =
+      category === 'efficacy_claim'
+        ? efficacyOrganismTerms(sentence)
+        : [sentence.match(COMPATIBILITY_MATERIAL_PATTERN)?.[0] ?? ''].filter(Boolean);
+    if (terms.length === 0) return 'no_verbatim_match';
+    const candidates = category === 'efficacy_claim' ? lockedOrAttributed() : attributedSources(sentence, contextText, sources, draftAnswer);
+    if (candidates.length === 0) return 'no_attributable_product_document';
+    const bodies = candidates.map((s) => normalizeSentenceForGroundingCompare(s.documentBody));
+    const missing = terms.filter((term) => !bodies.some((body) => body.includes(normalizeSentenceForGroundingCompare(term))));
+    return `claim_terms_missing_from_attributed_documents:${(missing.length ? missing : ['claim_verb']).join('|')}`;
+  }
+  return 'no_verbatim_match';
+}
+
+/**
  * Deterministically checks whether every regulated claim (EPA reg no., dilution ratio,
  * contact/dwell time, hazard statement, first-aid instruction) in `draftAnswer` can be
  * traced to an exact quote in one of `sources`. Returns which categories were detected
@@ -1530,7 +1694,11 @@ export function evaluateRegulatedClaimGrounding(input: {
 
   const categoriesDetected: RegulatedClaimCategory[] = [];
   const ungroundedCategories: RegulatedClaimCategory[] = [];
-  const ungroundedDetails: Array<{ category: RegulatedClaimCategory; snippet: string }> = [];
+  const ungroundedDetails: Array<{
+    category: RegulatedClaimCategory;
+    snippet: string;
+    evidenceCheck?: string;
+  }> = [];
   // B0-888 — categories where at least one sentence was grounded via the key-term fallback or the
   // adjacent-verbatim-quote exemption rather than a plain verbatim match; see the gate record at
   // this function's call site for how this is surfaced (`inputs.groundingMode`).
@@ -1551,7 +1719,12 @@ export function evaluateRegulatedClaimGrounding(input: {
     if (ungroundedTokens.length > 0) {
       ungroundedCategories.push(category);
       for (const t of new Set(ungroundedTokens)) {
-        ungroundedDetails.push({ category, snippet: t });
+        ungroundedDetails.push({
+          category,
+          snippet: t,
+          evidenceCheck:
+            input.sources.length === 0 ? 'no_sources_retrieved' : 'value_not_found_verbatim_in_any_source',
+        });
       }
     }
   };
@@ -1592,7 +1765,7 @@ export function evaluateRegulatedClaimGrounding(input: {
     const keyTermPattern =
       category === 'compatibility' ? COMPATIBILITY_MATERIAL_PATTERN : EFFICACY_ORGANISM_PATTERN;
     let groundedViaKeyTermPath = false;
-    const ungroundedSentences: string[] = [];
+    const ungroundedSentences: Array<{ sentence: string; evidenceCheck: string }> = [];
 
     for (const idx of claimIndices) {
       const sentence = allSentences[idx];
@@ -1636,7 +1809,16 @@ export function evaluateRegulatedClaimGrounding(input: {
         }
       }
 
-      ungroundedSentences.push(sentence);
+      ungroundedSentences.push({
+        sentence,
+        evidenceCheck: explainUngroundedSentence(
+          category,
+          sentence,
+          [allSentences[idx - 1], sentence, allSentences[idx + 1]].filter((s): s is string => Boolean(s)).join(' '),
+          input.sources,
+          input.draftAnswer,
+        ),
+      });
     }
 
     if (groundedViaKeyTermPath) {
@@ -1645,7 +1827,7 @@ export function evaluateRegulatedClaimGrounding(input: {
     if (ungroundedSentences.length > 0) {
       ungroundedCategories.push(category);
       for (const s of ungroundedSentences) {
-        ungroundedDetails.push({ category, snippet: s.slice(0, 240) });
+        ungroundedDetails.push({ category, snippet: s.sentence.slice(0, 240), evidenceCheck: s.evidenceCheck });
       }
     }
   };

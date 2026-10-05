@@ -1999,6 +1999,12 @@ export type RegulatedClaimRedactionPlan =
        * non-empty list is a defect to investigate, surfaced on the gate record, never a decline.
        */
       unlocatedSnippets?: string[];
+      /**
+       * B0-1131 — every span actually removed: the verbatim sentence, its claim category, and the
+       * evidence check that failed (`ungroundedDetails[].evidenceCheck`). The eval artifact for
+       * "which span was removed, of what type, and why".
+       */
+      withheldSpans: Array<{ category: RegulatedClaimCategory; span: string; evidenceCheck: string }>;
     };
 
 /**
@@ -2128,6 +2134,7 @@ export function planRegulatedClaimRedaction(input: {
   let redactedText = input.draftAnswer;
   const removedSentences = new Set<string>();
   const unlocatedSnippets: string[] = [];
+  const withheldSpans: Array<{ category: RegulatedClaimCategory; span: string; evidenceCheck: string }> = [];
 
   const withholdPass = (matchesCategory: (category: RegulatedClaimCategory) => boolean) => {
     for (const detail of grounding.ungroundedDetails) {
@@ -2148,6 +2155,11 @@ export function planRegulatedClaimRedaction(input: {
           continue;
         }
         removedSentences.add(sentence);
+        withheldSpans.push({
+          category: detail.category,
+          span: sentence,
+          evidenceCheck: detail.evidenceCheck ?? 'unspecified',
+        });
         redactedText = redactedText.replaceAll(sentence, regulatedClaimWithheldMarker(detail.category));
       }
       if (!matchedAnyOccurrence) {
@@ -2201,6 +2213,7 @@ export function planRegulatedClaimRedaction(input: {
     mode: allUngroundedAreTokenShaped ? 'token_redaction' : 'sentence_redaction',
     redactedText,
     withheldCategories: orderedWithheldCategories,
+    withheldSpans,
     ...(unlocatedSnippets.length > 0 ? { unlocatedSnippets } : {}),
   };
 }
@@ -5306,6 +5319,8 @@ export async function runProductSupportWorkflow(input: {
       title: s.title,
       documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
       isLockedProductLineSource: lockedProductLineDocumentIds.has(s.documentId),
+      // B0-1131 — lets attribution recognise a product's own label / efficacy / SDS by the name it prints.
+      documentKind: s.documentKind,
     }));
     // B0-997 — same "did this turn resolve a named Betco product" signal `requireFactToolForDraft`
     // already gates `compatibility` enforcement on (`speculativeProductLineLock !== null`), read here
@@ -5449,6 +5464,9 @@ export async function runProductSupportWorkflow(input: {
             // B0-871 — `token_redaction` | `sentence_redaction` | `decline` (+ why, for decline).
             outcome: regulatedClaimRedactionPlan.mode,
             ...(redactionDeclineReason ? { declineReason: redactionDeclineReason } : {}),
+            ...(regulatedClaimRedactionPlan.mode !== 'decline'
+              ? { withheldSpans: regulatedClaimRedactionPlan.withheldSpans }
+              : {}),
           },
           { ...wfCtx, stepId: validationStep.id },
         );
@@ -5470,6 +5488,11 @@ export async function runProductSupportWorkflow(input: {
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             redactionMode: regulatedClaimRedactionPlan.mode,
+            // B0-1131 — the pool this verdict was judged against, and every span removed with why.
+            groundedSourceCount: regulatedClaimGroundingSources.length,
+            ...(regulatedClaimRedactionPlan.mode !== 'decline'
+              ? { withheldSpans: regulatedClaimRedactionPlan.withheldSpans }
+              : {}),
             // B0-888 — 'key_term' when at least one OTHER (still-grounded) compatibility/
             // efficacy_claim sentence on this draft was saved by the key-term/adjacent-quote
             // fallback rather than a plain verbatim match; 'verbatim' otherwise. Distinguishes the
