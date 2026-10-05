@@ -94,6 +94,12 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
+            // B0-762 — cross-set item browser; same surface family as Test runner.
+            label: 'All test items',
+            href: '/admin/tests/items',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+          },
+          {
             // B0-687 — same surface family as the other test links, so it reuses
             // `navigation.sidebar.tests` rather than minting a selector that would need its own
             // row + role grants to ever appear (B0-643).

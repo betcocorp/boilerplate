@@ -140,6 +140,10 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <PromptSearchDialog />
+              {/* B0-762 — browseable, filterable list of every item across all sets. */}
+              <Button asChild variant="outline">
+                <Link href="/admin/tests/items">Browse all items</Link>
+              </Button>
               <Button asChild variant="outline">
                 <Link href="/admin/tests/reports">Reports</Link>
               </Button>
