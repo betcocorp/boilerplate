@@ -47,6 +47,17 @@ export type AssembledDocumentBody = {
   chunkIds: string[];
 };
 
+export type DocumentSectionChunk = DocumentChunkRow & {
+  chunkKey: string;
+  sectionPath: string[] | null;
+  sectionType: string;
+};
+
+export type AssembledDocumentSection = {
+  body: AssembledDocumentBody;
+  chunks: DocumentSectionChunk[];
+};
+
 /** Provenance pointer for a `rag.document` row, used to cite the exact source PDF/markdown (B0-257). */
 export type DocumentSourceRef = {
   documentId: string;
@@ -314,6 +325,73 @@ export async function assembleDocumentBodies(
       (a, b) => a.chunk_index - b.chunk_index,
     );
     result.set(documentId, stitchChunkRows(documentId, docChunks, maxChars));
+  }
+
+  return result;
+}
+
+/**
+ * Loads all chunks for one fine-grained SDS section in each supplied document. The result remains
+ * keyed by parent document so retrieval can replace only that document's generic matched window.
+ */
+export async function assembleDocumentSectionBodies(
+  documentIds: string[],
+  sectionType: string,
+  options?: { maxCharsPerDocument?: number },
+): Promise<Map<string, AssembledDocumentSection>> {
+  const result = new Map<string, AssembledDocumentSection>();
+  const uniqueIds = Array.from(new Set(documentIds.filter(Boolean)));
+  const normalizedSectionType = sectionType.trim();
+  if (uniqueIds.length === 0 || !normalizedSectionType) return result;
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select(
+      'id, document_id, chunk_key, chunk_index, heading, chunk_text, section_path, section_type, token_count',
+    )
+    .in('document_id', uniqueIds)
+    .eq('section_type', normalizedSectionType)
+    .order('document_id', { ascending: true })
+    .order('chunk_index', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load document section chunks: ${error.message}`);
+  }
+
+  type SectionRow = DocumentChunkRow & {
+    chunk_key: string;
+    section_path: string[] | null;
+    section_type: string;
+  };
+  const grouped = new Map<string, SectionRow[]>();
+  for (const row of (data ?? []) as SectionRow[]) {
+    const list = grouped.get(row.document_id) ?? [];
+    list.push(row);
+    grouped.set(row.document_id, list);
+  }
+
+  const maxChars = options?.maxCharsPerDocument ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
+  for (const documentId of uniqueIds) {
+    const rows = (grouped.get(documentId) ?? []).slice().sort(
+      (a, b) => a.chunk_index - b.chunk_index,
+    );
+    if (rows.length === 0) continue;
+    result.set(documentId, {
+      body: stitchChunkRows(documentId, rows, maxChars),
+      chunks: rows.map((row) => ({
+        id: row.id,
+        document_id: row.document_id,
+        chunk_index: row.chunk_index,
+        heading: row.heading,
+        chunk_text: row.chunk_text,
+        token_count: row.token_count,
+        chunkKey: row.chunk_key,
+        sectionPath: row.section_path,
+        sectionType: row.section_type,
+      })),
+    });
   }
 
   return result;

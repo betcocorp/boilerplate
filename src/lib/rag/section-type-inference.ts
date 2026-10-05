@@ -72,7 +72,7 @@ const QUERY_PATTERNS: Array<{ pattern: RegExp; sectionType: string }> = [
   },
   // Section 9 — Physical Properties
   {
-    pattern: /\b(boiling point|vapor pressure|specific gravity|viscosity|solubility|appearance and odor|physical (and chemical )?propert)\b/i,
+    pattern: /\b(ph|boiling point|vapor pressure|specific gravity|viscosity|solubility|appearance and odor|physical (and chemical )?propert)\b/i,
     sectionType: 'physical_properties',
   },
   // Section 3 — Composition

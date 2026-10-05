@@ -263,6 +263,9 @@ function sourcePayload(
     // audited after the fact (e.g. confirming a specific label section reached the model
     // vs. was dropped by the per-document truncation cap in assembleDocumentBodies()).
     documentBodyChunkIds: s.documentBodyChunkIds,
+    originalMatchedChunkId: s.originalMatchedChunkId,
+    requestedSectionType: s.requestedSectionType,
+    sectionOverrideApplied: s.sectionOverrideApplied,
     // B0-490 — `similarity` is the unambiguous key (the raw pgvector/hybrid score for the
     // surviving match); `confidence` is kept alongside it for back-compat with any reader still
     // keying off the old name, but is never the field a NEW reader should source from.
@@ -301,6 +304,9 @@ function sourcePayload(
       documentBodyTruncated: false,
       documentBodyTokenEstimate: null,
       documentBodyChunkIds: [VERIFIED_FACTS_SOURCE_ID],
+      originalMatchedChunkId: null,
+      requestedSectionType: null,
+      sectionOverrideApplied: false,
       similarity: 1,
       confidence: 1,
       // Synthetic source — never went through retrieval, so it has no rerank verdict. Null, not 0:

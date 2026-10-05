@@ -1,5 +1,5 @@
 import { getErrorMessage } from '~/lib/utils';
-import { logWarn } from '~/lib/observability/logger';
+import { logInfo, logWarn } from '~/lib/observability/logger';
 import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schemas';
 import { buildModelToolPayload } from '~/lib/tools/model-tool-payload';
 import { executeProductTool, type ProductToolTurnOptions } from '~/lib/tools/product-tools';
@@ -103,6 +103,57 @@ export type ExecutedToolCall = {
   modelOutput?: string;
   trace: ToolTraceEntry;
 };
+
+function logMatchedChunkWindows(
+  payload: Record<string, unknown>,
+  input: { name: string; callId: string; auditCtx?: AuditContext },
+): void {
+  if (!Array.isArray(payload.sources)) return;
+
+  const windows = payload.sources.flatMap((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const source = value as Record<string, unknown>;
+    if (typeof source.documentId !== 'string' || typeof source.chunkId !== 'string') return [];
+    const windowChunkIds = Array.isArray(source.documentBodyChunkIds)
+      ? source.documentBodyChunkIds.filter((id): id is string => typeof id === 'string')
+      : [];
+    if (windowChunkIds.length === 0) return [];
+
+    return [
+      {
+        document_id: source.documentId,
+        matched_chunk_id: source.chunkId,
+        original_matched_chunk_id:
+          typeof source.originalMatchedChunkId === 'string'
+            ? source.originalMatchedChunkId
+            : null,
+        requested_section_type:
+          typeof source.requestedSectionType === 'string' ? source.requestedSectionType : null,
+        section_override_applied: source.sectionOverrideApplied === true,
+        document_kind:
+          typeof source.documentKind === 'string' ? source.documentKind : null,
+        window_chunk_ids: windowChunkIds,
+        window_chunk_count: windowChunkIds.length,
+        window_chars:
+          typeof source.documentBodyChars === 'number' ? source.documentBodyChars : null,
+        window_truncated:
+          typeof source.documentBodyTruncated === 'boolean'
+            ? source.documentBodyTruncated
+            : null,
+      },
+    ];
+  });
+
+  if (windows.length === 0) return;
+  logInfo('rag.retrieval.matched_chunk_windows', {
+    trace_id: input.auditCtx?.traceId ?? null,
+    workflow_run_id: input.auditCtx?.workflowRunId ?? null,
+    conversation_id: input.auditCtx?.conversationId ?? null,
+    tool_name: input.name,
+    call_id: input.callId,
+    windows,
+  });
+}
 
 /**
  * B0-390 — single construction site for a trace entry, so `argumentsTruncated` / `outputTruncated`
@@ -217,6 +268,7 @@ export async function executeToolCall(input: {
       input.name,
       resolveToolTimeoutMs(input.name),
     );
+    logMatchedChunkWindows(payload, input);
     const out = JSON.stringify(payload);
 
     // B0-437 — only carry a model variant when it is actually smaller; an equal-size variant would
