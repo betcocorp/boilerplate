@@ -15,9 +15,24 @@ import { resolveAiSdkLanguageModel } from '~/lib/bex/ai-sdk-adapters';
 import { loadGenerationEffort } from '~/lib/bex/generation-effort';
 import { modelProviderFor } from '~/lib/constants/models';
 import { supportsAnthropicAdaptiveThinking } from '~/lib/llm/structured-completion';
-import { collectRetrievalEvidenceIds, formatPreloadedEvidence, isCorpusSearchPayload, RETRIEVAL_EXHAUSTED_INSTRUCTION, RETRIEVAL_TOOL_NAMES, TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT, TOOL_ROUNDS_EXHAUSTED_INSTRUCTION, UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT } from '~/lib/llm/generation-shared';
-import type { ResponsesRuntimeResult } from '~/lib/openai/responses-runtime';
-import type { ExecuteToolFn, FactToolEnforcementOutcome, FactToolRequirementCheck, LlmTokenUsage, PreloadedEvidence, ReplayedHistoryMessage } from '~/lib/llm/generation-shared';
+import {
+  collectRetrievalEvidenceIds,
+  formatPreloadedEvidence,
+  isCorpusSearchPayload,
+  RETRIEVAL_EXHAUSTED_INSTRUCTION,
+  RETRIEVAL_TOOL_NAMES,
+  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
+  TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
+  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
+} from '~/lib/llm/generation-shared';
+import type {
+  ExecuteToolFn,
+  FactToolEnforcementOutcome,
+  FactToolRequirementCheck,
+  LlmTokenUsage,
+  PreloadedEvidence,
+  ReplayedHistoryMessage,
+} from '~/lib/llm/generation-shared';
 import {
   classifyTransportError,
   resolveOpenAiRequestTimeoutMs,
@@ -128,14 +143,16 @@ export type AiSdkRuntimeOptions = {
 };
 
 /**
- * Same fields the workflow consumes from `runResponsesWithToolLoop`, minus the OpenAI-specific
- * `lastResponse`. `finalResponseId` is null because the AI SDK has no OpenAI response id — the
- * workflow substitutes a synthetic marker.
+ * What the workflow consumes from the generation loop. `finalResponseId` is null because the AI SDK
+ * has no provider response id — the workflow substitutes the synthetic `ai_sdk:<runId>` marker.
  */
-export type AiSdkRuntimeResult = Pick<
-  ResponsesRuntimeResult,
-  'assistantText' | 'toolTrace' | 'responseIds' | 'usage' | 'usageByCall'
-> & {
+export type AiSdkRuntimeResult = {
+  assistantText: string;
+  toolTrace: ToolTraceEntry[];
+  responseIds: string[];
+  usage: LlmTokenUsage;
+  /** B0-324 — per-model-call usage, in call order, so prompt-cache reuse per round is verifiable. */
+  usageByCall: LlmTokenUsage[];
   finalResponseId: null;
 };
 
@@ -165,8 +182,8 @@ function newRetrievalProductivityState(): RetrievalProductivityState {
 }
 
 /**
- * B0-901 / B0-635 — scores one retrieval call exactly as the Responses loop does
- * (`responses-runtime.ts`, "productivity of THIS retrieval call"): reads the FULL tool payload, not
+ * B0-901 / B0-635 — scores the productivity of ONE retrieval call (the logic first written for the
+ * retired Responses loop): reads the FULL tool payload, not
  * the slimmed `modelOutput` the model sees, because the projection drops
  * `documentBodyChunkIds` when it truncates a body and this decision must be made on what was
  * actually retrieved. Ids are added to the run-wide set as each call is scored, so within a
@@ -423,8 +440,8 @@ function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<
 }
 
 /**
- * AI SDK generation runtime — a drop-in alternative to `runResponsesWithToolLoop`
- * (`~/lib/openai/responses-runtime`). Bounded automatic tool roundtrips come from
+ * The generation runtime: the one tool loop every model on every provider runs on (B0-914).
+ * Bounded automatic tool roundtrips come from
  * `stopWhen: stepCountIs(maxToolRounds)`; token deltas are surfaced via `onAssistantDelta`.
  */
 export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<AiSdkRuntimeResult> {

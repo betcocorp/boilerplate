@@ -38,11 +38,8 @@ import type { ExecuteToolFn, PreloadedEvidence } from '~/lib/llm/generation-shar
  * narrow, deterministic keyword check (same style as `classifySpeculativeRetrievalSkip`) the calling
  * workflow uses to override `'auto'` back to a named-function pin on `get_efficacy_data` for this one
  * question shape — everything else keeps the B0-436 latency win untouched. Deliberately NOT built by
- * relaxing `resolveRoundZeroToolChoice`'s `suggestedFirstTool` bias (`~/lib/openai/responses-runtime`):
- * that mechanism is unused in production (nothing currently threads a `suggestedFirstTool`) and its
- * own tests pin "leaves an explicit 'auto' toolChoice... untouched" as deliberate B0-512 behavior —
- * changing shared, tested runtime semantics for one workflow's bug is a bigger, riskier change than
- * this one call site needs.
+ * relaxing the retired Responses loop's `suggestedFirstTool` bias (B0-512), which nothing in production
+ * ever threaded and which was removed with that loop (B0-914).
  */
 
 /**

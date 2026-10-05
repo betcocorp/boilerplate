@@ -1,52 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CURRENT_GENERATION_RUNTIME,
   GENERATION_RUNTIME_LABELS,
   certainGenerationRuntimeForModel,
   generationRuntimeLabel,
   generationRuntimeRationale,
   isGenerationRuntime,
-  selectGenerationRuntime,
 } from './generation-runtime';
 
-describe('selectGenerationRuntime (B0-912)', () => {
-  it('forces the AI SDK loop for an Anthropic model, whatever the flag says', () => {
-    // The OpenAI Responses loop throws on a `claude-*` id by design, so this is not a preference.
-    expect(
-      selectGenerationRuntime({ model: 'claude-opus-5', aiSdkGenerationSetting: false }),
-    ).toBe('ai_sdk');
-    expect(
-      selectGenerationRuntime({ model: 'claude-opus-5', aiSdkGenerationSetting: true }),
-    ).toBe('ai_sdk');
+describe('CURRENT_GENERATION_RUNTIME (B0-914)', () => {
+  it('is the AI SDK loop: the only generation loop there is', () => {
+    expect(CURRENT_GENERATION_RUNTIME).toBe('ai_sdk');
+    expect(isGenerationRuntime(CURRENT_GENERATION_RUNTIME)).toBe(true);
+  });
+});
+
+describe('certainGenerationRuntimeForModel', () => {
+  it('settles a legacy Anthropic run as the AI SDK loop', () => {
+    expect(certainGenerationRuntimeForModel('claude-opus-5')).toBe('ai_sdk');
   });
 
-  it('keeps an OpenAI model on the canonical Responses loop while the flag is off', () => {
-    expect(selectGenerationRuntime({ model: 'gpt-4.1', aiSdkGenerationSetting: false })).toBe(
-      'responses',
-    );
-  });
-
-  it('lets the flag opt an OpenAI model into the AI SDK loop', () => {
-    expect(selectGenerationRuntime({ model: 'gpt-4.1', aiSdkGenerationSetting: true })).toBe(
-      'ai_sdk',
-    );
-  });
-
-  it('reproduces the 2026-09-08 mismatch: one paired comparison, two different loops', () => {
-    const aiSdkGenerationSetting = false;
-    expect(selectGenerationRuntime({ model: 'gpt-4.1', aiSdkGenerationSetting })).toBe('responses');
-    expect(selectGenerationRuntime({ model: 'claude-opus-5', aiSdkGenerationSetting })).toBe(
-      'ai_sdk',
-    );
-  });
-
-  it('routes a pinned Anthropic id outside the tag list by prefix, not by list membership', () => {
-    expect(
-      selectGenerationRuntime({
-        model: 'claude-some-unreleased-id',
-        aiSdkGenerationSetting: false,
-      }),
-    ).toBe('ai_sdk');
+  it('leaves a legacy OpenAI run unknown rather than guessing which loop served it', () => {
+    expect(certainGenerationRuntimeForModel('gpt-4.1')).toBeNull();
   });
 });
 
@@ -67,9 +43,10 @@ describe('labels and rationale', () => {
     expect(generationRuntimeLabel('ai_sdk')).toBe(GENERATION_RUNTIME_LABELS.ai_sdk);
   });
 
-  it('explains why each vendor got the loop it got', () => {
-    expect(generationRuntimeRationale('claude-opus-5')).toContain('Anthropic');
-    expect(generationRuntimeRationale('gpt-4.1')).toContain('BEX_AI_SDK_GENERATION_ENABLED');
+  it('states the same one-loop rationale for every vendor', () => {
+    expect(generationRuntimeRationale('claude-opus-5')).toContain('AI SDK loop');
+    expect(generationRuntimeRationale('gpt-4.1')).toContain('AI SDK loop');
+    expect(generationRuntimeRationale('gpt-4.1')).not.toContain('BEX_AI_SDK_GENERATION_ENABLED');
   });
 });
 

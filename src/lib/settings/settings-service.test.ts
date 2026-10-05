@@ -406,9 +406,6 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'ALERT_TOOL_FAILURE_RATE_WARNING',
     'ALERT_TOOL_FAILURE_SPIKE_DELTA',
     'ALERT_TOOL_FAILURE_SPIKE_RATIO',
-    // B0-378 — permanent selector between the Responses and AI SDK generation loops. Deliberately
-    // NOT retired by B0-68, which removed only the transitional streaming/Elements rollout gates.
-    'BEX_AI_SDK_GENERATION_ENABLED',
     'BEX_DISABLE_CONFIDENCE_GATING',
     // B0-734 — the early-decline gate switch, moved off process.env; defaults to false.
     'BEX_EARLY_DECLINE_GATE_ENABLED',

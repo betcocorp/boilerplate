@@ -186,9 +186,8 @@ export async function runBexChatTurn(input: {
     useValidator: input.useValidator ?? false,
     agentMode: input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE,
     routerTypeOverride: input.routerTypeOverride,
-    previousOpenaiResponseId: conversation.latest_openai_response_id,
     // B0-378 — carries each assistant turn's summarised tool context alongside its text, so the
-    // stateless AI SDK runtime replays what the Responses chain remembers server-side.
+    // stateless AI SDK runtime replays what the retired Responses chain used to remember server-side.
     priorMessages: buildPriorTurnHistory(priorMessages),
     onEvent: input.onWorkflowEvent,
     onAssistantDelta: input.onAssistantDelta,

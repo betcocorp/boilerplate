@@ -3,8 +3,8 @@ import type { ToolTraceEntry } from '~/lib/audit/trace';
 /**
  * B0-1140 — helpers and types shared by the generation loop and everything around it (the workflow,
  * validator, retrieval pre-loaders and the structured-completion adapters). They lived in
- * `~/lib/openai/responses-runtime` only because that was the first loop written; none of them is
- * Responses-API specific, so they moved here unchanged ahead of that loop's retirement.
+ * the first generation loop written (the OpenAI Responses loop, retired in B0-914); none of them is
+ * Responses-API specific, so they moved here unchanged.
  */
 
 export type ExecuteToolFn = (input: {
@@ -60,9 +60,8 @@ export function formatPreloadedEvidence(evidence: PreloadedEvidence): string {
 /**
  * B0-378 — one prior conversation turn as it is replayed into a stateless model call.
  *
- * Shared by both generation runtimes (`runResponsesWithToolLoop`'s `history` and
- * `runAiSdkWithToolLoop`'s `history`) so a replayed conversation is assembled identically on either
- * path — that symmetry is the point of the ticket.
+ * The shape of `runAiSdkWithToolLoop`'s `history`: generation is stateless, so a conversation is
+ * rebuilt from these on every call.
  *
  * `toolContext` is the B0-378 fidelity patch: a *summary* of the tool activity that produced the
  * assistant turn, rendered by `formatPriorTurnToolContext`. It is only ever populated for

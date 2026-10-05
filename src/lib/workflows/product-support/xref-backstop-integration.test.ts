@@ -128,23 +128,13 @@ function mockCompetitorExtraction(extraction: { brand: string | null; product: s
   });
 }
 
-const runResponsesWithToolLoopMock = vi.fn();
+const runGenerationLoopMock = vi.fn();
 const executeProductToolMock = vi.fn();
 const lookupCrossReferenceMock = vi.fn();
 const runCrossReferenceRecommendationMock = vi.fn();
 
-vi.mock('~/lib/openai/responses-runtime', () => ({
-  runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
-  usageFromResponse: () => ({
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    cachedPromptTokens: 0,
-  }),
-}));
-
 vi.mock('~/lib/bex/ai-sdk-runtime', () => ({
-  runAiSdkWithToolLoop: vi.fn(),
+  runAiSdkWithToolLoop: (...args: unknown[]) => runGenerationLoopMock(...args),
 }));
 
 vi.mock('~/lib/tools/product-tools', () => ({
@@ -277,7 +267,6 @@ beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
   settingOverrides.clear();
-  settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
   settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
   // B0-734 — settings row, default false; these tests assert the gate-on world.
   settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', true);
@@ -293,7 +282,7 @@ beforeEach(() => {
   mockCompetitorExtraction({ brand: null, product: 'BNC-15' });
 
   // Default: the model calls only `lookup_cross_reference`, which finds nothing.
-  runResponsesWithToolLoopMock.mockImplementation(
+  runGenerationLoopMock.mockImplementation(
     generationCalling([
       {
         name: 'lookup_cross_reference',
@@ -366,7 +355,7 @@ describe('recommend_cross_reference invocation backstop (B0-355)', () => {
   });
 
   it('does NOT double-invoke when the model called recommend_cross_reference itself', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -616,7 +605,7 @@ describe('competitor identity guard against a fabricated match (B0-779)', () => 
 
   it('overrides a model-drafted match line even when the model called recommend_cross_reference itself with the same unresolved identity (PRO-045/PRO-036 shape)', async () => {
     mockCompetitorExtraction({ brand: null, product: null });
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',

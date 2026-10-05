@@ -110,10 +110,10 @@ export function extractResolvedProviderFromSummary(summary: unknown): string | n
  * B0-912 — which GENERATION LOOP served this run (`'responses'` | `'ai_sdk'`), read off
  * `test_results.summary` next to `resolvedModel`/`resolvedProvider` and written once by
  * `executeTestRun`. Returns null for a run that predates the field, in which case the surface omits
- * the loop rather than guessing it: the answer depends on the `BEX_AI_SDK_GENERATION_ENABLED`
- * settings row AS IT WAS when that run executed, which is not recoverable after the fact for an
- * OpenAI model. (An Anthropic run could be inferred from its model id, but inferring one vendor and
- * not the other would put a fact and a guess under the same label.)
+ * the loop rather than guessing it: before B0-914 an OpenAI run's loop depended on a settings row
+ * (since removed) as it was when that run executed, which is not recoverable after the fact.
+ * (An Anthropic run could be inferred from its model id, but inferring one vendor and not the other
+ * would put a fact and a guess under the same label.)
  */
 export function extractGenerationRuntimeFromSummary(summary: unknown): GenerationRuntime | null {
   if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
