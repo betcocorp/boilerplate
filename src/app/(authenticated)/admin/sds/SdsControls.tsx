@@ -258,7 +258,7 @@ export function SdsControls({ initialStatus, initialSyncStatus }: Props) {
             <div className="flex flex-col items-center">
               <StepNumber>1</StepNumber>
               <h3 className="text-lg font-semibold text-slate-950">
-                Register discovered PDFs
+                Register manifest documents
               </h3>
               <p className="text-xs text-slate-500">
                 {activeStatus.totals.registered.toLocaleString()} /{' '}
@@ -266,9 +266,9 @@ export function SdsControls({ initialStatus, initialSyncStatus }: Props) {
               </p>
             </div>
             <p className="text-sm leading-6 text-slate-600 text-center">
-              Scans the S3 SDS bucket for PDFs Bex doesn&apos;t already know
-              about and creates a record for each new one. Files that are already
-              registered are skipped, so this is safe to run anytime.
+              Reads the conversion manifest from the BEX S3 bucket and verifies
+              its entries against existing SDS source records. Existing records are
+              refreshed in place, so their document identities remain stable.
             </p>
             <form action={formAction} onSubmit={() => setActiveMode('register-seed')}>
               <input name="mode" type="hidden" value="register-seed" />
@@ -294,7 +294,7 @@ export function SdsControls({ initialStatus, initialSyncStatus }: Props) {
             <div className="flex flex-col items-center">
               <StepNumber>2</StepNumber>
               <h3 className="text-lg font-semibold text-slate-950">
-                Ingest registered PDFs
+                Ingest converted markdown
               </h3>
               <p className="text-xs text-slate-500 text-center">
                 {activeStatus.totals.ingested.toLocaleString()} /{' '}
@@ -308,9 +308,9 @@ export function SdsControls({ initialStatus, initialSyncStatus }: Props) {
               </p>
             </div>
             <p className="text-sm leading-6 text-slate-600 text-center">
-              Downloads every registered PDF, extracts its text, and saves it as
-              a document Bex can look up (`rag.document`). A document has to be
-              ingested before it can be chunked in step 3.
+              Downloads each pre-converted markdown object and updates its existing
+              `rag.document` row without replacing the document ID. The original PDF
+              remains the canonical source link.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
               <form action={formAction} onSubmit={() => setActiveMode('ingest-all')}>
@@ -374,11 +374,10 @@ export function SdsControls({ initialStatus, initialSyncStatus }: Props) {
               </div>
             </div>
             <p className="text-sm leading-6 text-slate-600 text-center">
-              Splits each ingested SDS into smaller, labeled sections — hazards,
-              first-aid, handling, and so on — so the right passage can be found
-              later. Only processes documents that don&apos;t have sections yet,
-              so already-chunked documents are left alone. Runs in batches of 100
-              documents; use Start to work through all of them automatically.
+              Splits each ingested markdown document with LangChain&apos;s recursive
+              character splitter (1,600 characters with 150-character overlap).
+              Changed documents replace their prior chunks in batches of 100; use
+              Start to work through all of them automatically.
             </p>
 
             <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">

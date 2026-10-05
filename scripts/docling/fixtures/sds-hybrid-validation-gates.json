@@ -1,0 +1,24 @@
+{
+  "schema": "sds-hybrid-validation-gates/v1",
+  "gateId": "native-text-sds-v1",
+  "claim": "Validated for native-text SDS PDFs whose key/value geometry is accepted by a supported recovery mode; ambiguous and unsupported documents abstain.",
+  "metrics": {
+    "minPrecision": 0.995,
+    "minRecall": 0.85,
+    "minPredictedPairs": 600,
+    "maxCriticalFalseAssociations": 0,
+    "maxCriticalFalseNegatives": 0,
+    "minCriticalRecall": 1.0,
+    "minEligibleDocumentCoverage": 0.9,
+    "minEligibilityAccuracy": 0.99,
+    "minTablePreservation": 1.0,
+    "minSourcePreservation": 1.0,
+    "minPartialMetadataAccuracy": 1.0,
+    "maxDuplicateAssociations": 0
+  },
+  "interpretation": {
+    "pass": "All quality and evidence gates pass.",
+    "fail": "At least one quality gate fails.",
+    "insufficient_evidence": "Quality gates pass on available data, but the benchmark contains fewer than 600 predicted pairs."
+  }
+}

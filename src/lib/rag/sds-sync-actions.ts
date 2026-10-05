@@ -2,18 +2,37 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { normalizeRetrievalLanguageCode } from '~/lib/rag/retrieval-language';
+import {
+  chunkSdsMarkdown,
+  SDS_MARKDOWN_CHUNK_OVERLAP,
+  SDS_MARKDOWN_CHUNK_SIZE,
+  SDS_MARKDOWN_CHUNKING_STRATEGY,
+} from '~/lib/rag/sds-markdown';
 import { withRetry } from '~/lib/utils';
 import { formatEasternTimestamp } from '~/lib/utils/time';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
+const SDS_CHUNK_DOCUMENT_BATCH_SIZE = 100;
 type JsonObject = Record<string, unknown>;
 
-function readJsonNumber(value: JsonObject | null, key: string): number | null {
-  const candidate = value?.[key];
-  return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : null;
-}
+type PendingDocument = {
+  id: string;
+  body_markdown: string;
+};
 
+type PendingQueryResult = {
+  data: PendingDocument[] | null;
+  count: number | null;
+  error: { message: string } | null;
+};
+
+type PendingQuery = {
+  eq(column: string, value: unknown): PendingQuery;
+  not(column: string, operator: string, value: unknown): PendingQuery;
+  or(filters: string): PendingQuery;
+  order(column: string, options: { ascending: boolean }): PendingQuery;
+  limit(limit: number): Promise<PendingQueryResult>;
+};
 
 export type SdsSyncStatus = {
   totalSdsDocs: number;
@@ -22,48 +41,49 @@ export type SdsSyncStatus = {
   embeddedChunks: number;
 };
 
+function pendingChunkDocumentsQuery() {
+  const supabase = getSupabaseServiceRoleClient();
+  return (supabase.schema('rag').from('document') as unknown as {
+    select(columns: string, options?: { count?: 'exact'; head?: boolean }): PendingQuery;
+  })
+    .select('id, body_markdown, source_record!inner(is_active)', { count: 'exact' })
+    .eq('document_kind', 'sds')
+    .eq('language_code', 'EN')
+    .eq('source_record.is_active', true)
+    .not('body_markdown', 'is', null)
+    .or(
+      `metadata->>chunking_strategy.is.null,metadata->>chunking_strategy.neq.${SDS_MARKDOWN_CHUNKING_STRATEGY}`,
+    );
+}
+
 export async function getSdsSyncStatus(): Promise<SdsSyncStatus> {
   const supabase = getSupabaseServiceRoleClient();
+  const [{ count: totalSdsDocs }, { count: totalChunks }, { count: embeddedChunks }, pending] =
+    await Promise.all([
+      supabase
+        .schema('rag')
+        .from('document')
+        .select('id', { count: 'exact', head: true })
+        .eq('document_kind', 'sds') as unknown as Promise<{ count: number | null }>,
+      supabase
+        .schema('rag')
+        .from('document_chunk')
+        .select('id', { count: 'exact', head: true })
+        .like('chunk_key', 'sds:%') as unknown as Promise<{ count: number | null }>,
+      supabase
+        .schema('rag')
+        .from('document_chunk')
+        .select('id', { count: 'exact', head: true })
+        .like('chunk_key', 'sds:%')
+        .not('embedding_large', 'is', null) as unknown as Promise<{ count: number | null }>,
+      pendingChunkDocumentsQuery().limit(0),
+    ]);
 
-  const [
-    { count: totalSdsDocs },
-    { count: totalChunks },
-    { count: embeddedChunks },
-    { data: chunkedDocumentRows },
-  ] = await Promise.all([
-    supabase
-      .schema('rag')
-      .from('document')
-      .select('id', { count: 'exact', head: true })
-      .eq('document_kind', 'sds') as unknown as Promise<{ count: number | null }>,
-    supabase
-      .schema('rag')
-      .from('document_chunk')
-      .select('id', { count: 'exact', head: true })
-      .like('chunk_key', 'sds:%') as unknown as Promise<{ count: number | null }>,
-    supabase
-      .schema('rag')
-      .from('document_chunk')
-      .select('id', { count: 'exact', head: true })
-      .like('chunk_key', 'sds:%')
-      .not('embedding_large', 'is', null) as unknown as Promise<{ count: number | null }>,
-    // sync_sds_chunks only chunks documents with zero existing chunks, so the
-    // "pending" count for the chunking step is total docs minus distinct docs
-    // already chunked — not the raw document count (totalSdsDocs).
-    supabase
-      .schema('rag')
-      .from('document_chunk')
-      .select('document_id')
-      .like('chunk_key', 'sds:%') as unknown as Promise<{ data: Array<{ document_id: string }> | null }>,
-  ]);
-
-  const chunkedDocumentCount = new Set(
-    (chunkedDocumentRows ?? []).map((row) => row.document_id),
-  ).size;
+  if (pending.error) throw new Error(`Failed to count pending SDS documents: ${pending.error.message}`);
 
   return {
     totalSdsDocs: totalSdsDocs ?? 0,
-    pendingChunkDocs: Math.max(0, (totalSdsDocs ?? 0) - chunkedDocumentCount),
+    pendingChunkDocs: pending.count ?? 0,
     totalChunks: totalChunks ?? 0,
     embeddedChunks: embeddedChunks ?? 0,
   };
@@ -103,53 +123,74 @@ function buildHistoryEntry(
   };
 }
 
+async function replaceDocumentChunks(document: PendingDocument) {
+  const chunks = await chunkSdsMarkdown(document.body_markdown);
+  if (chunks.length === 0) throw new Error(`Document ${document.id} produced no markdown chunks.`);
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await withRetry(() =>
+    (supabase.schema('rag') as unknown as {
+      rpc: (
+        fn: string,
+        args: Record<string, unknown>,
+      ) => Promise<{ data: JsonObject | null; error: { message: string } | null }>;
+    }).rpc('replace_sds_markdown_chunks', {
+      p_document_id: document.id,
+      p_chunks: chunks,
+      p_strategy: SDS_MARKDOWN_CHUNKING_STRATEGY,
+      p_chunk_size: SDS_MARKDOWN_CHUNK_SIZE,
+      p_chunk_overlap: SDS_MARKDOWN_CHUNK_OVERLAP,
+    }),
+  );
+
+  if (error) throw new Error(`SDS chunk replacement failed for ${document.id}: ${error.message}`);
+  return { result: data, chunkCount: chunks.length };
+}
+
 export async function runSdsSyncAction(
   previousState: SdsSyncActionState,
   formData: FormData,
 ): Promise<SdsSyncActionState> {
+  void formData;
   const startedAt = Date.now();
 
   try {
-    // B0-804: the retrievable corpus is EN-only. Reject a non-EN request before the RPC
-    // runs — chunking another language would seed the ANN candidate pool with
-    // untranslated regulated text (see ~/lib/rag/retrieval-language.ts).
-    const language = normalizeRetrievalLanguageCode(formData.get('languageCode'));
-    if (!language.ok) {
-      throw new Error(language.error);
-    }
-    const languageCode = language.languageCode;
+    const pending = await pendingChunkDocumentsQuery()
+      .order('updated_at', { ascending: true })
+      .limit(SDS_CHUNK_DOCUMENT_BATCH_SIZE);
+    if (pending.error) throw new Error(`Failed to load pending SDS documents: ${pending.error.message}`);
 
-    const supabase = getSupabaseServiceRoleClient();
-    const { data, error } = await withRetry(
-      () =>
-        (supabase.schema('rag') as unknown as { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: JsonObject | null; error: { message: string } | null }> }).rpc(
-          'sync_sds_chunks',
-          { p_language_code: languageCode },
-        ),
-    );
-
-    if (error) {
-      throw new Error(`SDS chunk sync failed: ${error.message}`);
+    let chunksUpserted = 0;
+    let lastResult: JsonObject | null = null;
+    for (const document of pending.data ?? []) {
+      const replaced = await replaceDocumentChunks(document);
+      chunksUpserted += replaced.chunkCount;
+      lastResult = replaced.result;
     }
 
-    const result =
-      data && typeof data === 'object' && !Array.isArray(data)
-        ? (data as JsonObject)
-        : null;
-
-    const remaining = readJsonNumber(result, 'remaining_documents') ?? 0;
-    const hasMore = result?.has_more === true || remaining > 0;
-    const docsProcessed = readJsonNumber(result, 'documents_processed') ?? 0;
-    const chunksUpserted = readJsonNumber(result, 'chunks_upserted') ?? 0;
-    const totalProcessed = previousState.totalProcessedThisSession + docsProcessed;
+    const documentsProcessed = pending.data?.length ?? 0;
+    const remaining = Math.max(0, (pending.count ?? documentsProcessed) - documentsProcessed);
+    const hasMore = remaining > 0;
+    const totalProcessed = previousState.totalProcessedThisSession + documentsProcessed;
     const totalChunks = previousState.totalChunksThisSession + chunksUpserted;
 
     revalidatePath('/admin/sds');
 
     const message = hasMore
-      ? `Batch done — ${docsProcessed} doc${docsProcessed === 1 ? '' : 's'}, ${chunksUpserted} chunk${chunksUpserted === 1 ? '' : 's'}. ${remaining.toLocaleString()} remaining.`
-      : `Sync complete. ${docsProcessed} doc${docsProcessed === 1 ? '' : 's'} in final batch, ${totalChunks.toLocaleString()} total chunks generated this session.`;
-
+      ? `Batch done — ${documentsProcessed} doc${documentsProcessed === 1 ? '' : 's'}, ${chunksUpserted} chunk${chunksUpserted === 1 ? '' : 's'}. ${remaining.toLocaleString()} remaining.`
+      : `Sync complete. ${documentsProcessed} doc${documentsProcessed === 1 ? '' : 's'} in final batch, ${totalChunks.toLocaleString()} total chunks generated this session.`;
+    const result = {
+      ...(lastResult ?? {}),
+      documents_processed: documentsProcessed,
+      chunks_upserted: chunksUpserted,
+      remaining_documents: remaining,
+      has_more: hasMore,
+      chunking_config: {
+        strategy: SDS_MARKDOWN_CHUNKING_STRATEGY,
+        max_chars: SDS_MARKDOWN_CHUNK_SIZE,
+        overlap_chars: SDS_MARKDOWN_CHUNK_OVERLAP,
+      },
+    };
     const nextState: SdsSyncActionState = {
       ok: true,
       message,

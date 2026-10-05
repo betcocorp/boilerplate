@@ -1,17 +1,23 @@
 export type SdsSeedDocument = {
+  /** Stable legacy source identity derived from the original PDF S3 key. */
   id: string;
+  /** Existing rag.document UUID supplied by the conversion manifest. */
+  documentId: string;
   title: string;
   productCode: string | null;
+  /** Converted markdown object key in the BEX bucket. */
   s3Key: string;
+  /** Original PDF object key retained for provenance and source links. */
+  sourcePdfKey: string;
   locale: string;
 };
 
-export const SDS_S3_BUCKET_DEFAULT = 'betco-sds';
-export const SDS_S3_PREFIX_DEFAULT = '';
+export const SDS_MARKDOWN_PREFIX_DEFAULT = 'sds-conversion-092526/';
+export const SDS_SOURCE_BUCKET = 'betco-sds';
 
 /**
- * Optional per-file metadata overrides keyed by normalized relative path
- * (lowercase, forward slashes, rooted at SDS_S3_PREFIX_DEFAULT or SDS_S3_PREFIX).
+ * Optional per-file metadata overrides keyed by normalized original PDF path
+ * (lowercase, forward slashes).
  */
 export const SDS_FILE_OVERRIDES: Record<
   string,

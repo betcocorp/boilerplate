@@ -34,9 +34,9 @@ export default async function AdminSdsPage() {
                 Initial SDS import into the RAG schema
               </h1>
               <p className="mt-4 text-base leading-7 text-slate-600">
-                This flow ingests SDS PDFs from the `betco-sds` S3 bucket into
-                `rag.source_record`, `rag.document`, and `rag.document_chunk` with
-                `document_kind = &quot;sds&quot;`.
+                This flow maps pre-converted SDS markdown from the BEX S3 bucket onto
+                existing `rag.document` rows, then creates `rag.document_chunk` rows with
+                `document_kind = &quot;sds&quot;` while retaining the original PDF source links.
               </p>
             </div>
             <div className="flex items-center gap-3">
