@@ -123,19 +123,11 @@ vi.mock('~/lib/orchestrator/semantic-router', async (importOriginal) => {
   };
 });
 
-const runResponsesWithToolLoopMock = vi.fn();
+const runGenerationLoopMock = vi.fn();
 
-vi.mock('~/lib/openai/responses-runtime', () => ({
-  runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
-  usageFromResponse: () => ({
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    cachedPromptTokens: 0,
-  }),
+vi.mock('~/lib/bex/ai-sdk-runtime', () => ({
+  runAiSdkWithToolLoop: (...args: unknown[]) => runGenerationLoopMock(...args),
 }));
-
-vi.mock('~/lib/bex/ai-sdk-runtime', () => ({ runAiSdkWithToolLoop: vi.fn() }));
 vi.mock('~/lib/tools/product-tools', () => ({
   executeProductTool: vi.fn(async () => ({ sources: [] })),
 }));
@@ -251,13 +243,12 @@ beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
   settingOverrides.clear();
-  settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
   // The LLM router is on by default post-B0-511; every test here states its own router flags.
   settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
   settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
   classifyUserIntentMock.mockResolvedValue(llmClassification());
   classifyUserIntentSemanticMock.mockResolvedValue(semanticDecision());
-  runResponsesWithToolLoopMock.mockResolvedValue({
+  runGenerationLoopMock.mockResolvedValue({
     lastResponse: {},
     finalResponseId: 'resp_final',
     assistantText: 'Dilute per the label instructions.',

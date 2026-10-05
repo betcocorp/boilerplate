@@ -1,5 +1,5 @@
 import { gradeFromScore } from './arithmetic';
-import type { ConceptKindCoverage } from './case-concepts';
+import { type ConceptKindCoverage, normConcept } from './case-concepts';
 import type { EvaluatedCase, RateBlock, SpeedBlock, SubScoreWeights } from './metrics';
 import type { ScoringRules } from './scoring-config';
 
@@ -115,11 +115,16 @@ function sameMultiset(a: readonly string[], b: readonly string[]): boolean {
   return left.every((value, index) => value === right[index]);
 }
 
-/** Order-insensitive multiset inclusion: every phrase of `a` (with multiplicity) is in `b`. */
+/**
+ * Order-insensitive multiset inclusion: every phrase of `a` (with multiplicity) is in `b`.
+ * B0-1128 — compared under `normConcept` identity, the same identity `requiredConcepts` builds the
+ * expected union with: a mandatory phrase that differs from its expected twin only by punctuation
+ * or case is one phrase to the grader and must be one phrase here, or the report is refused.
+ */
 function multisetSubset(a: readonly string[], b: readonly string[]): boolean {
-  const remaining = [...b];
+  const remaining = b.map(normConcept);
   for (const phrase of a) {
-    const at = remaining.indexOf(phrase);
+    const at = remaining.indexOf(normConcept(phrase));
     if (at === -1) return false;
     remaining.splice(at, 1);
   }

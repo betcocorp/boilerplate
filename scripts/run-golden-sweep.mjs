@@ -13,6 +13,11 @@
  *   BASE_URL — Base URL for the API (default: http://localhost:3000)
  *   DRY_RUN — Set to "true" to preview without executing (default: false)
  *   TIMEOUT_SECONDS — How long to wait for the dispatch call to return (default: 900 = 15 minutes)
+ *   MODEL_TAG_OVERRIDE — B0-1119: force this `modelTag` on every run in the sweep (e.g. gpt-5.5).
+ *                        Validated server-side against the supported tag list; a bad tag is a 400.
+ *   ROUTER_TYPE_OVERRIDE — B0-1119: force `routerType` on every run: keyword | semantic | llm
+ *   USE_VALIDATOR_OVERRIDE — B0-1119: force `useValidator` on every run: "true" | "false"
+ *   (An unset override leaves the API's own defaults in charge, exactly as before.)
  *
  * Examples:
  *   # Run locally with CRON_SECRET from .env.local
@@ -26,6 +31,10 @@
  *
  *   # Custom timeout (e.g., 30 minutes for very large test sets)
  *   TIMEOUT_SECONDS=1800 pnpm run:golden-sweep
+ *
+ *   # B0-1117 model re-evaluation: run the whole golden roster once on a candidate model
+ *   MODEL_TAG_OVERRIDE=gpt-5.6-terra ROUTER_TYPE_OVERRIDE=llm pnpm run:golden-sweep
+ *   MODEL_TAG_OVERRIDE=gpt-5.5 USE_VALIDATOR_OVERRIDE=true DRY_RUN=true pnpm run:golden-sweep
  */
 
 import process from 'node:process';
@@ -34,6 +43,23 @@ const CRON_SECRET = process.env.CRON_SECRET;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const DRY_RUN = process.env.DRY_RUN === 'true';
 const TIMEOUT_SECONDS = parseInt(process.env.TIMEOUT_SECONDS || '900', 10); // Default 15 minutes
+
+// B0-1119 — per-sweep overrides. Forwarded as-is; the API validates tag/router values and answers
+// a 400 with `issues` (printed below) for anything it does not recognise.
+const MODEL_TAG_OVERRIDE = process.env.MODEL_TAG_OVERRIDE || undefined;
+const ROUTER_TYPE_OVERRIDE = process.env.ROUTER_TYPE_OVERRIDE || undefined;
+const USE_VALIDATOR_OVERRIDE_RAW = process.env.USE_VALIDATOR_OVERRIDE;
+let USE_VALIDATOR_OVERRIDE;
+if (USE_VALIDATOR_OVERRIDE_RAW !== undefined && USE_VALIDATOR_OVERRIDE_RAW !== '') {
+  if (USE_VALIDATOR_OVERRIDE_RAW === 'true' || USE_VALIDATOR_OVERRIDE_RAW === 'false') {
+    USE_VALIDATOR_OVERRIDE = USE_VALIDATOR_OVERRIDE_RAW === 'true';
+  } else {
+    console.error(
+      `❌ Error: USE_VALIDATOR_OVERRIDE must be "true" or "false" (got "${USE_VALIDATOR_OVERRIDE_RAW}")`,
+    );
+    process.exit(1);
+  }
+}
 
 if (!CRON_SECRET) {
   console.error('❌ Error: CRON_SECRET environment variable is not set');
@@ -48,12 +74,34 @@ if (!CRON_SECRET) {
 }
 
 const endpoint = `${BASE_URL}/api/v1/observability/run-golden-test-sweep`;
-const payload = DRY_RUN ? { dryRun: true } : {};
+// Only supplied keys go on the wire, so a plain sweep still sends `{}` (or `{ dryRun: true }`).
+const payload = {
+  ...(DRY_RUN ? { dryRun: true } : {}),
+  ...(MODEL_TAG_OVERRIDE !== undefined ? { modelTagOverride: MODEL_TAG_OVERRIDE } : {}),
+  ...(ROUTER_TYPE_OVERRIDE !== undefined ? { routerTypeOverride: ROUTER_TYPE_OVERRIDE } : {}),
+  ...(USE_VALIDATOR_OVERRIDE !== undefined ? { useValidatorOverride: USE_VALIDATOR_OVERRIDE } : {}),
+};
 const TIMEOUT_MS = TIMEOUT_SECONDS * 1000;
+
+/** Renders `{ modelTag, routerType, useValidator }` as a one-line summary, or `null` when empty. */
+function describeOverrides(overrides) {
+  if (!overrides || typeof overrides !== 'object') return null;
+  const parts = Object.entries(overrides)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`);
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
+const requestedOverrides = describeOverrides({
+  modelTag: MODEL_TAG_OVERRIDE,
+  routerType: ROUTER_TYPE_OVERRIDE,
+  useValidator: USE_VALIDATOR_OVERRIDE,
+});
 
 console.log('🔄 Triggering golden test sweep...');
 console.log(`   Endpoint: ${endpoint}`);
 console.log(`   Dry run: ${DRY_RUN ? 'yes (preview only)' : 'no (will execute)'}`);
+console.log(`   Overrides: ${requestedOverrides ?? 'none (API defaults)'}`);
 console.log(`   Timeout: ${TIMEOUT_SECONDS} seconds (~${Math.round(TIMEOUT_SECONDS / 60)} minutes)`);
 console.log('');
 console.log('⏳ Sending request to server...');
@@ -130,6 +178,10 @@ try {
   console.log(`   Failed to dispatch: ${result.failed ?? 0}`);
   if (result.scheduledRunId) {
     console.log(`   Sweep ledger row:   ${result.scheduledRunId}`);
+  }
+  const appliedOverrides = describeOverrides(result.overrides);
+  if (appliedOverrides) {
+    console.log(`   Overrides applied:  ${appliedOverrides}`);
   }
 
   if (failedOutcomes.length > 0) {

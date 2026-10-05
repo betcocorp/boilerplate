@@ -9,8 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('next/server', () => ({ after: vi.fn() }));
 vi.mock('~/lib/constants/models', () => ({ modelProviderFor: () => 'openai' }));
 vi.mock('~/lib/llm/generation-runtime', () => ({
+  CURRENT_GENERATION_RUNTIME: 'ai_sdk',
   isGenerationRuntime: () => false,
-  selectGenerationRuntime: () => 'responses',
 }));
 vi.mock('~/lib/llm/resolve-model', () => ({ resolveModel: async () => 'gpt-4.1' }));
 vi.mock('~/lib/observability/logger', () => ({ logError: vi.fn(), logWarn: vi.fn() }));

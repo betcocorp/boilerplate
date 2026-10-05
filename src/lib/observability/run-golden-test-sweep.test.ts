@@ -32,9 +32,9 @@ vi.mock('~/lib/observability/scheduled-test-repository', () => ({
   closeScheduledRunAfterDispatch: vi.fn(async () => undefined),
 }));
 
-const { runGoldenTestSweep, DISPATCHED_PENDING_STATE } = await import(
-  '~/lib/observability/run-golden-test-sweep'
-);
+const { runGoldenTestSweep, runGoldenTestSweepInputSchema, DISPATCHED_PENDING_STATE } =
+  await import('~/lib/observability/run-golden-test-sweep');
+const { insertScheduledTestRun } = await import('~/lib/observability/scheduled-test-repository');
 
 const CONTEXT = { origin: 'https://bex.example.com', authorization: 'Bearer bex_test_token' };
 
@@ -47,10 +47,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 /** A fetch whose execute call resolves only when the test says so. */
 function stubFetch(options: { executeResolves: Promise<Response> }) {
-  const calls: { url: string; method: string | undefined }[] = [];
+  const calls: { url: string; method: string | undefined; body: string | undefined }[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    calls.push({ url, method: init?.method });
+    calls.push({
+      url,
+      method: init?.method,
+      body: typeof init?.body === 'string' ? init.body : undefined,
+    });
     if (url.endsWith('/api/admin/tests/runs')) {
       return jsonResponse({ ok: true, runId: 'run-1' });
     }
@@ -61,6 +65,7 @@ function stubFetch(options: { executeResolves: Promise<Response> }) {
 
 beforeEach(() => {
   itemWrites.length = 0;
+  vi.mocked(insertScheduledTestRun).mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -131,5 +136,110 @@ describe('runGoldenTestSweep — ledger timing (B0-989)', () => {
     expect(result.dryRun).toBe(true);
     expect(calls).toHaveLength(0);
     expect(itemWrites).toHaveLength(0);
+  });
+});
+
+/**
+ * B0-1119 — a sweep pass can force `modelTag` / `routerType` / `useValidator` onto every run. What
+ * is pinned: an omitted override changes NOTHING on the wire or in the ledger, and a supplied one
+ * lands in the create body, the ledger metadata, and the echoed result.
+ */
+describe('runGoldenTestSweep — per-sweep overrides (B0-1119)', () => {
+  const started = () => Promise.resolve(jsonResponse({ ok: true, state: 'started' }));
+
+  it('without overrides sends exactly { testId } and writes no overrides key to the ledger', async () => {
+    const { fetchImpl, calls } = stubFetch({ executeResolves: started() });
+
+    const result = await runGoldenTestSweep(
+      runGoldenTestSweepInputSchema.parse({}),
+      CONTEXT,
+      { fetchImpl },
+    );
+
+    const createCall = calls.find((call) => call.url.endsWith('/api/admin/tests/runs'));
+    expect(createCall?.body).toBe(JSON.stringify({ testId: 'test-1' }));
+    expect(JSON.parse(createCall?.body ?? '{}')).toEqual({ testId: 'test-1' });
+
+    expect(insertScheduledTestRun).toHaveBeenCalledTimes(1);
+    const ledgerInput = vi.mocked(insertScheduledTestRun).mock.calls[0]?.[0];
+    expect(ledgerInput?.metadata).toEqual({ origin: CONTEXT.origin });
+    expect(ledgerInput?.metadata).not.toHaveProperty('overrides');
+
+    expect(result).not.toHaveProperty('overrides');
+  });
+
+  it('forwards supplied overrides to every create body, the ledger metadata, and the result', async () => {
+    const { fetchImpl, calls } = stubFetch({ executeResolves: started() });
+
+    const result = await runGoldenTestSweep(
+      runGoldenTestSweepInputSchema.parse({
+        modelTagOverride: 'gpt-5.5',
+        routerTypeOverride: 'llm',
+        useValidatorOverride: true,
+      }),
+      CONTEXT,
+      { fetchImpl },
+    );
+
+    const createCall = calls.find((call) => call.url.endsWith('/api/admin/tests/runs'));
+    expect(JSON.parse(createCall?.body ?? '{}')).toEqual({
+      testId: 'test-1',
+      modelTag: 'gpt-5.5',
+      routerType: 'llm',
+      useValidator: true,
+    });
+
+    const expectedOverrides = { modelTag: 'gpt-5.5', routerType: 'llm', useValidator: true };
+    expect(insertScheduledTestRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { origin: CONTEXT.origin, overrides: expectedOverrides },
+      }),
+    );
+    expect(result.overrides).toEqual(expectedOverrides);
+  });
+
+  it('only includes the override keys that were supplied', async () => {
+    const { fetchImpl, calls } = stubFetch({ executeResolves: started() });
+
+    const result = await runGoldenTestSweep(
+      runGoldenTestSweepInputSchema.parse({ useValidatorOverride: false }),
+      CONTEXT,
+      { fetchImpl },
+    );
+
+    const createCall = calls.find((call) => call.url.endsWith('/api/admin/tests/runs'));
+    expect(JSON.parse(createCall?.body ?? '{}')).toEqual({ testId: 'test-1', useValidator: false });
+    expect(result.overrides).toEqual({ useValidator: false });
+  });
+});
+
+describe('runGoldenTestSweepInputSchema (B0-1119)', () => {
+  it('accepts an empty body with every override undefined', () => {
+    const parsed = runGoldenTestSweepInputSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).toEqual({ dryRun: false });
+      expect(parsed.data.modelTagOverride).toBeUndefined();
+      expect(parsed.data.routerTypeOverride).toBeUndefined();
+      expect(parsed.data.useValidatorOverride).toBeUndefined();
+    }
+  });
+
+  it('rejects an unknown modelTagOverride', () => {
+    expect(
+      runGoldenTestSweepInputSchema.safeParse({ modelTagOverride: 'not-a-real-model' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an unknown routerTypeOverride', () => {
+    expect(runGoldenTestSweepInputSchema.safeParse({ routerTypeOverride: 'random' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects a non-boolean useValidatorOverride', () => {
+    expect(runGoldenTestSweepInputSchema.safeParse({ useValidatorOverride: 'true' }).success).toBe(
+      false,
+    );
   });
 });

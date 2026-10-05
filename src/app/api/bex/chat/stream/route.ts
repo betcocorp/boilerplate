@@ -23,8 +23,7 @@ export const maxDuration = 300;
  * (`BEX_AI_SDK_STREAMING_ENABLED`, `BEX_AI_SDK_STREAMING_ROLLOUT_MODE` and the
  * `x-bex-streaming-cohort` header they read) are retired: this is the only Bex chat transport
  * (`/api/bex/chat` is a permanent 410), so a disabled/out-of-cohort 404 could only ever break the
- * app. `BEX_AI_SDK_GENERATION_ENABLED` is untouched — that one is a permanent runtime selector
- * between the Responses and AI SDK generation loops (B0-378), not a rollout gate.
+ * app. There is one generation loop (the AI SDK `streamText` loop, B0-914); nothing selects it.
  */
 export async function POST(request: Request) {
   if (!(await hasBexSession())) {

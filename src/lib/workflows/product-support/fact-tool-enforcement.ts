@@ -32,8 +32,8 @@ export async function isFactToolEnforcementEnabled(): Promise<boolean> {
  *
  * This module makes the requirement FACT-CATEGORY driven instead: given a finished draft and the
  * tools actually called this turn, it names the ONE tool that owns a fact category the draft
- * asserts but never looked up. The generation runtimes force that single call and re-draft (see
- * `requireFactTool` in `~/lib/openai/responses-runtime` and `~/lib/bex/ai-sdk-runtime`).
+ * asserts but never looked up. The generation runtime forces that single call and re-draft (see
+ * `requireFactTool` in `~/lib/bex/ai-sdk-runtime`).
  *
  * Deliberately NOT a prompt change: "call the right tool" has been prompt guidance since B0-352 and
  * the model reliably skips it — the same finding B0-788 and B0-889 recorded for their question

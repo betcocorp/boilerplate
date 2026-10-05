@@ -46,6 +46,10 @@ describe('model tags (B0-806 / B0-908)', () => {
       'gpt-4.1',
       'gpt-5.5',
       'gpt-5.6',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.4-nano',
       ...ANTHROPIC_MODEL_TAGS,
     ]);
     expect(new Set(BEX_MODEL_TAGS).size).toBe(BEX_MODEL_TAGS.length);
@@ -60,7 +64,17 @@ describe('model tags (B0-806 / B0-908)', () => {
    * partition the explicit tags exactly: no tag in both, no explicit tag in neither.
    */
   it('splits the explicit tags into disjoint OpenAI and Anthropic subsets that cover BEX_MODEL_TAGS (B0-899)', () => {
-    expect(OPENAI_MODEL_TAGS).toEqual(['gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5', 'gpt-5.6']);
+    expect(OPENAI_MODEL_TAGS).toEqual([
+      'gpt-4o',
+      'gpt-4.1-mini',
+      'gpt-4.1',
+      'gpt-5.5',
+      'gpt-5.6',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.4-nano',
+    ]);
     expect([...OPENAI_MODEL_TAGS, ...ANTHROPIC_MODEL_TAGS]).toEqual(
       BEX_MODEL_TAGS.filter((tag) => tag !== 'preview'),
     );
@@ -114,6 +128,29 @@ describe('model tags (B0-806 / B0-908)', () => {
     for (const model of supportedModels) {
       expect(model.label).toBe(`Model: ${model.name}`);
     }
+  });
+
+  /**
+   * B0-1118 — the explicit gpt-5.6 tiers and gpt-5.4-nano are additive: `gpt-5.6` (the sol alias)
+   * stays selectable alongside them. gpt-5.4-nano has no pricing row yet, so its description must
+   * say so rather than quote a rate.
+   */
+  it('offers the gpt-5.6 tiers and gpt-5.4-nano as their own OpenAI tags, keeping gpt-5.6 (B0-1118)', () => {
+    const added = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4-nano'] as const;
+    expect(OPENAI_MODEL_TAGS.indexOf('gpt-5.6-sol')).toBe(OPENAI_MODEL_TAGS.indexOf('gpt-5.6') + 1);
+    for (const tag of added) {
+      expect(isOpenAiModelTag(tag)).toBe(true);
+      expect(isBexModelTag(tag)).toBe(true);
+      expect(modelProviderFor(tag)).toBe('openai');
+      expect(supportedModels.map((m) => m.name)).toContain(tag);
+    }
+    expect(isOpenAiModelTag('gpt-5.6')).toBe(true);
+    expect(MODEL_DESCRIPTIONS['gpt-5.6']).toContain('gpt-5.6-sol / -terra / -luna');
+    for (const tag of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'] as const) {
+      expect(MODEL_DESCRIPTIONS[tag]).toMatch(/\$\d+\.\d{2} → \$\d+\.\d{2} per Mtok/);
+    }
+    expect(MODEL_DESCRIPTIONS['gpt-5.4-nano']).toContain('NOT yet seeded');
+    expect(MODEL_DESCRIPTIONS['gpt-5.4-nano']).not.toMatch(/\$\d/);
   });
 
   it('routes on the claude- prefix, so a pinned Anthropic id outside the list still goes to Anthropic', () => {

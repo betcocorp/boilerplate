@@ -11,6 +11,7 @@ import {
   insertScheduledTestRun,
   updateScheduledTestItem,
 } from '~/lib/observability/scheduled-test-repository';
+import { BEX_MODEL_TAGS } from '~/lib/constants/models';
 import { listGoldenTests } from '~/lib/tests/golden-set';
 
 import type { ScheduledTestItem } from '~/lib/observability/scheduled-test-types';
@@ -34,13 +35,45 @@ export const DISPATCHED_PENDING_STATE = 'dispatched_pending';
  * Contracts (Zod first, per AGENTS.md)
  * -------------------------------------------------------------------------- */
 
+/**
+ * B0-1119 — per-sweep overrides for `POST /api/admin/tests/runs`' `modelTag` / `routerType` /
+ * `useValidator`. Each one is forced onto EVERY run in the roster for this one sweep pass, so the
+ * same golden set can be re-run once per candidate model (B0-1117 model re-evaluation). All three
+ * are optional with no default: an omitted override is simply not sent, and `createRunBodySchema`'s
+ * own defaults stay in charge — a plain sweep dispatches byte-identical bodies to before.
+ */
 export const runGoldenTestSweepInputSchema = z.object({
   /** Report which golden tests would be queued/executed without actually doing either. */
   dryRun: z.boolean().default(false),
+  modelTagOverride: z.enum(BEX_MODEL_TAGS).optional(),
+  routerTypeOverride: z.enum(['keyword', 'semantic', 'llm']).optional(),
+  useValidatorOverride: z.boolean().optional(),
 });
 
 export type RunGoldenTestSweepInput = z.input<typeof runGoldenTestSweepInputSchema>;
 export type RunGoldenTestSweepOptions = z.output<typeof runGoldenTestSweepInputSchema>;
+
+/** The `createRunBodySchema` fields a sweep forces; only the keys the caller supplied are present. */
+export const goldenTestSweepOverridesSchema = z.object({
+  modelTag: z.enum(BEX_MODEL_TAGS).optional(),
+  routerType: z.enum(['keyword', 'semantic', 'llm']).optional(),
+  useValidator: z.boolean().optional(),
+});
+export type GoldenTestSweepOverrides = z.infer<typeof goldenTestSweepOverridesSchema>;
+
+/** Maps the `*Override` input fields onto `createRunBodySchema` keys; `undefined` when none were set. */
+function resolveSweepOverrides(
+  options: RunGoldenTestSweepOptions,
+): GoldenTestSweepOverrides | undefined {
+  const overrides: GoldenTestSweepOverrides = {
+    ...(options.modelTagOverride !== undefined ? { modelTag: options.modelTagOverride } : {}),
+    ...(options.routerTypeOverride !== undefined ? { routerType: options.routerTypeOverride } : {}),
+    ...(options.useValidatorOverride !== undefined
+      ? { useValidator: options.useValidatorOverride }
+      : {}),
+  };
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
 
 export const goldenTestSweepOutcomeSchema = z.object({
   testId: z.string(),
@@ -70,6 +103,8 @@ export const runGoldenTestSweepResultSchema = z.object({
    * when persistence failed: the ledger is observability, never a precondition for dispatching.
    */
   scheduledRunId: z.string().optional(),
+  /** B0-1119 — the overrides forced onto every run; present only when at least one was supplied. */
+  overrides: goldenTestSweepOverridesSchema.optional(),
 });
 export type RunGoldenTestSweepResult = z.infer<typeof runGoldenTestSweepResultSchema>;
 
@@ -111,6 +146,7 @@ async function queueAndRunGoldenTest(
      */
     onRunCreated: (runId: string) => Promise<void>;
   },
+  overrides: GoldenTestSweepOverrides | undefined,
   deps: GoldenTestSweepDeps = {},
 ): Promise<GoldenTestSweepOutcome> {
   const base = { testId: test.id, testName: test.name };
@@ -130,7 +166,9 @@ async function queueAndRunGoldenTest(
         Authorization: authorization,
         ...bypass.headers,
       },
-      body: JSON.stringify({ testId: test.id }),
+      // B0-1119 — a key is only sent when the caller forced it, so a plain sweep's body is still
+      // exactly `{"testId":"…"}` and `createRunBodySchema`'s defaults apply as before.
+      body: JSON.stringify({ testId: test.id, ...(overrides ?? {}) }),
     });
   } catch (error) {
     return {
@@ -239,7 +277,7 @@ type SweepLedger = {
  */
 async function openSweepLedger(
   goldenTests: { id: string; name: string }[],
-  context: { origin: string },
+  context: { origin: string; overrides: GoldenTestSweepOverrides | undefined },
 ): Promise<SweepLedger | null> {
   const startedAtIso = new Date().toISOString();
 
@@ -247,7 +285,12 @@ async function openSweepLedger(
     const run = await insertScheduledTestRun({
       sweepTriggeredAt: startedAtIso,
       totalTests: goldenTests.length,
-      metadata: { origin: context.origin },
+      // B0-1119 — `overrides` identifies which model/router/validator pass this sweep was, on
+      // /admin/scheduled and in the consolidated report. Omitted entirely for a plain sweep.
+      metadata: {
+        origin: context.origin,
+        ...(context.overrides ? { overrides: context.overrides } : {}),
+      },
     });
 
     const items = await insertScheduledTestItems({
@@ -396,6 +439,8 @@ export async function runGoldenTestSweep(
   // B0-942 — archived golden sets are excluded: the sweep must not burn a run (and the LLM spend
   // behind it) on a set nobody maintains any more. Matches what B0-883's "Run Golden" trigger does.
   const goldenTests = await listGoldenTests({ includeArchived: false });
+  const overrides = resolveSweepOverrides(options);
+  const overridesEcho = overrides ? { overrides } : {};
 
   // A dry run is a preview: it deliberately persists NOTHING to the scheduled-test ledger.
   if (options.dryRun || goldenTests.length === 0) {
@@ -413,12 +458,13 @@ export async function runGoldenTestSweep(
         step: null,
         error: null,
       })),
+      ...overridesEcho,
     };
   }
 
   const ledger = await openSweepLedger(
     goldenTests.map((test) => ({ id: test.id, name: test.name })),
-    { origin: context.origin },
+    { origin: context.origin, overrides },
   );
 
   const outcomes = await Promise.all(
@@ -428,6 +474,7 @@ export async function runGoldenTestSweep(
         context.authorization,
         { id: test.id, name: test.name },
         { onRunCreated: (runId) => recordRunCreated(ledger, test.id, runId) },
+        overrides,
         deps,
       );
       await recordDispatchOutcome(ledger, outcome);
@@ -444,5 +491,6 @@ export async function runGoldenTestSweep(
     failed: outcomes.filter((outcome) => !outcome.ok).length,
     outcomes,
     ...(ledger ? { scheduledRunId: ledger.scheduledRunId } : {}),
+    ...overridesEcho,
   };
 }

@@ -11,7 +11,7 @@ import {
   productSupportTools,
   productSupportToolsForRoute,
 } from '~/lib/tools/definitions';
-import { RETRIEVAL_TOOL_NAMES } from '~/lib/openai/responses-runtime';
+import { RETRIEVAL_TOOL_NAMES } from '~/lib/llm/generation-shared';
 import { getToolExample } from '~/lib/tools/examples';
 import { DEFAULT_TOOL_TIMEOUT_MS, resolveToolTimeoutMs } from '~/lib/tools/tool-timeouts';
 import {

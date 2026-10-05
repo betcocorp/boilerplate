@@ -738,8 +738,8 @@ export default async function AdminTestRunDetailsPage({
                     summary={promptBundleVersionSummary}
                   />
                   <RuntimeConfigBadge
-                    // B0-912 — the run-level loop, so a claude-* run reads as the AI SDK loop and a
-                    // gpt-* run with the flag off reads as the Responses loop.
+                    // B0-912 — the run-level loop. Every run since B0-914 is the AI SDK loop; older
+                    // gpt-* runs may read as the retired Responses loop.
                     generationRuntime={extractGenerationRuntimeFromSummary(
                       result.summary,
                     )}

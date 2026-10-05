@@ -120,6 +120,69 @@ describe('executeToolCall — model vs persisted payload (B0-437)', () => {
   });
 });
 
+describe('executeToolCall — matched chunk window diagnostics', () => {
+  it('logs the document, matched chunk, and hydrated window chunk UUIDs', async () => {
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      sources: [
+        {
+          documentId: 'doc-uuid',
+          chunkId: 'matched-chunk-uuid',
+          documentKind: 'sds',
+          documentBody: 'window body',
+          documentBodyChars: 11,
+          documentBodyChunkIds: ['previous-uuid', 'matched-chunk-uuid', 'next-uuid'],
+          documentBodyTruncated: false,
+          originalMatchedChunkId: 'original-chunk-uuid',
+          requestedSectionType: 'physical_properties',
+          sectionOverrideApplied: true,
+        },
+      ],
+    });
+
+    try {
+      await executeToolCall({
+        name: 'search_product_docs',
+        argumentsJson: JSON.stringify({ freeformQuery: 'Push Mint pH' }),
+        callId: 'call_window',
+        auditCtx: {
+          traceId: 'trace-uuid',
+          workflowRunId: 'run-uuid',
+          conversationId: 'conversation-uuid',
+        },
+      });
+
+      const diagnostic = consoleLog.mock.calls
+        .map(([entry]) => JSON.parse(String(entry)) as Record<string, unknown>)
+        .find((entry) => entry.event === 'rag.retrieval.matched_chunk_windows');
+      expect(diagnostic).toMatchObject({
+        trace_id: 'trace-uuid',
+        workflow_run_id: 'run-uuid',
+        conversation_id: 'conversation-uuid',
+        tool_name: 'search_product_docs',
+        call_id: 'call_window',
+        windows: [
+          {
+            document_id: 'doc-uuid',
+            matched_chunk_id: 'matched-chunk-uuid',
+            original_matched_chunk_id: 'original-chunk-uuid',
+            requested_section_type: 'physical_properties',
+            section_override_applied: true,
+            document_kind: 'sds',
+            window_chunk_ids: ['previous-uuid', 'matched-chunk-uuid', 'next-uuid'],
+            window_chunk_count: 3,
+            window_chars: 11,
+            window_truncated: false,
+          },
+        ],
+      });
+    } finally {
+      consoleLog.mockRestore();
+    }
+  });
+});
+
 describe('executeToolCall — retrieval parameters on the trace entry (B0-493)', () => {
   const retrievalPayload = {
     strategy: 'anchored_only',

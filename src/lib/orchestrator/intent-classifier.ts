@@ -38,7 +38,7 @@ export type IntentValue = (typeof INTENT_VALUES)[number];
 
 /**
  * A prior conversation turn replayed to the classifier for context. Mirrors the
- * `{ role, content }` shape `responses-runtime.ts` already replays for the generation loop
+ * `{ role, content }` shape `ai-sdk-runtime.ts` replays for the generation loop
  * (B0-519's `history`), plus an `id` — needed here for the B0-505 cache key, not for the model call.
  */
 export type PriorTurnMessage = {
@@ -132,7 +132,7 @@ const llmIntentClassificationSchema = z.object({
  * gate record on `/admin/observability` must carry the reason itself.
  */
 /**
- * B0-563 — mirrors `LlmTokenUsage` (`~/lib/openai/responses-runtime.ts`) as a validated shape.
+ * B0-563 — mirrors `LlmTokenUsage` (`~/lib/llm/generation-shared.ts`) as a validated shape.
  * B0-786 — exported so the consolidated signals contract (`~/lib/orchestrator/signals`) reuses this
  * exact shape rather than declaring a second copy of it.
  */

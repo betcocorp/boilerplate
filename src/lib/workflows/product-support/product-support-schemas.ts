@@ -471,11 +471,11 @@ export const runtimeConfigSchema = z.object({
   /** `settings.BEX_EARLY_DECLINE_GATE_ENABLED === 'true'` (B0-734: a settings row, default false). */
   earlyDeclineGateEnabled: z.boolean(),
   /**
-   * Whether the AI SDK generation runtime ran this turn (vs the OpenAI Responses loop). The EFFECTIVE
-   * decision, not the raw flag: `true` for every Anthropic model regardless of the
-   * `BEX_AI_SDK_GENERATION_ENABLED` row, and the row's value for OpenAI models (B0-908).
+   * Historical only. Before B0-914 this recorded whether the AI SDK loop (vs the OpenAI Responses
+   * loop) ran the turn. Every turn is the AI SDK loop now, so it is no longer written; it stays
+   * optional so persisted runs from before the cutover still parse and render.
    */
-  aiSdkGenerationEnabled: z.boolean(),
+  aiSdkGenerationEnabled: z.boolean().optional(),
   /** B0-984 — `BEX_FACT_TOOL_ENFORCEMENT_ENABLED` as this run read it; absent on earlier runs. */
   factToolEnforcementEnabled: z.boolean().optional(),
   /**
@@ -722,16 +722,16 @@ export const productSupportFinalOutputSchema = z.object({
   /**
    * B0-388 — chat context the panel needs to avoid overclaiming completeness: in a chat turn the
    * captured `instructions` are NOT the whole model input. Prior conversation turns are replayed
-   * (AI SDK runtime) or carried server-side by `previousResponseId` (Responses runtime), so a
-   * panel showing only the instructions would imply the model saw less than it did.
-   * Optional for historical payloads; `previousResponseId` is null on the first turn of a chat.
+   * to the model, so a panel showing only the instructions would imply it saw less than it did.
+   * Optional for historical payloads. `previousResponseId` is historical only: runs before B0-914
+   * carried it for the Responses loop's server-side chain; it is no longer written.
    */
   priorMessageCount: z.number().int().nonnegative().optional(),
   previousResponseId: z.string().nullable().optional(),
   /**
    * B0-519 — whether `priorMessageCount` exceeded `BEX_HISTORY_MAX_MESSAGES` this turn, which:
-   * (a) capped the history actually replayed to the most recent messages, and (b), on the Responses
-   * runtime only, intentionally broke the `previousResponseId` chain instead of resuming it. See
+   * (a) capped the history actually replayed to the most recent messages, and (b) (before B0-914, on the
+   * Responses runtime only) intentionally broke the `previousResponseId` chain. See
    * `capConversationHistory` in `run-product-support-workflow.ts`. Optional for historical payloads
    * written before this ticket.
    */

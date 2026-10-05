@@ -107,7 +107,7 @@ export function RuntimeConfigBadge({
       <RunConfigBadges runConfig={runConfig} />
       {generationRuntime ? (
         <Badge
-          title={`summary.generationRuntime: ${generationRuntime} — ${generationRuntimeLabel(generationRuntime)}. Which loop served the run (B0-912); an Anthropic model can only be served by the AI SDK loop, an OpenAI model follows BEX_AI_SDK_GENERATION_ENABLED.`}
+          title={`summary.generationRuntime: ${generationRuntime} — ${generationRuntimeLabel(generationRuntime)}. Which loop served the run (B0-912). Every run since B0-914 is the AI SDK loop; older runs may show the retired Responses loop.`}
           variant="outline"
         >
           {GENERATION_RUNTIME_SHORT_LABELS[generationRuntime]} runtime
@@ -148,7 +148,8 @@ export function RuntimeConfigBadge({
           </Badge>
           {/* B0-912 — suppressed when the run-level `generationRuntime` chip above already says
               this; showing both would read as a bug (same rule the runConfig/observed pairs use). */}
-          {generationRuntime ? null : (
+          {/* Only runs recorded before B0-914 carry the per-item flag; newer ones are always ai-sdk. */}
+          {generationRuntime || runtimeConfig.aiSdkGenerationEnabled === undefined ? null : (
             <Badge
               title={`aiSdkGenerationEnabled: ${runtimeConfig.aiSdkGenerationEnabled}`}
               variant="outline"

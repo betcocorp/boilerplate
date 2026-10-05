@@ -4,7 +4,7 @@ import { getAnthropicClient } from '~/lib/anthropic/client';
 import { modelProviderFor, type ModelEffort, type ModelProvider } from '~/lib/constants/models';
 import { logError, logInfo, logWarn } from '~/lib/observability/logger';
 import { getOpenAIClient } from '~/lib/openai/client';
-import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import type { LlmTokenUsage } from '~/lib/llm/generation-shared';
 import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 import { getErrorMessage } from '~/lib/utils';

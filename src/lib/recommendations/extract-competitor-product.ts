@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { isBexModelTag } from '~/lib/constants/models';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
-import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import type { LlmTokenUsage } from '~/lib/llm/generation-shared';
 import { hasDistinctiveToken } from '~/lib/recommendations/competitor-self-reference';
 import { getStringSetting } from '~/lib/settings/settings-service';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';

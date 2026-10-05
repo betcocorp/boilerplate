@@ -4,6 +4,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
   assembleChunkIndexSetBody,
+  assembleDocumentSectionBodies,
   assembleNeighborChunkBodies,
   chunkWindowKey,
   fetchProductLineWebUrls,
@@ -63,6 +64,40 @@ function mockChunkQuery(rows: ChunkRow[], error: { message: string } | null = nu
   return orSpy;
 }
 
+function mockSectionQuery(rows: Array<ChunkRow & {
+  chunk_key: string;
+  section_path: string[];
+  section_type: string;
+}>) {
+  const inSpy = vi.fn();
+  const eqSpy = vi.fn();
+  const builder: {
+    in: (column: string, values: string[]) => typeof builder;
+    eq: (column: string, value: string) => typeof builder;
+    order: () => typeof builder;
+    then: (resolve: (value: { data: typeof rows; error: null }) => unknown) => unknown;
+  } = {
+    in: (column, values) => {
+      inSpy(column, values);
+      return builder;
+    },
+    eq: (column, value) => {
+      eqSpy(column, value);
+      return builder;
+    },
+    order: () => builder,
+    then: (resolve) => resolve({ data: rows, error: null }),
+  };
+  vi.mocked(getSupabaseServiceRoleClient).mockReturnValue({
+    schema: () => ({
+      from: () => ({
+        select: () => builder,
+      }),
+    }),
+  } as unknown as ReturnType<typeof getSupabaseServiceRoleClient>);
+  return { inSpy, eqSpy };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -73,6 +108,54 @@ describe('chunkWindowKey', () => {
     expect(chunkWindowKey({ documentId: 'doc-1', chunkIndex: 3 })).not.toBe(
       chunkWindowKey({ documentId: 'doc-1', chunkIndex: 7 }),
     );
+  });
+});
+
+describe('assembleDocumentSectionBodies', () => {
+  it('assembles only the requested section and preserves its ordered chunk metadata', async () => {
+    const rows = [
+      {
+        ...row({
+          id: 'section-9-a',
+          document_id: 'doc-1',
+          chunk_index: 13,
+          chunk_text: '| pH | 6.5 to 8.5 |',
+        }),
+        chunk_key: 'section-9-a',
+        section_path: ['sds', 'section_9'],
+        section_type: 'physical_properties',
+      },
+      {
+        ...row({
+          id: 'section-9-b',
+          document_id: 'doc-1',
+          chunk_index: 14,
+          chunk_text: '| Relative density | 0.9931 |',
+        }),
+        chunk_key: 'section-9-b',
+        section_path: ['sds', 'section_9'],
+        section_type: 'physical_properties',
+      },
+    ];
+    const { inSpy, eqSpy } = mockSectionQuery(rows);
+
+    const result = await assembleDocumentSectionBodies(['doc-1'], 'physical_properties');
+    const section = result.get('doc-1');
+
+    expect(inSpy).toHaveBeenCalledWith('document_id', ['doc-1']);
+    expect(eqSpy).toHaveBeenCalledWith('section_type', 'physical_properties');
+    expect(section?.body.chunkIds).toEqual(['section-9-a', 'section-9-b']);
+    expect(section?.body.body).toContain('6.5 to 8.5');
+    expect(section?.chunks.map((chunk) => chunk.chunk_index)).toEqual([13, 14]);
+    expect(section?.chunks[0]?.sectionPath).toEqual(['sds', 'section_9']);
+  });
+
+  it('does not query without documents or a section type', async () => {
+    await expect(assembleDocumentSectionBodies([], 'physical_properties')).resolves.toEqual(
+      new Map(),
+    );
+    await expect(assembleDocumentSectionBodies(['doc-1'], '   ')).resolves.toEqual(new Map());
+    expect(getSupabaseServiceRoleClient).not.toHaveBeenCalled();
   });
 });
 

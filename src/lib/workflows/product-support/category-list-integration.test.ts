@@ -113,21 +113,11 @@ vi.mock('~/lib/openai/client', () => ({
   resolveResponsesModel: () => 'gpt-test',
 }));
 
-const runResponsesWithToolLoopMock = vi.fn();
+const runGenerationLoopMock = vi.fn();
 const executeProductToolMock = vi.fn();
 
-vi.mock('~/lib/openai/responses-runtime', () => ({
-  runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
-  usageFromResponse: () => ({
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    cachedPromptTokens: 0,
-  }),
-}));
-
 vi.mock('~/lib/bex/ai-sdk-runtime', () => ({
-  runAiSdkWithToolLoop: vi.fn(),
+  runAiSdkWithToolLoop: (...args: unknown[]) => runGenerationLoopMock(...args),
 }));
 
 vi.mock('~/lib/tools/product-tools', () => ({
@@ -234,7 +224,7 @@ function generationCalling(calls: Array<{ name: string; argumentsJson: string; c
 }
 
 function firstToolChoice(): unknown {
-  const [opts] = runResponsesWithToolLoopMock.mock.calls[0] as [{ toolChoice: unknown }];
+  const [opts] = runGenerationLoopMock.mock.calls[0] as [{ toolChoice: unknown }];
   return opts.toolChoice;
 }
 
@@ -251,12 +241,11 @@ beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
   settingOverrides.clear();
-  settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
   settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
   settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
   settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', false);
 
-  runResponsesWithToolLoopMock.mockImplementation(
+  runGenerationLoopMock.mockImplementation(
     generationCalling([
       {
         name: 'get_products_in_category',
@@ -284,7 +273,7 @@ describe('category-tool forcing for superlative/task-recommendation asks (B0-889
   });
 
   it('regression: a NAMED-product dilution question still forces get_efficacy_data (B0-788), never the category tool', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'get_efficacy_data',

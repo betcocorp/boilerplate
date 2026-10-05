@@ -95,10 +95,9 @@ vi.mock('~/lib/openai/client', () => ({
   resolveResponsesModel: () => 'gpt-test',
 }));
 
-vi.mock('~/lib/openai/responses-runtime', () => ({
-  runResponsesWithToolLoop: async () => ({
-    lastResponse: {},
-    finalResponseId: 'resp_final',
+vi.mock('~/lib/bex/ai-sdk-runtime', () => ({
+  runAiSdkWithToolLoop: async () => ({
+    finalResponseId: null,
     assistantText: 'Dilute per the label instructions.',
     toolTrace: [
       {
@@ -110,7 +109,7 @@ vi.mock('~/lib/openai/responses-runtime', () => ({
         durationMs: 42,
       },
     ],
-    responseIds: ['resp_1'],
+    responseIds: ['ai_sdk_1'],
     usage: {
       promptTokens: 100,
       completionTokens: 20,
@@ -125,16 +124,6 @@ vi.mock('~/lib/openai/responses-runtime', () => ({
         cachedPromptTokens: 0,
       },
     ],
-  }),
-  // B0-563 — `~/lib/openai/client`'s `getOpenAIClient` returns `{}` above, so any
-  // `client.responses.create` call in this file throws before reaching this function; it only
-  // needs to exist so the named import in `intent-classifier.ts`/`extract-competitor-product.ts`
-  // resolves against this mocked module.
-  usageFromResponse: () => ({
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    cachedPromptTokens: 0,
   }),
 }));
 

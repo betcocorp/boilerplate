@@ -1,0 +1,136 @@
+{
+  "schema": "sds-golden-benchmark/v1",
+  "benchmarkId": "full-golden-expected-sds-v1",
+  "scope": {
+    "canonicalDatasets": "five full CSV datasets",
+    "excludes": [
+      "XLSX duplicates",
+      "derived top-25 datasets"
+    ],
+    "selection": "Every expected document UUID was resolved through local rag.document; all documents with document_kind=sds are included."
+  },
+  "datasets": [
+    {
+      "path": ".workspace/golden-datasets/Dilution Control FastDraw Specialist Golden Dataset 216_with_expected_mappings.csv",
+      "sha256": "b9ce28c0547c8198c7bc497281a871000668561cc5ee4c12e49d08fa19639673",
+      "rows": 216,
+      "referenceOccurrences": 386,
+      "uniqueDocumentIds": 67
+    },
+    {
+      "path": ".workspace/golden-datasets/Product Specialist Golden Dataset 250_with_expected_mappings.csv",
+      "sha256": "ab01e0b42164b1bd5c3e6367f2172c6068b5d921f100becb0dcc333df10723b1",
+      "rows": 250,
+      "referenceOccurrences": 324,
+      "uniqueDocumentIds": 120
+    },
+    {
+      "path": ".workspace/golden-datasets/Restroom Cleaning Specialist Golden Dataset 250_with_expected_mappings.csv",
+      "sha256": "17574acc217b19a8a886a45941b5eaa315b6fff5d7c8d43f2bfcb379c1a6effd",
+      "rows": 250,
+      "referenceOccurrences": 619,
+      "uniqueDocumentIds": 45
+    },
+    {
+      "path": ".workspace/golden-datasets/SportsZone Specialist Golden Dataset 250_with_expected_mappings.csv",
+      "sha256": "a7d65f34fa44f5fbfae9efe0740354bd71375e2ea6b51c6da059cb2ac78e224d",
+      "rows": 250,
+      "referenceOccurrences": 544,
+      "uniqueDocumentIds": 86
+    },
+    {
+      "path": ".workspace/golden-datasets/VCT Specialist Golden Dataset 249_with_expected_mappings.csv",
+      "sha256": "e2c5b359820f39bd4d8bcea8701e3384851494ae25afc16ebbdf91854e22c036",
+      "rows": 249,
+      "referenceOccurrences": 502,
+      "uniqueDocumentIds": 67
+    }
+  ],
+  "expectedDocumentSummary": {
+    "testRows": 1215,
+    "referenceOccurrences": 2375,
+    "uniqueDocumentIds": 339,
+    "missingDocumentIds": [],
+    "documentKindCounts": {
+      "fastdraw_dilution": 39,
+      "knowledge": 97,
+      "label": 187,
+      "product_line_profile": 14,
+      "sds": 2
+    },
+    "selectedSdsDocuments": 2,
+    "selectedSdsReferenceOccurrences": 6
+  },
+  "documents": [
+    {
+      "documentId": "b0e2d441-a7cb-4bee-9c6e-01aee328edb8",
+      "title": "Push (Mint) M000133",
+      "documentKind": "sds",
+      "documentState": {
+        "isCurrent": true,
+        "lifecycleStatus": "active"
+      },
+      "sourceRecordId": "0115b3cc-c3c7-4860-a996-6fb925c1e71d",
+      "sourceActive": true,
+      "sourceUri": "s3://betco-sds/Finished Good SDS/Push (Mint)_M000133.pdf",
+      "localPdfPath": "dump/sds/Finished Good SDS/Push (Mint)_M000133.pdf",
+      "pdfSha256": "cfc99c80097020c7d427ee53b44d643d76c0c41f32b175b08eb2228932e13b18",
+      "pdfBytes": 330812,
+      "references": [
+        {
+          "dataset": "Product Specialist Golden Dataset 250_with_expected_mappings.csv",
+          "testId": "PRD-001",
+          "question": "Where do I find the SDS for Push?",
+          "referenceIndex": 2
+        },
+        {
+          "dataset": "Product Specialist Golden Dataset 250_with_expected_mappings.csv",
+          "testId": "PRD-002",
+          "question": "What is the pH of Push?",
+          "referenceIndex": 1
+        },
+        {
+          "dataset": "Product Specialist Golden Dataset 250_with_expected_mappings.csv",
+          "testId": "PRD-160",
+          "question": "Our SDS for a Betco product is several years old and our policy requires a recent revision. Is the one we have still the current version?",
+          "referenceIndex": 1
+        },
+        {
+          "dataset": "Product Specialist Golden Dataset 250_with_expected_mappings.csv",
+          "testId": "PRD-035",
+          "question": "Can you send the 2019 SDS for Push?",
+          "referenceIndex": 1
+        }
+      ]
+    },
+    {
+      "documentId": "c80c9697-568d-4a49-b85b-2b7b720b3392",
+      "title": "1664 – StreetShoe NXT Gloss SDS English",
+      "documentKind": "sds",
+      "documentState": {
+        "isCurrent": true,
+        "lifecycleStatus": "active"
+      },
+      "sourceRecordId": "0eda200d-62f6-464e-b4c3-95abc061e249",
+      "sourceActive": false,
+      "sourceUri": "s3://betco-sds/Basic SDS/Chemtrec SDS files ready to transfer/1664 – StreetShoe NXT Gloss SDS English.pdf",
+      "localPdfPath": "dump/sds/Basic SDS/Chemtrec SDS files ready to transfer/1664 – StreetShoe NXT Gloss SDS English.pdf",
+      "pdfSha256": "1037069cf9c19becca40ca442ffe940a2944f8b1f2552b4ca849617be4206ec0",
+      "pdfBytes": 139138,
+      "references": [
+        {
+          "dataset": "SportsZone Specialist Golden Dataset 250_with_expected_mappings.csv",
+          "testId": "SPZ-219",
+          "question": "Where do I find the Safety Data Sheet for StreetShoe NXT Gloss?",
+          "referenceIndex": 1
+        },
+        {
+          "dataset": "SportsZone Specialist Golden Dataset 250_with_expected_mappings.csv",
+          "testId": "SPZ-335",
+          "question": "What does the StreetShoe NXT Safety Data Sheet say about ventilation on the job and how unused product should be stored?",
+          "referenceIndex": 1
+        }
+      ]
+    }
+  ]
+}

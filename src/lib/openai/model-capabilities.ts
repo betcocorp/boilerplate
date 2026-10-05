@@ -12,6 +12,7 @@
  *   gpt-5, gpt-5-mini ............. reject
  *   gpt-5.1, gpt-5.2, gpt-5.4 ..... ACCEPT
  *   gpt-5.4-mini .................. accept
+ *   gpt-5.4-nano .................. accept (verified 2026-09-30, B0-1118)
  *   gpt-5.5, gpt-5.6 .............. reject
  *   o3-mini ....................... reject
  *   every gpt-4.x ................. accept
@@ -85,6 +86,13 @@ export function supportsSamplingControls(model: string): boolean {
  * Returns `{}` for a model that rejects it, so the key is absent from the request body rather than
  * present-and-undefined (the API rejects the parameter on presence, not on value).
  */
+/**
+ * The generation temperature both loops send to a model that accepts sampling controls. One
+ * constant so the loops cannot drift: B0-1138 found the AI SDK loop sending none (OpenAI default
+ * 1.0) while the Responses loop sent 0.2, which changed drafts enough to move guardrail firing.
+ */
+export const DEFAULT_GENERATION_TEMPERATURE = 0.2;
+
 export function samplingParamsFor(
   model: string,
   params: { temperature?: number },

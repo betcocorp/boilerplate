@@ -9,15 +9,14 @@ import { logError, logWarn } from '~/lib/observability/logger';
  * fetch failed"}` and the user got nothing.
  *
  * This module is deliberately provider-agnostic: it classifies a thrown value and re-runs a
- * caller-chosen closure. It does **not** know what a model call is, so each runtime keeps ownership
- * of *where* the retry boundary sits (see `runResponsesWithToolLoop` and `runAiSdkWithToolLoop`) —
+ * caller-chosen closure. It does **not** know what a model call is, so the generation runtime keeps ownership
+ * of *where* the retry boundary sits (see `runAiSdkWithToolLoop`) —
  * the part that has to be reasoned about per runtime, because retrying across a boundary where a
  * tool already ran would duplicate that tool's side effects.
  *
- * It lives under `~/lib/openai/` because that is the existing lowest common ancestor of the two
- * runtimes (`~/lib/bex/ai-sdk-runtime` already imports its shared types from
- * `~/lib/openai/responses-runtime`), and both runtimes ultimately talk to OpenAI. Nothing here
- * imports the `ai` package, so the AI-SDK-specific middleware stays in the AI SDK runtime.
+ * It lives under `~/lib/openai/` for historical reasons (it was shared with the retired Responses
+ * loop). Nothing here imports the `ai` package, so the AI-SDK-specific middleware stays in the AI
+ * SDK runtime.
  *
  * Note on `~/lib/utils.ts#withRetry`: it exists but is not reusable here — it retries *every*
  * error class unconditionally, which this ticket explicitly forbids (a 4xx validation error must

@@ -29,14 +29,8 @@ beforeEach(() => {
 });
 
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
-import {
-  formatPriorTurnToolContext,
-  PRIOR_TURN_TOOL_CONTEXT_HEADER,
-  RETRIEVAL_EXHAUSTED_INSTRUCTION,
-  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
-  TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
-  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
-} from '~/lib/openai/responses-runtime';
+import { __resetLearnedSamplingSupport } from '~/lib/openai/model-capabilities';
+import { formatPriorTurnToolContext, PRIOR_TURN_TOOL_CONTEXT_HEADER, RETRIEVAL_EXHAUSTED_INSTRUCTION, TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT, TOOL_ROUNDS_EXHAUSTED_INSTRUCTION, UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT } from '~/lib/llm/generation-shared';
 import {
   isUpstreamTransportError,
   UPSTREAM_RETRY_USER_MESSAGE,
@@ -173,6 +167,65 @@ describe('runAiSdkWithToolLoop', () => {
     expect(typeof result.usage.totalTokens).toBe('number');
     // B0-324 — one usage entry per model call, so prompt-cache reuse per round is verifiable.
     expect(result.usageByCall).toHaveLength(result.responseIds.length);
+  });
+
+  it('executes the tool calls of one step concurrently (B0-379 parity)', async () => {
+    let call = 0;
+    modelRef.current = new MockLanguageModelV3({
+      doStream: async () => {
+        call += 1;
+        const finish = (finishReason: 'stop' | 'tool-calls') =>
+          ({
+            type: 'finish',
+            finishReason,
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          }) as const;
+        if (call === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                { type: 'tool-call', toolCallId: 't1', toolName: 'lookup_cross_reference', input: '{"brand":"A","productName":"1"}' },
+                { type: 'tool-call', toolCallId: 't2', toolName: 'lookup_cross_reference', input: '{"brand":"B","productName":"2"}' },
+                finish('tool-calls'),
+              ] as const,
+            }),
+          };
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'done' },
+              { type: 'text-end', id: '0' },
+              finish('stop'),
+            ] as const,
+          }),
+        };
+      },
+    });
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const executeTool = vi.fn(async ({ name, callId }: { name: string; argumentsJson: string; callId: string }) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      return {
+        output: '{}',
+        trace: { toolName: name, callId, argumentsPreview: '', outputPreview: '', ok: true, durationMs: 0 } as ToolTraceEntry,
+      };
+    });
+
+    await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'compare two products',
+      executeTool,
+    });
+
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(2);
   });
 
   it('surfaces provider prompt-cache reads per model call (B0-324)', async () => {
@@ -334,6 +387,36 @@ describe('runAiSdkWithToolLoop — bounded transport retry (B0-370)', () => {
 
     expect(doStream).toHaveBeenCalledTimes(2);
     expect(result.assistantText).toBe('Use a neutral cleaner.');
+  });
+
+  it('times out a request that never produces a first chunk and retries it (B0-550 parity)', async () => {
+    vi.stubEnv('BEX_OPENAI_REQUEST_TIMEOUT_MS', '20');
+    try {
+      const doStream = vi.fn(async (options: { abortSignal?: AbortSignal }) => {
+        if (doStream.mock.calls.length === 1) {
+          // A hung request: only the per-attempt abort ends it.
+          await new Promise((_, reject) => {
+            options.abortSignal?.addEventListener('abort', () => reject(options.abortSignal?.reason));
+          });
+        }
+        return { stream: textStream('Use a neutral cleaner.') };
+      });
+      modelRef.current = new MockLanguageModelV3({ doStream });
+
+      const result = await runAiSdkWithToolLoop({
+        modelTag: 'gpt-4.1',
+        instructions: 'You are Bex.',
+        history: [],
+        userMessage: 'what cleaner is best for gym floors',
+        retry: testRetry,
+        executeTool: noopExecuteTool,
+      });
+
+      expect(doStream).toHaveBeenCalledTimes(2);
+      expect(result.assistantText).toBe('Use a neutral cleaner.');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('does not re-run a tool when the model call after it is retried', async () => {
@@ -1301,10 +1384,17 @@ describe('runAiSdkWithToolLoop — ported loop behaviours (B0-901)', () => {
    * adding a `temperature` here would silently break every Claude call (Opus 5 / Sonnet 5 return
    * 400 on any sampling control).
    */
-  it('sends no sampling control on either provider, so a temperature rejection cannot arise', async () => {
-    for (const modelTag of ['gpt-4.1-mini', 'claude-sonnet-5']) {
+  it('sends the shared default temperature to a model that accepts it, and none to Claude or a rejecting model (B0-1138)', async () => {
+    const expectations: Array<[string, number | undefined]> = [
+      ['gpt-4.1-mini', 0.2],
+      ['gpt-5.5', undefined],
+      ['claude-sonnet-5', undefined],
+    ];
+    for (const [modelTag, expected] of expectations) {
       const seen: Array<Record<string, unknown>> = [];
       modelRef.current = recordingModel([answerChunks('ok')], seen);
+      // The mock model carries no real id, so route the capability gate through the tag.
+      (modelRef.current as { modelId: string }).modelId = modelTag;
 
       await runAiSdkWithToolLoop({
         modelTag,
@@ -1315,8 +1405,51 @@ describe('runAiSdkWithToolLoop — ported loop behaviours (B0-901)', () => {
       });
 
       expect(seen).toHaveLength(1);
-      expect(seen[0]!.temperature).toBeUndefined();
+      expect(seen[0]!.temperature).toBe(expected);
       expect(seen[0]!.topP).toBeUndefined();
     }
   });
+
+  it('replays once without temperature when an unfamiliar model rejects it (B0-606 parity)', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    let call = 0;
+    modelRef.current = new MockLanguageModelV3({
+      modelId: 'gpt-9-future',
+      doStream: async (options) => {
+        call += 1;
+        seen.push(options as unknown as Record<string, unknown>);
+        if (call === 1) {
+          throw Object.assign(
+            new Error("Unsupported parameter: 'temperature' is not supported with this model."),
+            { statusCode: 400 },
+          );
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'ok' },
+              { type: 'text-end', id: '0' },
+              { type: 'finish', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+            ] as const,
+          }),
+        };
+      },
+    });
+
+    const result = await runAiSdkWithToolLoop({
+      modelTag: 'gpt-9-future',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(result.assistantText).toBe('ok');
+    expect(seen).toHaveLength(2);
+    expect(seen[0]!.temperature).toBe(0.2);
+    expect(seen[1]!.temperature).toBeUndefined();
+    __resetLearnedSamplingSupport();
+  });
+
 });

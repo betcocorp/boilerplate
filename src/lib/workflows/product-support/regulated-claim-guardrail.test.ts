@@ -835,7 +835,7 @@ describe('evaluateRegulatedClaimGrounding — B0-888 key-term fallback and adjac
     expect(result.ungroundedCategories).toContain('compatibility');
   });
 
-  it('never applies the key-term fallback to hazard claims -- verbatim is still required', () => {
+  it('still declines a hazard claim whose value term is absent from the source (B0-923 value-term path)', () => {
     const result = evaluateRegulatedClaimGrounding({
       draftAnswer: 'This product causes severe skin burns per the label.',
       sources: [
@@ -1275,27 +1275,51 @@ describe('planRegulatedClaimRedaction — product-usage-specific requires a usag
     }
   });
 
-  it('still declines outright for an ungrounded hazard sentence, whatever the question shape', () => {
+  function hazardPlan(question: string, category: 'hazard' | 'first_aid', sentence: string) {
+    return planRegulatedClaimRedaction({
+      draftAnswer: `${IDENTITY_ANSWER} ${sentence}`,
+      userMessage: question,
+      grounding: {
+        categoriesDetected: [category],
+        ungroundedCategories: [category],
+        ungroundedDetails: [{ category, snippet: sentence }],
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: LOCKED,
+      sources: LABEL_LED_SOURCES,
+    });
+  }
+
+  it('still declines outright for an ungrounded hazard / first-aid sentence on a safety or exposure question (B0-1131)', () => {
     const hazard = 'Causes severe skin burns and eye damage.';
+    const firstAid = 'If in eyes, rinse cautiously with water for 15 minutes.';
     for (const question of [
-      'Do you have a product called Hard as Nailz?',
       'How do I use Hard As Nails safely?',
+      'What PPE does Hard As Nails require?',
+      'Someone got floor stripper splashed in their eyes. What do I do?',
+      'Is Hard As Nails flammable?',
+      'My employee breathed in the fumes, is that dangerous?',
+      'Can I mix Hard As Nails with bleach?',
     ]) {
-      const plan = planRegulatedClaimRedaction({
-        draftAnswer: `${IDENTITY_ANSWER} ${hazard}`,
-        userMessage: question,
-        grounding: {
-          categoriesDetected: ['hazard'],
-          ungroundedCategories: ['hazard'],
-          ungroundedDetails: [{ category: 'hazard', snippet: hazard }],
-          keyTermGroundedCategories: [],
-        },
-        productLineLock: LOCKED,
-        sources: LABEL_LED_SOURCES,
-      });
-      expect(plan.mode, question).toBe('decline');
-      if (plan.mode !== 'decline') continue;
-      expect(plan.reason, question).toBe('safety_critical_sentence_category');
+      for (const [category, sentence] of [['hazard', hazard], ['first_aid', firstAid]] as const) {
+        const plan = hazardPlan(question, category, sentence);
+        expect(plan.mode, `${category}: ${question}`).toBe('decline');
+        if (plan.mode !== 'decline') continue;
+        expect(plan.reason, question).toBe('safety_critical_sentence_category');
+      }
+    }
+  });
+
+  it('withholds only the hazard / first-aid sentence on a non-safety question, keeping the rest (B0-1131 ROW-01)', () => {
+    const hazard = 'For Push, there are no known significant hazards, and no special signal word or hazard statements are required.';
+    for (const question of ['Do you have a product called Hard as Nailz?', 'Where do I find the SDS for Push?']) {
+      const plan = hazardPlan(question, 'hazard', hazard);
+      expect(plan.mode, question).toBe('sentence_redaction');
+      if (plan.mode === 'decline') continue;
+      expect(plan.redactedText).toContain(IDENTITY_ANSWER);
+      expect(plan.redactedText).not.toContain(hazard);
+      expect(plan.redactedText).toContain('[one hazard statement withheld — not verifiable against a retrieved label]');
+      expect(plan.withheldCategories).toEqual(['hazard']);
     }
   });
 
@@ -1861,5 +1885,300 @@ describe('evaluateRegulatedClaimGrounding — bullet-head attribution and abbrev
     expect(plan.redactedText).toContain('[two efficacy claims withheld — not verifiable against a retrieved label]');
     expect(plan.redactedText).not.toContain('[one efficacy claim withheld');
     expect(plan.redactedText).toContain('- Rest Stop™: The label explicitly states it kills HIV-1.');
+  });
+});
+
+/**
+ * B0-923 — hazard value-term grounding. Every "grounds" draft below is a live `ungroundedDetails`
+ * snippet (app 6.12.0/7.0.0) that declined a whole answer although each hazard value in it is
+ * printed on the product's own label. Fixture bodies are excerpts of the live documents.
+ */
+const SPEEDEX_LABEL_SOURCE = {
+  documentId: 'c7d2e59f-7945-4f3f-aae6-9b5611fef7a7',
+  title: 'Speedex Concentrate',
+  isLockedProductLineSource: true,
+  documentBody: [
+    'DANGER! CAUSES SEVERE SKIN BURNS AND EYE DAMAGE. MAY CAUSE AN ALLERGIC SKIN REACTION.',
+    'SKIN CORROSION - Category 1. SERIOUS EYE DAMAGE - Category 1. Signal word: Danger. H314 + H317',
+    'Recommended: splash',
+    'goggles. Wear protective',
+    'Chemical resistant gloves.',
+    'Wash hands thoroughly after handling.',
+  ].join('\n'),
+};
+
+const PUSH_SDS_SOURCE = {
+  documentId: 'b0e2d441-a7cb-4bee-9c6e-01aee328edb8',
+  title: 'Push (Mint) M000133',
+  isLockedProductLineSource: true,
+  documentBody: [
+    'SECTION 2: Hazards identification',
+    'Classification of the substance or mixture: Not classified.',
+    'Signal word: No signal word.',
+    'Hazard statements: No known significant effects or critical hazards.',
+  ].join('\n'),
+};
+
+describe('evaluateRegulatedClaimGrounding — B0-923 hazard value-term grounding', () => {
+  it('grounds framed PPE + hazard prose whose every value term is on the locked product label', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling and using this product, as it can cause severe skin burns and eye damage (SDS Section 2).',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).not.toContain('hazard');
+    expect(result.keyTermGroundedCategories).toContain('hazard');
+  });
+
+  it('grounds a GHS class / category / signal word / H-code transcription', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- **PPE:** Speedex Concentrate is classified **Skin Corrosion Category 1 / Serious Eye Damage Category 1, Signal word Danger, H314**.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('grounds a negative classification only against a source that prints it negated', () => {
+    const draftAnswer =
+      '- Product is not classified as hazardous under the OSHA Hazard Communication Standard; there is no signal word (SDS Section 2).';
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer, sources: [PUSH_SDS_SOURCE] }).ungroundedCategories,
+    ).not.toContain('hazard');
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer, sources: [SPEEDEX_LABEL_SOURCE] }).ungroundedCategories,
+    ).toContain('hazard');
+  });
+
+  it('still declines a value term the attributed document never prints', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Always wear a respirator and splash goggles with this product, as it causes severe skin burns.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still declines when the source states the opposite polarity', () => {
+    const nonFlammable = {
+      documentId: 'doc-nf',
+      title: 'Test Cleaner',
+      isLockedProductLineSource: true,
+      documentBody: 'Non-flammable. Not corrosive. Keep out of reach of children.',
+    };
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'This product is flammable, so store it away from heat.',
+        sources: [nonFlammable],
+      }).ungroundedCategories,
+    ).toContain('hazard');
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'This product is corrosive to skin, so wear gloves.',
+        sources: [nonFlammable],
+      }).ungroundedCategories,
+    ).toContain('hazard');
+  });
+
+  it('still declines when no source is attributed to the product (not locked, not cited, not named)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling this product, as it can cause severe skin burns and eye damage.',
+      sources: [{ ...SPEEDEX_LABEL_SOURCE, isLockedProductLineSource: false }],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('never lets first_aid take the value-term path', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'If in eyes, flush with water for 30 minutes and apply ointment.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toContain('first_aid');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-923 generic chemistry-class prose', () => {
+  it('does not flag "Some solvent-based products are flammable"', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- Flammability: Some solvent-based products are flammable, affecting storage and handling.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('does not flag an anaphoric continuation of a sentence that named the chemistry class', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Solvent-based finishes offer strong durability and a traditional amber look. Some are flammable, affecting storage and handling.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('still flags an anaphoric continuation carrying a GHS value token', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Solvent-based finishes offer strong durability. Some are flammable liquids, signal word Danger, H226.',
+      sources: [],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still flags a product-specific hazard sentence that follows a chemistry-class sentence', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Solvent-based finishes are durable. Marathane 45 is combustible and needs a respirator.',
+      sources: [],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-923 attribution refinements (historical replay)', () => {
+  const MARATHANE_LABEL = {
+    documentId: 'doc-marathane-45',
+    title: 'Marathane 45',
+    documentBody: 'WARNING: COMBUSTIBLE. Always use a respirator when applying this product. 480 g/L VOC.',
+  };
+  const OTHER_FINISH = {
+    documentId: 'doc-other',
+    title: 'Players Choice One',
+    documentBody: 'Waterbased. Low odor. Non-flammable.',
+  };
+
+  it('attributes a sentence that names a source by its full title', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'For example, the Marathane 45 wood-gym-floor label labels the product **“COMBUSTIBLE,”** and requires a respirator during application.',
+      sources: [OTHER_FINISH, MARATHANE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('does not let a named title ground a value only another product prints', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Players Choice One is combustible and requires a respirator.',
+      sources: [OTHER_FINISH, MARATHANE_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('grounds across the locked product line documents when "per the X SDS" attributes the label instead', () => {
+    const label = { ...SPEEDEX_LABEL_SOURCE, documentBody: 'Speedex Concentrate. Heavy duty degreaser. Recommended: splash goggles.' };
+    const dilutedSds = {
+      documentId: 'doc-528-dil',
+      title: '528 DIL MXE',
+      isLockedProductLineSource: true,
+      documentBody: 'SKIN CORROSION - Category 1. Signal word: Danger. H314 - Causes severe skin burns and eye damage.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- **PPE:** Speedex Concentrate is classified **Skin Corrosion Category 1, Signal word Danger, H314**, so wear splash goggles — per the Speedex Concentrate SDS.',
+      sources: [label, dilutedSds],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('does not pool values across documents that are NOT the locked product line', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product is combustible and causes severe skin burns.',
+      sources: [
+        { ...MARATHANE_LABEL, isLockedProductLineSource: false },
+        { ...SPEEDEX_LABEL_SOURCE, isLockedProductLineSource: false },
+      ],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('lets "Some are flammable" reach a chemistry header two sentences back through product-free prose', () => {
+    const draftAnswer = [
+      '**Solvent-Based (Oil-Modified) Finishes:**',
+      '- Higher VOCs: These finishes can emit more VOCs and harmful chemicals, leading to stronger odors and requiring more ventilation. Some are flammable, affecting storage and handling.',
+    ].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] }).categoriesDetected).not.toContain('hazard');
+  });
+
+  it('does not reach two sentences back through a sentence that names a product', () => {
+    const draftAnswer =
+      'Solvent-based finishes are durable. Marathane 45 is a classic choice. Some are flammable, affecting storage.';
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] }).ungroundedCategories).toContain('hazard');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 efficacy claims across the locked product line', () => {
+  const AF79_LABEL = {
+    documentId: 'doc-af79-label',
+    title: 'AF 79',
+    isLockedProductLineSource: true,
+    documentBody: 'Acid Free Bathroom Cleaner. Disinfects hard non-porous surfaces.',
+  };
+  const AF79_EFFICACY = {
+    documentId: 'doc-af79-efficacy',
+    title: 'af79 efficacy sheet',
+    isLockedProductLineSource: true,
+    documentBody: 'BACTERICIDAL: Pseudomonas aeruginosa, Staphylococcus aureus. Contact time: 1 minute.',
+  };
+  const OTHER_PRODUCT = {
+    documentId: 'doc-sanibet',
+    title: 'Sanibet RTU',
+    documentBody: 'Kills Norovirus. BACTERICIDAL: Salmonella enterica.',
+  };
+
+  it('grounds an organism bullet in one of several locked documents (live ROW-08)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'AF79 organisms:\n- Pseudomonas aeruginosa — bactericidal',
+      sources: [AF79_LABEL, AF79_EFFICACY],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still fails an organism no locked document lists', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'AF79 organisms:\n- Mycobacterium tuberculosis — tuberculocidal',
+      sources: [AF79_LABEL, AF79_EFFICACY],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('never grounds a claim attributed to another product on the locked product documents', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Per the Sanibet RTU label, it kills Pseudomonas aeruginosa.',
+      sources: [AF79_LABEL, AF79_EFFICACY, OTHER_PRODUCT],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 every organism must be in the document', () => {
+  const GE_FIGHT_BAC_LABEL = {
+    documentId: 'doc-ge-fight-bac',
+    title: 'GE Fight Bac RTU',
+    isLockedProductLineSource: true,
+    documentBody:
+      'FOR SOFT SURFACE SANITIZATION: Preclean. Spray GE Fight Bac 6-8 inches from soft surface until wet. Let stand for 60 seconds. Allow to air dry. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+
+  it('grounds a paraphrase naming only organisms the document lists', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella aerogenes and Staphylococcus aureus on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('fails when a second organism is not in the document (was: only the first was checked)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella aerogenes and Candida auris on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('fails a species swap on the same genus', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella pneumoniae on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
   });
 });
