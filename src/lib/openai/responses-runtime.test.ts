@@ -2,16 +2,8 @@ import type OpenAI from 'openai';
 import type { Response, Tool } from 'openai/resources/responses/responses';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  collectRetrievalEvidenceIds,
-  formatPriorTurnToolContext,
-  PRIOR_TURN_TOOL_CONTEXT_HEADER,
-  RETRIEVAL_EXHAUSTED_INSTRUCTION,
-  runResponsesWithToolLoop,
-  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
-  TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT,
-  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
-} from '~/lib/openai/responses-runtime';
+import { runResponsesWithToolLoop, TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT } from '~/lib/openai/responses-runtime';
+import { collectRetrievalEvidenceIds, formatPriorTurnToolContext, PRIOR_TURN_TOOL_CONTEXT_HEADER, RETRIEVAL_EXHAUSTED_INSTRUCTION, TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT, UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT } from '~/lib/llm/generation-shared';
 import {
   isUpstreamTransportError,
   UPSTREAM_RETRY_USER_MESSAGE,

@@ -1,5 +1,5 @@
 import type { ToolTraceEntry } from '~/lib/audit/trace';
-import type { ExecuteToolFn, PreloadedEvidence } from '~/lib/openai/responses-runtime';
+import type { ExecuteToolFn, PreloadedEvidence } from '~/lib/llm/generation-shared';
 
 /**
  * B0-436 — speculative retrieval.

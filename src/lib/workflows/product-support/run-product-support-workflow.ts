@@ -46,10 +46,7 @@ import { getOpenAIClient } from '~/lib/openai/client';
 import { selectGenerationRuntime } from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
-import type {
-  FactToolEnforcementOutcome,
-  LlmTokenUsage,
-} from '~/lib/openai/responses-runtime';
+import type { FactToolEnforcementOutcome, LlmTokenUsage } from '~/lib/llm/generation-shared';
 import {
   isFactToolEnforcementEnabled,
   requireFactToolForDraft,

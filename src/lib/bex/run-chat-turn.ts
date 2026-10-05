@@ -16,10 +16,7 @@ import {
   listMessagesForConversation,
   type AgentMessageRow,
 } from '~/lib/conversations/message-repository';
-import {
-  formatPriorTurnToolContext,
-  type ReplayedHistoryMessage,
-} from '~/lib/openai/responses-runtime';
+import { formatPriorTurnToolContext, type ReplayedHistoryMessage } from '~/lib/llm/generation-shared';
 import {
   runProductSupportWorkflow,
   type ProductSupportWorkflowEvent,

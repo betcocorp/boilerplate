@@ -1,6 +1,6 @@
 import { resolveProductEntityByName } from '~/lib/rag/entity-context';
 import type { ProductEntityResolutionSource } from '~/lib/rag/entity-context';
-import type { ExecuteToolFn, PreloadedEvidence } from '~/lib/openai/responses-runtime';
+import type { ExecuteToolFn, PreloadedEvidence } from '~/lib/llm/generation-shared';
 import { SPECULATIVE_SEARCH_TOOL_NAME } from '~/lib/workflows/product-support/speculative-retrieval';
 
 /**

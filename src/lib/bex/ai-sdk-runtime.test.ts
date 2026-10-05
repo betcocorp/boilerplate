@@ -30,14 +30,7 @@ beforeEach(() => {
 
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import { __resetLearnedSamplingSupport } from '~/lib/openai/model-capabilities';
-import {
-  formatPriorTurnToolContext,
-  PRIOR_TURN_TOOL_CONTEXT_HEADER,
-  RETRIEVAL_EXHAUSTED_INSTRUCTION,
-  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
-  TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
-  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
-} from '~/lib/openai/responses-runtime';
+import { formatPriorTurnToolContext, PRIOR_TURN_TOOL_CONTEXT_HEADER, RETRIEVAL_EXHAUSTED_INSTRUCTION, TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT, TOOL_ROUNDS_EXHAUSTED_INSTRUCTION, UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT } from '~/lib/llm/generation-shared';
 import {
   isUpstreamTransportError,
   UPSTREAM_RETRY_USER_MESSAGE,

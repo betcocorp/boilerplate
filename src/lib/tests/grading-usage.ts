@@ -1,7 +1,7 @@
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { ModelProvider } from '~/lib/constants/models';
 import { logWarn } from '~/lib/observability/logger';
-import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import type { LlmTokenUsage } from '~/lib/llm/generation-shared';
 
 /**
  * B0-1109 — the three per-item graders that run during test execution (criteria, decline,

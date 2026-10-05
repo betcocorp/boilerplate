@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ToolTraceEntry } from '~/lib/audit/trace';
-import { formatPreloadedEvidence } from '~/lib/openai/responses-runtime';
+import { formatPreloadedEvidence } from '~/lib/llm/generation-shared';
 import { PRODUCT_SUPPORT_SHARED_INSTRUCTIONS } from '~/lib/workflows/product-support/product-support-prompts';
 import { searchProductDocsInputSchema } from '~/lib/tools/tool-schemas';
 import {

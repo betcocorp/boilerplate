@@ -7,7 +7,7 @@ import {
   type CompletionResult,
 } from '~/lib/llm/structured-completion';
 import { resolveModel } from '~/lib/llm/resolve-model';
-import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import type { LlmTokenUsage } from '~/lib/llm/generation-shared';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,

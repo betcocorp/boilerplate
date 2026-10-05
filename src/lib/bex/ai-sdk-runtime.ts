@@ -15,25 +15,9 @@ import { resolveAiSdkLanguageModel } from '~/lib/bex/ai-sdk-adapters';
 import { loadGenerationEffort } from '~/lib/bex/generation-effort';
 import { modelProviderFor } from '~/lib/constants/models';
 import { supportsAnthropicAdaptiveThinking } from '~/lib/llm/structured-completion';
-import {
-  collectRetrievalEvidenceIds,
-  formatPreloadedEvidence,
-  isCorpusSearchPayload,
-  RETRIEVAL_EXHAUSTED_INSTRUCTION,
-  RETRIEVAL_TOOL_NAMES,
-  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
-  TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
-  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
-} from '~/lib/openai/responses-runtime';
-import type {
-  ExecuteToolFn,
-  FactToolEnforcementOutcome,
-  FactToolRequirementCheck,
-  LlmTokenUsage,
-  PreloadedEvidence,
-  ReplayedHistoryMessage,
-  ResponsesRuntimeResult,
-} from '~/lib/openai/responses-runtime';
+import { collectRetrievalEvidenceIds, formatPreloadedEvidence, isCorpusSearchPayload, RETRIEVAL_EXHAUSTED_INSTRUCTION, RETRIEVAL_TOOL_NAMES, TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT, TOOL_ROUNDS_EXHAUSTED_INSTRUCTION, UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT } from '~/lib/llm/generation-shared';
+import type { ResponsesRuntimeResult } from '~/lib/openai/responses-runtime';
+import type { ExecuteToolFn, FactToolEnforcementOutcome, FactToolRequirementCheck, LlmTokenUsage, PreloadedEvidence, ReplayedHistoryMessage } from '~/lib/llm/generation-shared';
 import {
   classifyTransportError,
   resolveOpenAiRequestTimeoutMs,

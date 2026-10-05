@@ -6,7 +6,7 @@ import {
   PRIOR_TURN_SOURCE_TITLE_LIMIT,
   runBexChatTurn,
 } from '~/lib/bex/run-chat-turn';
-import { PRIOR_TURN_TOOL_CONTEXT_HEADER } from '~/lib/openai/responses-runtime';
+import { PRIOR_TURN_TOOL_CONTEXT_HEADER } from '~/lib/llm/generation-shared';
 import {
   createConversation,
   getConversationById,
