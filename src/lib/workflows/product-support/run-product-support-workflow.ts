@@ -5322,6 +5322,18 @@ export async function runProductSupportWorkflow(input: {
       // B0-1131 — lets attribution recognise a product's own label / efficacy / SDS by the name it prints.
       documentKind: s.documentKind,
     }));
+    /**
+     * B0-1144 — the exact pool the guardrail judged this turn against, persisted on every
+     * `regulated_claim_guardrail` gate record. The answer's own `sources` deliberately omits
+     * unendorsed speculative hits (B0-635: never CITE a guess), but the guardrail grounds against
+     * everything retrieved, so `sources` alone cannot show what a verdict was based on.
+     */
+    const regulatedClaimGroundingPool = regulatedClaimGroundingSources.map((s) => ({
+      documentId: s.documentId,
+      title: s.title,
+      documentKind: s.documentKind ?? null,
+      isLockedProductLineSource: s.isLockedProductLineSource,
+    }));
     // B0-997 — same "did this turn resolve a named Betco product" signal `requireFactToolForDraft`
     // already gates `compatibility` enforcement on (`speculativeProductLineLock !== null`), read here
     // off the post-generation product-line lock so the guardrail's own `compatibility` detection
@@ -5412,6 +5424,8 @@ export async function runProductSupportWorkflow(input: {
             categoriesDetected: regulatedClaimGrounding.categoriesDetected,
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+            groundedSourceCount: regulatedClaimGroundingPool.length,
+            groundingSources: regulatedClaimGroundingPool,
           },
           thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
           verdict: 'bypassed',
@@ -5489,7 +5503,8 @@ export async function runProductSupportWorkflow(input: {
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             redactionMode: regulatedClaimRedactionPlan.mode,
             // B0-1131 — the pool this verdict was judged against, and every span removed with why.
-            groundedSourceCount: regulatedClaimGroundingSources.length,
+            groundedSourceCount: regulatedClaimGroundingPool.length,
+            groundingSources: regulatedClaimGroundingPool,
             ...(regulatedClaimRedactionPlan.mode !== 'decline'
               ? { withheldSpans: regulatedClaimRedactionPlan.withheldSpans }
               : {}),
@@ -5535,7 +5550,8 @@ export async function runProductSupportWorkflow(input: {
           // The SERVED (pre-revision) draft's own grounding result.
           categoriesDetected: regulatedClaimGrounding.categoriesDetected,
           ungroundedCategories: [],
-          groundedSourceCount: sourceMeta.length,
+          groundedSourceCount: regulatedClaimGroundingPool.length,
+          groundingSources: regulatedClaimGroundingPool,
           groundingMode:
             regulatedClaimGrounding.keyTermGroundedCategories.length > 0 ? 'key_term' : 'verbatim',
           // What the guardrail rejected on the REVISED draft, i.e. what our own revision pass
@@ -5567,7 +5583,8 @@ export async function runProductSupportWorkflow(input: {
         inputs: {
           categoriesDetected: regulatedClaimGrounding.categoriesDetected,
           ungroundedCategories: [],
-          groundedSourceCount: sourceMeta.length,
+          groundedSourceCount: regulatedClaimGroundingPool.length,
+          groundingSources: regulatedClaimGroundingPool,
           // B0-888 — 'key_term' when at least one compatibility/efficacy_claim sentence on this
           // draft was grounded via the key-term/adjacent-quote fallback rather than a plain
           // verbatim match; 'verbatim' otherwise (including when nothing regulated was detected).

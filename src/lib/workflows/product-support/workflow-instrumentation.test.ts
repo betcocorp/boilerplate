@@ -1633,6 +1633,44 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
     return record;
   }
 
+  it('B0-1144: persists the exact pool the guardrail judged against, even on a speculative-only turn that cites nothing', async () => {
+    arrangeKnowledgeTurn(GROUNDED_PARA);
+    // The model calls no tool: the only retrieval is the workflow's speculative pre-fetch, whose
+    // resolution did not lock, so B0-635 keeps it out of the cited `sources`.
+    runGenerationLoopMock.mockImplementation(generationCalling([], { assistantText: GROUNDED_PARA }));
+    // Live shape (ROW-09/23, B0-1131): the pre-fetch's resolution was `skipped_ambiguous`.
+    const base = executeProductToolMock.getMockImplementation()!;
+    executeProductToolMock.mockImplementation(async (...args: unknown[]) => {
+      const value = await (base as (...a: unknown[]) => Promise<{ retrieval: Record<string, unknown> }>)(...args);
+      return {
+        ...value,
+        retrieval: {
+          ...value.retrieval,
+          productLineResolution: { candidates: [], lockedProductLineKey: null, lockReason: 'skipped_ambiguous' },
+        },
+      };
+    });
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: [],
+      ungroundedCategories: [],
+      ungroundedDetails: [],
+      keyTermGroundedCategories: [],
+    });
+
+    const out = await run({ userMessage: DC_QUESTION });
+
+    const judged = (regulatedClaimGroundingMock.mock.calls[0]?.[0] as { sources: Array<{ documentId: string }> }).sources;
+    expect(judged.map((s) => s.documentId)).toContain('doc-kb-1');
+    const inputs = regulatedGateRecord().inputs as {
+      groundedSourceCount: number;
+      groundingSources: Array<{ documentId: string; title: string; documentKind: string | null }>;
+    };
+    expect(inputs.groundingSources.map((s) => s.documentId)).toEqual(judged.map((s) => s.documentId));
+    expect(inputs.groundedSourceCount).toBe(judged.length);
+    expect(inputs.groundingSources[0]).toMatchObject({ title: 'Dilution Control Systems — Installation Overview', documentKind: 'knowledge' });
+    expect(out.sources.map((s) => s.documentId)).not.toContain('doc-kb-1');
+  });
+
   it('withholds ONE ungrounded compatibility sentence from a knowledge answer and keeps the rest verbatim', async () => {
     const draft = `${GROUNDED_PARA} ${COMPAT_SENTENCE}`;
     arrangeKnowledgeTurn(draft);
