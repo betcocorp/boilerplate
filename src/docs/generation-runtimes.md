@@ -167,6 +167,34 @@ Parity tests: `ai-sdk-runtime.test.ts` → "ported loop behaviours (B0-901)", mi
 `responses-runtime.test.ts` → "tool-round exhaustion (B0-381)", "unproductive-retrieval early stop
 (B0-635)" and "temperature gating (B0-606)".
 
+## Responses-loop behaviour audit (B0-1137)
+
+Every behaviour the Responses loop carries, and where the AI SDK loop stands. Checked in code and
+asserted by a test where one exists.
+
+| Behaviour | Responses loop | AI SDK loop | Status |
+| --- | --- | --- | --- |
+| B0-635 unproductive-retrieval withdrawal | yes | yes | ported (B0-901) |
+| B0-381 forced final answer | yes | yes | ported (B0-901), with the divergence below |
+| B0-606 temperature-rejection replay | yes | n/a | unreachable: never sends a sampling control |
+| B0-370 bounded transport retry | `retryTransportFaults` | same function, per `doStream` | present |
+| B0-550 per-attempt request timeout | `timeout: resolveOpenAiRequestTimeoutMs()` | first-chunk timeout in the retry middleware | **ported (B0-1137)**, OpenAI only |
+| B0-379 parallel tool calls | `parallel_tool_calls: true` + `Promise.all` | SDK runs a step's calls concurrently | present, asserted by test (B0-1137) |
+| B0-948 fact-tool enforcement | yes | yes | present, same contract |
+| B0-512 `suggestedFirstTool` round-0 bias | implemented | absent | **dead**: nothing in production passes a `suggestedFirstTool` (see `speculative-retrieval.ts`), so there is nothing to port |
+
+Decisions recorded:
+
+- **B0-550 on Claude is deliberately not bounded.** The timeout covers request-sent to first-chunk
+  and is applied to OpenAI models only: Claude's adaptive thinking can legitimately run past the
+  60s default before its first token, and B0-550 was an OpenAI stall. A timeout is classified as a
+  retryable `timeout` fault and goes through the normal bounded retry. The timer is cleared at the
+  first chunk, so a long answer is never cut off.
+- **B0-381 extra round (accepted).** The AI SDK executes the final round's tool calls before the
+  forced answer; the Responses loop skips them. The model-visible instruction is identical.
+- **No sampling control (accepted).** The AI SDK loop never sends `temperature`. Revisit only if a
+  sampling control is wanted for a specific route.
+
 ## Post-generation gate: regulated-claim guardrail — redact vs. decline (B0-829 / B0-871)
 
 Both runtimes feed the same post-generation gates in

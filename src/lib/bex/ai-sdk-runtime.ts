@@ -36,6 +36,7 @@ import type {
 } from '~/lib/openai/responses-runtime';
 import {
   classifyTransportError,
+  resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
   type TransportRetryTuning,
 } from '~/lib/openai/transport-retry';
@@ -346,16 +347,58 @@ async function startModelStreamOrThrow(result: ModelStreamResult): Promise<Model
  */
 function createTransportRetryMiddleware(
   tuning: TransportRetryTuning | undefined,
+  requestTimeoutMs?: number,
 ): LanguageModelMiddleware {
   return {
     specificationVersion: 'v3',
-    wrapStream: async ({ doStream }) =>
-      retryTransportFaults(async () => startModelStreamOrThrow(await doStream()), {
+    wrapStream: async ({ doStream, params, model }) =>
+      retryTransportFaults(async () => {
+        if (!requestTimeoutMs) {
+          return startModelStreamOrThrow(await doStream());
+        }
+        return startModelStreamWithTimeout(model, params, requestTimeoutMs);
+      }, {
         runtime: 'ai_sdk',
         label: 'streamText.doStream',
         ...tuning,
       }),
   };
+}
+
+/**
+ * B0-550 parity — per-ATTEMPT bound on "request sent -> first chunk received", the AI SDK
+ * equivalent of the Responses loop's `timeout: resolveOpenAiRequestTimeoutMs()`. Without it a hung
+ * request has no bound short of the platform's own limit. The timer is cleared as soon as the first
+ * chunk is in hand, so a long answer is never cut off mid-stream. A timeout throws a
+ * `TimeoutError`, which `classifyTransportError` already treats as a retryable `timeout` fault, so
+ * it flows through the same bounded retry as every other transport fault.
+ *
+ * Caller aborts still win: a user abort is re-thrown untouched and is never classified as a timeout.
+ */
+async function startModelStreamWithTimeout(
+  model: Parameters<NonNullable<LanguageModelMiddleware['wrapStream']>>[0]['model'],
+  params: Parameters<NonNullable<LanguageModelMiddleware['wrapStream']>>[0]['params'],
+  timeoutMs: number,
+): Promise<ModelStreamResult> {
+  const attempt = new AbortController();
+  const timeoutError = Object.assign(
+    new Error(`Model request timed out after ${timeoutMs}ms before the first chunk`),
+    { name: 'TimeoutError' },
+  );
+  const timer = setTimeout(() => attempt.abort(timeoutError), timeoutMs);
+  try {
+    const abortSignal = params.abortSignal
+      ? AbortSignal.any([params.abortSignal, attempt.signal])
+      : attempt.signal;
+    return await startModelStreamOrThrow(await model.doStream({ ...params, abortSignal }));
+  } catch (err) {
+    if (attempt.signal.aborted && !params.abortSignal?.aborted) {
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<ToolSet> {
@@ -491,7 +534,12 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
   const sharedRequest = {
     model: wrapLanguageModel({
       model: languageModel,
-      middleware: createTransportRetryMiddleware(opts.retry),
+      middleware: createTransportRetryMiddleware(
+        opts.retry,
+        // B0-550 parity — OpenAI only: a Claude model's adaptive thinking can legitimately run past
+        // this bound before its first token, and B0-550 was an OpenAI stall.
+        provider === 'openai' ? resolveOpenAiRequestTimeoutMs() : undefined,
+      ),
     }),
     /**
      * B0-913 — the instructions, carrying an EXPLICIT Anthropic cache breakpoint when caching is on.

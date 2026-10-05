@@ -175,6 +175,65 @@ describe('runAiSdkWithToolLoop', () => {
     expect(result.usageByCall).toHaveLength(result.responseIds.length);
   });
 
+  it('executes the tool calls of one step concurrently (B0-379 parity)', async () => {
+    let call = 0;
+    modelRef.current = new MockLanguageModelV3({
+      doStream: async () => {
+        call += 1;
+        const finish = (finishReason: 'stop' | 'tool-calls') =>
+          ({
+            type: 'finish',
+            finishReason,
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          }) as const;
+        if (call === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                { type: 'tool-call', toolCallId: 't1', toolName: 'lookup_cross_reference', input: '{"brand":"A","productName":"1"}' },
+                { type: 'tool-call', toolCallId: 't2', toolName: 'lookup_cross_reference', input: '{"brand":"B","productName":"2"}' },
+                finish('tool-calls'),
+              ] as const,
+            }),
+          };
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'done' },
+              { type: 'text-end', id: '0' },
+              finish('stop'),
+            ] as const,
+          }),
+        };
+      },
+    });
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const executeTool = vi.fn(async ({ name, callId }: { name: string; argumentsJson: string; callId: string }) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      return {
+        output: '{}',
+        trace: { toolName: name, callId, argumentsPreview: '', outputPreview: '', ok: true, durationMs: 0 } as ToolTraceEntry,
+      };
+    });
+
+    await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'compare two products',
+      executeTool,
+    });
+
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(2);
+  });
+
   it('surfaces provider prompt-cache reads per model call (B0-324)', async () => {
     let call = 0;
     modelRef.current = new MockLanguageModelV3({
@@ -334,6 +393,36 @@ describe('runAiSdkWithToolLoop — bounded transport retry (B0-370)', () => {
 
     expect(doStream).toHaveBeenCalledTimes(2);
     expect(result.assistantText).toBe('Use a neutral cleaner.');
+  });
+
+  it('times out a request that never produces a first chunk and retries it (B0-550 parity)', async () => {
+    vi.stubEnv('BEX_OPENAI_REQUEST_TIMEOUT_MS', '20');
+    try {
+      const doStream = vi.fn(async (options: { abortSignal?: AbortSignal }) => {
+        if (doStream.mock.calls.length === 1) {
+          // A hung request: only the per-attempt abort ends it.
+          await new Promise((_, reject) => {
+            options.abortSignal?.addEventListener('abort', () => reject(options.abortSignal?.reason));
+          });
+        }
+        return { stream: textStream('Use a neutral cleaner.') };
+      });
+      modelRef.current = new MockLanguageModelV3({ doStream });
+
+      const result = await runAiSdkWithToolLoop({
+        modelTag: 'gpt-4.1',
+        instructions: 'You are Bex.',
+        history: [],
+        userMessage: 'what cleaner is best for gym floors',
+        retry: testRetry,
+        executeTool: noopExecuteTool,
+      });
+
+      expect(doStream).toHaveBeenCalledTimes(2);
+      expect(result.assistantText).toBe('Use a neutral cleaner.');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('does not re-run a tool when the model call after it is retried', async () => {
