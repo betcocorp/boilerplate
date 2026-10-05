@@ -835,7 +835,7 @@ describe('evaluateRegulatedClaimGrounding — B0-888 key-term fallback and adjac
     expect(result.ungroundedCategories).toContain('compatibility');
   });
 
-  it('never applies the key-term fallback to hazard claims -- verbatim is still required', () => {
+  it('still declines a hazard claim whose value term is absent from the source (B0-923 value-term path)', () => {
     const result = evaluateRegulatedClaimGrounding({
       draftAnswer: 'This product causes severe skin burns per the label.',
       sources: [
@@ -1861,5 +1861,151 @@ describe('evaluateRegulatedClaimGrounding — bullet-head attribution and abbrev
     expect(plan.redactedText).toContain('[two efficacy claims withheld — not verifiable against a retrieved label]');
     expect(plan.redactedText).not.toContain('[one efficacy claim withheld');
     expect(plan.redactedText).toContain('- Rest Stop™: The label explicitly states it kills HIV-1.');
+  });
+});
+
+/**
+ * B0-923 — hazard value-term grounding. Every "grounds" draft below is a live `ungroundedDetails`
+ * snippet (app 6.12.0/7.0.0) that declined a whole answer although each hazard value in it is
+ * printed on the product's own label. Fixture bodies are excerpts of the live documents.
+ */
+const SPEEDEX_LABEL_SOURCE = {
+  documentId: 'c7d2e59f-7945-4f3f-aae6-9b5611fef7a7',
+  title: 'Speedex Concentrate',
+  isLockedProductLineSource: true,
+  documentBody: [
+    'DANGER! CAUSES SEVERE SKIN BURNS AND EYE DAMAGE. MAY CAUSE AN ALLERGIC SKIN REACTION.',
+    'SKIN CORROSION - Category 1. SERIOUS EYE DAMAGE - Category 1. Signal word: Danger. H314 + H317',
+    'Recommended: splash',
+    'goggles. Wear protective',
+    'Chemical resistant gloves.',
+    'Wash hands thoroughly after handling.',
+  ].join('\n'),
+};
+
+const PUSH_SDS_SOURCE = {
+  documentId: 'b0e2d441-a7cb-4bee-9c6e-01aee328edb8',
+  title: 'Push (Mint) M000133',
+  isLockedProductLineSource: true,
+  documentBody: [
+    'SECTION 2: Hazards identification',
+    'Classification of the substance or mixture: Not classified.',
+    'Signal word: No signal word.',
+    'Hazard statements: No known significant effects or critical hazards.',
+  ].join('\n'),
+};
+
+describe('evaluateRegulatedClaimGrounding — B0-923 hazard value-term grounding', () => {
+  it('grounds framed PPE + hazard prose whose every value term is on the locked product label', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling and using this product, as it can cause severe skin burns and eye damage (SDS Section 2).',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).not.toContain('hazard');
+    expect(result.keyTermGroundedCategories).toContain('hazard');
+  });
+
+  it('grounds a GHS class / category / signal word / H-code transcription', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- **PPE:** Speedex Concentrate is classified **Skin Corrosion Category 1 / Serious Eye Damage Category 1, Signal word Danger, H314**.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('grounds a negative classification only against a source that prints it negated', () => {
+    const draftAnswer =
+      '- Product is not classified as hazardous under the OSHA Hazard Communication Standard; there is no signal word (SDS Section 2).';
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer, sources: [PUSH_SDS_SOURCE] }).ungroundedCategories,
+    ).not.toContain('hazard');
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer, sources: [SPEEDEX_LABEL_SOURCE] }).ungroundedCategories,
+    ).toContain('hazard');
+  });
+
+  it('still declines a value term the attributed document never prints', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Always wear a respirator and splash goggles with this product, as it causes severe skin burns.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still declines when the source states the opposite polarity', () => {
+    const nonFlammable = {
+      documentId: 'doc-nf',
+      title: 'Test Cleaner',
+      isLockedProductLineSource: true,
+      documentBody: 'Non-flammable. Not corrosive. Keep out of reach of children.',
+    };
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'This product is flammable, so store it away from heat.',
+        sources: [nonFlammable],
+      }).ungroundedCategories,
+    ).toContain('hazard');
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'This product is corrosive to skin, so wear gloves.',
+        sources: [nonFlammable],
+      }).ungroundedCategories,
+    ).toContain('hazard');
+  });
+
+  it('still declines when no source is attributed to the product (not locked, not cited, not named)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling this product, as it can cause severe skin burns and eye damage.',
+      sources: [{ ...SPEEDEX_LABEL_SOURCE, isLockedProductLineSource: false }],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('never lets first_aid take the value-term path', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'If in eyes, flush with water for 30 minutes and apply ointment.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toContain('first_aid');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-923 generic chemistry-class prose', () => {
+  it('does not flag "Some solvent-based products are flammable"', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- Flammability: Some solvent-based products are flammable, affecting storage and handling.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('does not flag an anaphoric continuation of a sentence that named the chemistry class', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Solvent-based finishes offer strong durability and a traditional amber look. Some are flammable, affecting storage and handling.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('still flags an anaphoric continuation carrying a GHS value token', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Solvent-based finishes offer strong durability. Some are flammable liquids, signal word Danger, H226.',
+      sources: [],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still flags a product-specific hazard sentence that follows a chemistry-class sentence', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Solvent-based finishes are durable. Marathane 45 is combustible and needs a respirator.',
+      sources: [],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
   });
 });

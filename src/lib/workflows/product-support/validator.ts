@@ -292,8 +292,9 @@ export type RegulatedClaimGroundingResult = {
    * material/organism term + claim verb) or the adjacent-verbatim-quote exemption, rather than a
    * plain whole-sentence/quoted-span verbatim match. Empty when every grounded sentence in the
    * draft matched verbatim — callers use this to record `groundingMode: 'key_term'` vs `'verbatim'`
-   * on the gate record for audit purposes. Never affects `hazard`/`first_aid`/token categories,
-   * which have no key-term path and can never appear here.
+   * on the gate record for audit purposes. B0-923: `hazard` also appears here when a sentence was
+   * grounded by its value terms (`isHazardValueTermGrounded`). `first_aid`/token categories have no
+   * key-term path and can never appear here.
    */
   keyTermGroundedCategories: RegulatedClaimCategory[];
 };
@@ -616,6 +617,9 @@ const GENERIC_PRODUCT_FORM_CLASS_PATTERNS: readonly RegExp[] = [
   // other form noun here names a floor-coatings concept; "cleaner" was the one product-form noun
   // missing for this same comparison in the cleaning-chemistry (not floor-finish) product family.
   /\bcleaners?\b/i,
+  // B0-923 — "Some solvent-based products are flammable, affecting storage and handling." (live,
+  // 7.0.0) names a chemistry class with the generic noun "products" and nothing else.
+  /\bproducts\b/i,
 ];
 
 function countDistinctMatches(text: string, patterns: readonly RegExp[]): number {
@@ -674,6 +678,35 @@ function isSubBulletOfChemistryHeader(sentence: string, precedingSentence: strin
     return false;
   }
   if (!isBulletHeaderLine(precedingSentence)) return false;
+  if (countDistinctMatches(stripSentenceMarkup(precedingSentence), GENERIC_CHEMISTRY_CLASS_PATTERNS) === 0) {
+    return false;
+  }
+  return isGenericMaterialClassComparison(`${precedingSentence} ${sentence}`);
+}
+
+/** Openers that continue the previous sentence's subject rather than naming a new one. */
+const CLASS_ANAPHORA_OPENER_PATTERN =
+  /^(?:some|many|most|they|these|those|both|have|has|are|may|can|often)\b/i;
+
+/**
+ * B0-923 — the prose twin of B0-1052. "Solvent-based finishes offer strong durability. Some are
+ * flammable, affecting storage and handling." / "They have a stronger odor, higher VOCs, are
+ * sometimes flammable ..." (live, 6.12.0/7.0.0): the hazard adjective sits in a sentence whose
+ * subject is a pronoun or quantifier pointing back at a chemistry class named one sentence earlier.
+ * Same narrowness as B0-1052: only when the flagged sentence opens with such an anaphoric word,
+ * carries no chemistry-class term and no product subject of its own, and the combined text passes
+ * `isGenericMaterialClassComparison` with all of its hard gates (GHS value tokens, product-specific
+ * imperative + named object, first-aid/treatment content).
+ */
+function isAnaphoricContinuationOfChemistryClass(
+  sentence: string,
+  precedingSentence: string | undefined,
+): boolean {
+  if (!precedingSentence) return false;
+  const text = stripSentenceMarkup(sentence);
+  if (!CLASS_ANAPHORA_OPENER_PATTERN.test(text)) return false;
+  if (countDistinctMatches(text, GENERIC_CHEMISTRY_CLASS_PATTERNS) > 0) return false;
+  if (hasProductSubject(sentence)) return false;
   if (countDistinctMatches(stripSentenceMarkup(precedingSentence), GENERIC_CHEMISTRY_CLASS_PATTERNS) === 0) {
     return false;
   }
@@ -987,6 +1020,8 @@ function isHazardClaimSentence(sentence: string, precedingSentence?: string): bo
   // B0-1052: a bullet sub-item with no chemistry-class term of its own borrows the chemistry-class
   // context from its immediately preceding bullet-header line before this is judged a hazard claim.
   if (isSubBulletOfChemistryHeader(sentence, precedingSentence)) return false;
+  // B0-923: "Some are flammable" continuing a sentence that named the chemistry class.
+  if (isAnaphoricContinuationOfChemistryClass(sentence, precedingSentence)) return false;
   // B0-870: "Non Corrosive" (a product name) / "non-flammable" are not hazard statements.
   const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
   if (HAZARD_SENTENCE_PATTERN.test(text)) return true;
@@ -1071,9 +1106,10 @@ function isSentenceGrounded(
 /**
  * B0-888 — categories with a KEY-TERM fallback grounding path (below), on top of the plain
  * verbatim/quoted-span match every category gets from `isSentenceGrounded`. Deliberately just
- * these two: `hazard`/`first_aid` and every token category (`epa_registration`, `din_registration`,
+ * these two: `first_aid` and every token category (`epa_registration`, `din_registration`,
  * `dilution_ratio`, `contact_time`, `cas_number`) stay exact/verbatim, no exceptions -- weakening
- * those would violate the org's regulated-data rule.
+ * those would violate the org's regulated-data rule. `hazard` has its own, narrower value-term path
+ * (B0-923, `isHazardValueTermGrounded`): every hazard value must still appear verbatim.
  */
 const KEY_TERM_FALLBACK_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
   RegulatedClaimCategory
@@ -1249,6 +1285,88 @@ function isKeyTermGrounded(
 }
 
 /**
+ * B0-923 — the hazard VALUES a sentence asserts, each as the exact phrase a label/SDS would print:
+ * the GHS hazard phrase itself ("severe skin burns", "flammable", "combustible", "corrosive",
+ * "danger"), H/P codes, a signal-word value, a GHS "category N", the named PPE items, the named
+ * incompatibility objects of an imperative precaution, and the negative classifications ("not
+ * classified", "no signal word"). A negator sitting directly before a hazard phrase is kept as part
+ * of the phrase so "not corrosive" can only ground against a source that also says "not corrosive".
+ */
+const HAZARD_VALUE_PHRASE_PATTERN =
+  /\b(?:(?:not|non|never)[-\s]+)?(?:highly\s+)?(?:corrosive|flammable|combustible|danger)\b|\b(?:severe\s+)?(?:skin|eye)\s+(?:burns?|damage|irritation)\b|\bh[23]\d{2}\b|\bp\d{3}\b|\bcategory\s+\d[a-c]?\b|\bnot\s+classified\b|\bno\s+signal\s+word\b/gi;
+const HAZARD_SIGNAL_WORD_VALUE_PATTERN = /\bsignal\s+word\b\W{0,4}(danger|warning)\b/gi;
+const HAZARD_PPE_ITEM_PATTERN =
+  /\b(?:gloves?|goggles|face\s+shields?|respirators?|eye\s+protection|protective\s+clothing)\b/gi;
+const PRECAUTION_OBJECT_GLOBAL_PATTERN = new RegExp(PRECAUTION_OBJECT_PATTERN.source, 'gi');
+/** A negator immediately before a source occurrence ("non-flammable", "not corrosive"). */
+const HAZARD_SOURCE_NEGATOR_PATTERN = /\b(?:not|no|non|never)[-\s]*$/;
+
+function extractHazardValueTerms(sentence: string): string[] {
+  const text = normalizeSentenceForGroundingCompare(stripSentenceMarkup(sentence));
+  const terms = new Set<string>();
+  for (const m of text.matchAll(HAZARD_VALUE_PHRASE_PATTERN)) terms.add(m[0].replace(/[-\s]+/g, ' '));
+  for (const m of text.matchAll(HAZARD_SIGNAL_WORD_VALUE_PATTERN)) if (m[1]) terms.add(m[1]);
+  for (const m of text.matchAll(HAZARD_PPE_ITEM_PATTERN)) terms.add(m[0].replace(/\s+/g, ' '));
+  if (HAZARD_IMPERATIVE_PATTERN.test(text)) {
+    for (const m of text.matchAll(PRECAUTION_OBJECT_GLOBAL_PATTERN)) terms.add(m[0]);
+  }
+  return [...terms];
+}
+
+/**
+ * Whether the (normalised) source `body` states `term` in the polarity the sentence used: a positive
+ * term ("flammable") only counts at an occurrence that is NOT negated in the source ("non-flammable",
+ * "not flammable"); a negated term ("not classified") must appear as that negated phrase. Matches
+ * whole words only, comparing with hyphens read as spaces on both sides.
+ */
+function sourceStatesHazardTerm(body: string, term: string): boolean {
+  const termIsNegated = /^(?:not|non|never|no)\b/.test(term);
+  let from = 0;
+  for (;;) {
+    const at = body.indexOf(term, from);
+    if (at === -1) return false;
+    const end = at + term.length;
+    const startsOnWord = at === 0 || !/[a-z0-9]/.test(body[at - 1] ?? '');
+    const endsOnWord = end >= body.length || !/[a-z0-9]/.test(body[end] ?? '');
+    const negatedInSource = HAZARD_SOURCE_NEGATOR_PATTERN.test(body.slice(Math.max(0, at - 8), at));
+    if (startsOnWord && endsOnWord && (termIsNegated || !negatedInSource)) return true;
+    from = at + 1;
+  }
+}
+
+/**
+ * B0-923 — value-term grounding for `hazard` ONLY. Whole-sentence verbatim matching declined
+ * correct answers whose hazard VALUES were transcribed exactly but wrapped in Bex's own framing
+ * (live: "Always wear chemical-resistant gloves and splash goggles ... as it can cause severe skin
+ * burns and eye damage (SDS Section 2)." against the Speedex Concentrate SDS). A hazard sentence is
+ * grounded here only when:
+ *  - it is attributed to a specific product's own document (`attributedSources`, or — when nothing
+ *    else names a source — one of the turn's LOCKED product line documents), and
+ *  - it carries at least one hazard value term, and EVERY value term it carries appears in ONE of
+ *    those documents, as whole words, in the same polarity.
+ * A hazard, PPE item or incompatibility the document never prints still fails, as does a sentence
+ * with no attributable product document. `first_aid` and every token category stay verbatim-only.
+ */
+function isHazardValueTermGrounded(
+  sentence: string,
+  contextText: string,
+  sources: readonly RegulatedClaimSource[],
+  draftAnswer: string,
+): boolean {
+  const terms = extractHazardValueTerms(sentence);
+  if (terms.length === 0) return false;
+
+  let candidates = attributedSources(sentence, contextText, sources, draftAnswer);
+  if (candidates.length === 0) candidates = sources.filter((s) => s.isLockedProductLineSource);
+  if (candidates.length === 0) return false;
+
+  return candidates.some((source) => {
+    const body = normalizeSentenceForGroundingCompare(source.documentBody).replace(/-/g, ' ');
+    return terms.every((term) => sourceStatesHazardTerm(body, term));
+  });
+}
+
+/**
  * Deterministically checks whether every regulated claim (EPA reg no., dilution ratio,
  * contact/dwell time, hazard statement, first-aid instruction) in `draftAnswer` can be
  * traced to an exact quote in one of `sources`. Returns which categories were detected
@@ -1347,6 +1465,17 @@ export function evaluateRegulatedClaimGrounding(input: {
       const sentence = allSentences[idx];
       if (isSentenceGrounded(sentence, normalizedSourceBodiesPlain, isClaimTrigger)) {
         continue;
+      }
+
+      // B0-923 — hazard VALUE terms verbatim in the attributed product's own document.
+      if (category === 'hazard') {
+        const contextText = [allSentences[idx - 1], sentence, allSentences[idx + 1]]
+          .filter((s): s is string => Boolean(s))
+          .join(' ');
+        if (isHazardValueTermGrounded(sentence, contextText, input.sources, input.draftAnswer)) {
+          groundedViaKeyTermPath = true;
+          continue;
+        }
       }
 
       if (useKeyTermFallback && (category === 'compatibility' || category === 'efficacy_claim')) {
