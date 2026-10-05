@@ -283,13 +283,33 @@ function parseDescription(description) {
   return { organisms: organism ? [organism] : [], tradeName, shape: 'modern_colon_delimited' };
 }
 
-// ── Organism matching (tolerant of punctuation/case, not of substance) ──────────────
+// ── Organism matching (tolerant of punctuation/case/noise-words, not of substance) ──
+// Noise words that appear inconsistently across sources for the SAME organism (one
+// source writes "Herpes Simplex Virus Type 2", another "Herpes Simplex 2") and never
+// change which organism is meant. Numbers (serotype/HSV type) are never stripped.
+const ORGANISM_NOISE_WORDS = new Set(['virus', 'type', 'strain']);
+
+// Well-established, unambiguous scientific acronym expansions seen in this corpus.
+// Each entry is a whole-word substitution applied before noise-word stripping, so
+// "HIV-1" and "Human Immunodeficiency Virus Type 1" normalize to the same tokens.
+// Never add an entry here that could plausibly mean more than one organism.
+const ORGANISM_ACRONYM_EXPANSIONS = [
+  [/\bhiv\b/g, 'human immunodeficiency'],
+];
+
+// Known, unambiguous single-character transcription typos in existing rag.product_efficacy
+// organism text (confirmed by direct inspection, not a general fuzzy-match tolerance).
+// "feecalis" is not a word in any taxonomy; it is a typo of "faecalis" in the AF79
+// Concentrate source datasheet (Efficacy Data 331 AF79 Concentrate).
+const ORGANISM_KNOWN_TYPOS = [[/\bfeecalis\b/g, 'faecalis']];
+
 function normalizeOrganism(s) {
-  return String(s)
-    .toLowerCase()
-    .replace(/[²¹]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+  let out = String(s).toLowerCase().replace(/[²¹]/g, '');
+  for (const [pattern, replacement] of ORGANISM_ACRONYM_EXPANSIONS) out = out.replace(pattern, replacement);
+  out = out.replace(/[^a-z0-9]+/g, ' ').trim();
+  for (const [pattern, replacement] of ORGANISM_KNOWN_TYPOS) out = out.replace(pattern, replacement);
+  const tokens = out.split(' ').filter((t) => t && !ORGANISM_NOISE_WORDS.has(t));
+  return tokens.join(' ');
 }
 
 function organismsMatch(parsed, stored) {
