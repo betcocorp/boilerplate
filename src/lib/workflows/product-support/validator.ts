@@ -14,6 +14,7 @@ import {
 } from '~/lib/openai/transport-retry';
 import { getBooleanSetting, getStringSetting } from '~/lib/settings/settings-service';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
+import { ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/decisive-assertion-coverage';
 
 import {
   validatorResultSchema,
@@ -1700,6 +1701,7 @@ export async function runRevisionPass(input: {
   validatorIssues: string[];
   evidenceSummary: string;
   modelTag?: string;
+  mode?: 'validator' | 'answer_coverage';
 }): Promise<RevisionPassResult> {
   const model = await resolveRevisionModel(input.modelTag);
 
@@ -1712,14 +1714,17 @@ export async function runRevisionPass(input: {
       () =>
         completeTextWithUsage({
           model,
-          system: REVISION_SYSTEM_PROMPT,
+          system:
+            input.mode === 'answer_coverage'
+              ? ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT
+              : REVISION_SYSTEM_PROMPT,
           user: JSON.stringify({
             draft: input.draftAnswer,
             issues: input.validatorIssues,
             evidence_summary: input.evidenceSummary,
           }),
           // B0-606 — same gating as the validator pass above.
-          temperature: 0.2,
+          temperature: input.mode === 'answer_coverage' ? 0 : 0.2,
           maxOutputTokens: resolveMaxOutputTokens(),
           requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
         }),
