@@ -290,6 +290,39 @@ export type RegulatedClaimSource = {
    * one of their titles matches the name the answer uses.
    */
   productLineKey?: string | null;
+  /**
+   * B0-1131 — the `rag.document_chunk` rows `documentBody` was stitched from, in order, so a
+   * grounded claim can be bound to the chunk that carries its evidence (`groundedBindings`).
+   * Optional: the body alone is enough to judge; without chunks a binding records `chunkId: null`.
+   */
+  chunks?: ReadonlyArray<{ chunkId: string; text: string }>;
+};
+
+/**
+ * B0-1131 (item 1) — a claim-to-source binding for every regulated claim that WAS grounded: which
+ * document (and chunk, when known) carries the evidence, through which grounding path, and the
+ * exact comparison strings that were found in it. Audit-only: computed after each verdict without
+ * changing it, and persisted on the `regulated_claim_guardrail` gate record so an eval artifact
+ * can show what each kept claim was bound to, not only why each removed span failed.
+ */
+export type RegulatedClaimGroundingBinding = {
+  category: RegulatedClaimCategory;
+  /** The draft text that was checked: a value token, or a sentence (capped like `ungroundedDetails`). */
+  span: string;
+  documentId: string;
+  title: string;
+  /** The first stitched chunk whose text carries every `matched` string; null when chunks are unknown or the match straddles chunks. */
+  chunkId: string | null;
+  /**
+   * `verbatim` — the whole token/sentence, normalised, is in the document; `quoted_span` — the
+   * quoted span(s) are; `key_term` — attributed document carries every organism/material and a
+   * claim verb; `hazard_value_terms` — attributed document prints every hazard value;
+   * `locked_line_documents` — the hazard values are printed across the locked line's documents;
+   * `adjacent_quote` — the next sentence is a grounded verbatim quote naming the same term.
+   */
+  channel: 'verbatim' | 'quoted_span' | 'key_term' | 'hazard_value_terms' | 'locked_line_documents' | 'adjacent_quote';
+  /** The normalised comparison strings found in the document (never shown to the user). */
+  matched: string[];
 };
 
 export type RegulatedClaimGroundingResult = {
@@ -302,7 +335,17 @@ export type RegulatedClaimGroundingResult = {
    * check that failed (see `explainUngroundedSentence`), so an eval artifact can say WHY a span was
    * removed, not only that it was.
    */
-  ungroundedDetails: Array<{ category: RegulatedClaimCategory; snippet: string; evidenceCheck?: string }>;
+  ungroundedDetails: Array<{
+    category: RegulatedClaimCategory;
+    snippet: string;
+    evidenceCheck?: string;
+    /**
+     * B0-1131 — for a sentence-shaped detail, WHICH occurrence of `snippet` in the draft this is
+     * (0-based, counted the way the redaction planner walks occurrences), so an identical bullet
+     * under another product's heading that DID ground is not withheld along with this one.
+     */
+    occurrence?: number;
+  }>;
   /**
    * B0-888 — `compatibility` / `efficacy_claim` categories where at least one sentence was grounded
    * via the KEY-TERM fallback (paraphrase attributed to a source whose body carries the same
@@ -310,10 +353,12 @@ export type RegulatedClaimGroundingResult = {
    * plain whole-sentence/quoted-span verbatim match. Empty when every grounded sentence in the
    * draft matched verbatim — callers use this to record `groundingMode: 'key_term'` vs `'verbatim'`
    * on the gate record for audit purposes. B0-923: `hazard` also appears here when a sentence was
-   * grounded by its value terms (`isHazardValueTermGrounded`). `first_aid`/token categories have no
+   * grounded by its value terms (`hazardValueTermGroundingMatch`). `first_aid`/token categories have no
    * key-term path and can never appear here.
    */
   keyTermGroundedCategories: RegulatedClaimCategory[];
+  /** B0-1131 — one entry per grounded claim; see `RegulatedClaimGroundingBinding`. */
+  groundedBindings: RegulatedClaimGroundingBinding[];
 };
 
 /**
@@ -952,6 +997,19 @@ const EFFICACY_NEGATED_PATTERN =
   /\b(?:not|never|cannot|can't|won't|doesn't|don't|isn't|aren't|no)\s+(?!(?:only|just|merely)\b)(?:[\w-]+\s+){0,3}(?:kills?|killing|eliminat\w*|effective|efficacy|inactivat\w*|destroy\w*|meet|meets|claim|claims)\b/i;
 
 /**
+ * B0-1131 — a parenthetical hedge inside a claim sentence ("Effective against SARS-CoV-2 (contact
+ * time not stated in the efficacy data)", "… Ebola virus (not listed in the efficacy data; confirm
+ * on the label)") is not a negated claim: the claim is the main clause, and the parenthesis only
+ * says what the evidence lacks. Before this, `EFFICACY_NEGATED_PATTERN` matched the hedge and the
+ * whole sentence passed through unverified, so a fabricated organism could ship behind a hedge.
+ * Only a parenthesis that itself reads as negated is removed; "(effective against Klebsiella
+ * aerogenes …)" stays, and the removal is comparison-only (the draft text is never rewritten).
+ */
+function efficacyClaimText(sentence: string): string {
+  return sentence.replace(/\([^()]*\)/g, (paren) => (EFFICACY_NEGATED_PATTERN.test(paren) ? ' ' : paren));
+}
+
+/**
  * B0-870: citation lines ("Source: ...", "[doc:...]") name documents and assert nothing; first-
  * person offers ("I can provide the SDS hazard classification ... if needed") announce what Bex
  * COULD say. Neither can ever be a verbatim label quote, so requiring one is a false positive by
@@ -1105,7 +1163,8 @@ function isCompatibilityClaimSentence(sentence: string): boolean {
 }
 
 /** B0-868: see the `EFFICACY_*` pattern comments for the two-part structure. */
-function isEfficacyClaimSentence(sentence: string): boolean {
+function isEfficacyClaimSentence(rawSentence: string): boolean {
+  const sentence = efficacyClaimText(rawSentence);
   if (EFFICACY_NEGATED_PATTERN.test(sentence)) return false;
   if (EFFICACY_STRONG_PATTERN.test(sentence)) return true;
   if (!EFFICACY_VERB_PATTERN.test(sentence)) return false;
@@ -1131,39 +1190,48 @@ function isTokenGrounded(token: string, normalizedSources: string[]): boolean {
  */
 const QUOTED_SPAN_PATTERN = /["“”]([^"“”]{24,})["“”]/g;
 
-function isSentenceGrounded(
+/**
+ * Whole-sentence verbatim / quoted-span grounding (every category's first check), reporting WHICH
+ * source (index into `normalizedSources`) matched and the normalised strings found in it, for
+ * `groundedBindings`. Null when the sentence is not grounded this way.
+ */
+function sentenceGroundingMatch(
   sentence: string,
   normalizedSources: string[],
   isClaimTrigger?: (sentence: string) => boolean,
-): boolean {
+): { index: number; channel: 'verbatim' | 'quoted_span'; matched: string[] } | null {
   // B0-1131 — a verbatim label quote the sentence splitter cut in half keeps a stray opening or
   // closing quote mark ('Effective against Klebsiella aerogenes and Staphylococcus aureus."'),
   // which no source contains. Edge quote marks only; the words themselves still match verbatim.
   const normalized = normalizeSentenceForGroundingCompare(sentence)
     .replace(/^["“”'‘’]+|["“”'‘’]+$/g, '')
     .trim();
-  if (!normalized) return false;
-  if (normalizedSources.some((body) => body.includes(normalized))) return true;
+  if (!normalized) return null;
+  const verbatimIndex = normalizedSources.findIndex((body) => body.includes(normalized));
+  if (verbatimIndex >= 0) return { index: verbatimIndex, channel: 'verbatim', matched: [normalized] };
 
   // B0-870: fall back to the quoted span, provided the framing left outside the quotes is not a
   // claim in its own right (so a fabricated tail can't ride along on a genuine quote).
   const quotedSpans = Array.from(sentence.matchAll(QUOTED_SPAN_PATTERN), (m) => m[1]);
-  if (quotedSpans.length === 0) return false;
+  if (quotedSpans.length === 0) return null;
   const framing = sentence.replace(QUOTED_SPAN_PATTERN, ' ');
-  if (isClaimTrigger && isClaimTrigger(framing) && !isNonClaimScaffolding(framing)) return false;
-  return quotedSpans.every((span) => {
-    const normalizedSpan = normalizeSentenceForGroundingCompare(span);
-    return normalizedSpan.length > 0 && normalizedSources.some((body) => body.includes(normalizedSpan));
-  });
+  if (isClaimTrigger && isClaimTrigger(framing) && !isNonClaimScaffolding(framing)) return null;
+  const normalizedSpans = quotedSpans.map((span) => normalizeSentenceForGroundingCompare(span));
+  const spanIndexes = normalizedSpans.map((span) =>
+    span.length > 0 ? normalizedSources.findIndex((body) => body.includes(span)) : -1,
+  );
+  if (spanIndexes.some((index) => index < 0)) return null;
+  // Spans may sit in different sources; the binding names the one carrying the first span.
+  return { index: spanIndexes[0], channel: 'quoted_span', matched: normalizedSpans };
 }
 
 /**
  * B0-888 — categories with a KEY-TERM fallback grounding path (below), on top of the plain
- * verbatim/quoted-span match every category gets from `isSentenceGrounded`. Deliberately just
+ * verbatim/quoted-span match every category gets from `sentenceGroundingMatch`. Deliberately just
  * these two: `first_aid` and every token category (`epa_registration`, `din_registration`,
  * `dilution_ratio`, `contact_time`, `cas_number`) stay exact/verbatim, no exceptions -- weakening
  * those would violate the org's regulated-data rule. `hazard` has its own, narrower value-term path
- * (B0-923, `isHazardValueTermGrounded`): every hazard value must still appear verbatim.
+ * (B0-923, `hazardValueTermGroundingMatch`): every hazard value must still appear verbatim.
  */
 const KEY_TERM_FALLBACK_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
   RegulatedClaimCategory
@@ -1226,7 +1294,20 @@ function titleNamesBulletHead(title: string, head: string): boolean {
 
 /** Every document id (plain or batch `<id>:<key>` form) cited by a `[doc:…]` marker anywhere in `text`. */
 function citedDocumentIds(text: string): string[] {
-  return Array.from(text.matchAll(DOC_CITATION_PATTERN), (m) => m[1]?.trim() ?? '').filter(Boolean);
+  return Array.from(text.matchAll(DOC_CITATION_PATTERN)).flatMap((m) => citationIdsInMarker(m[1] ?? ''));
+}
+
+/**
+ * B0-1131 — the id(s) inside one `[doc:…]` marker. Live drafts also write several ids in one
+ * bracket ("[doc:23d9e335-…; doc:1f0d1d94-…]"); read as a single id, only the LAST one was ever
+ * recognised (via the batch-form `endsWith(':<id>')` test), so the first product's label was not
+ * "cited" and a bullet attributed through it failed as having no document.
+ */
+function citationIdsInMarker(capture: string): string[] {
+  return capture
+    .split(/[;,\s]+/)
+    .map((part) => part.replace(/^doc:/i, '').trim())
+    .filter(Boolean);
 }
 
 /**
@@ -1241,7 +1322,7 @@ function citedDocumentIds(text: string): string[] {
  * its head ("Rest Stop™: …") AND a source whose TITLE names that product is either cited by a
  * `[doc:…]` marker anywhere in the draft (the trailing `Source:` line, in practice) or the sentence
  * itself says "the label/profile/SDS states/says/lists/shows". Attribution only: the key-term check
- * in `isKeyTermGrounded` still has to find the organism/material and a claim verb in THAT source's
+ * in `keyTermGroundingMatch` still has to find the organism/material and a claim verb in THAT source's
  * body, so a claim the named source never makes is still redacted.
  */
 function attributedSources(
@@ -1249,12 +1330,11 @@ function attributedSources(
   contextText: string,
   sources: readonly RegulatedClaimSource[],
   draftAnswer: string,
+  sentenceOffset?: number,
 ): RegulatedClaimSource[] {
   const attributed: RegulatedClaimSource[] = [];
 
-  for (const match of contextText.matchAll(DOC_CITATION_PATTERN)) {
-    const cited = match[1]?.trim();
-    if (!cited) continue;
+  for (const cited of citedDocumentIds(contextText)) {
     const source = sources.find(
       (s) => cited === s.documentId || cited.endsWith(`:${s.documentId}`),
     );
@@ -1276,7 +1356,7 @@ function attributedSources(
     const cited = citedDocumentIds(draftAnswer);
     const sentenceAssertsSource =
       SOURCE_ASSERTION_ATTRIBUTION_PATTERN.test(sentence) || SOURCE_KIND_MENTION_PATTERN.test(sentence);
-    for (const head of productNamesInSentence(sentence, draftAnswer)) {
+    for (const head of productNamesInSentence(sentence, draftAnswer, sentenceOffset)) {
       for (const source of sources) {
         // A product's own label / efficacy sheet / SDS that prints the full name is evidence of
         // identity on its own; a title match still needs the draft to cite or name the source.
@@ -1287,6 +1367,15 @@ function attributedSources(
         );
         if (!printsName && !citedAnywhere && !sentenceAssertsSource) continue;
         if (!attributed.includes(source)) attributed.push(source);
+      }
+      if (attributed.length > 0) break;
+      // B0-1131 — "Triforce Disinfectant" names the one title carrying "triforce"; same citation
+      // / assertion requirement as a title match.
+      for (const source of sourcesNamedByDistinctiveCore(head, sources)) {
+        const citedAnywhere = cited.some(
+          (id) => id === source.documentId || id.endsWith(`:${source.documentId}`),
+        );
+        if ((citedAnywhere || sentenceAssertsSource) && !attributed.includes(source)) attributed.push(source);
       }
       if (attributed.length > 0) break;
     }
@@ -1301,7 +1390,7 @@ function attributedSources(
   if (
     attributed.length === 0 &&
     PRONOUN_SUBJECT_PATTERN.test(stripSentenceMarkup(sentence)) &&
-    !headingProductAbove(draftAnswer, sentence)
+    !headingProductAbove(draftAnswer, sentence, sentenceOffset)
   ) {
     const citedSources = sources.filter((s) =>
       citedDocumentIds(draftAnswer).some((id) => id === s.documentId || id.endsWith(`:${s.documentId}`)),
@@ -1339,11 +1428,11 @@ const normalizedBodyCache = new WeakMap<RegulatedClaimSource, string>();
  * ("Rest Stop™: …"), a bold lead ("**BetONE™ RTU Disinfectant** (…)"), an owned source ("the
  * BetONE™ RTU Disinfectant label …"), then the heading above the bullet.
  */
-function productNamesInSentence(sentence: string, draftAnswer: string): string[] {
+function productNamesInSentence(sentence: string, draftAnswer: string, sentenceOffset?: number): string[] {
   const usable = (names: Array<string | null | undefined>) =>
     names
       .filter((n): n is string => Boolean(n))
-      .map((n) => normalizeProductNameForCompare(n))
+      .flatMap((n) => productNameAlternatives(normalizeProductNameForCompare(n)))
       .filter((n) => {
         const firstWord = n.split(' ')[0] ?? '';
         return (
@@ -1366,7 +1455,41 @@ function productNamesInSentence(sentence: string, draftAnswer: string): string[]
   ]);
   // The heading above is only consulted when the sentence names no product of its own, so a
   // bullet that names (say) Sanibet can never fall back to a sibling or parent product's document.
-  return [...new Set(own.length > 0 ? own : usable([headingProductAbove(draftAnswer, sentence)]))];
+  return [...new Set(own.length > 0 ? own : usable([headingProductAbove(draftAnswer, sentence, sentenceOffset)]))];
+}
+
+/**
+ * B0-1131 — a heading that names a product with a qualifier or an alias is tried as each of its
+ * parts too: "Triforce Disinfectant (1 Minute Disinfectant)" ⇒ "triforce disinfectant" and
+ * "1 minute disinfectant"; "Quat-Stat 5 / 5 Minute Alkaline Disinfectant" ⇒ each side of the slash.
+ * The full name stays first. Live ROW-09 drafts head every product block this way, and once each
+ * copy of a repeated bullet is judged under ITS OWN heading (`headingProductAbove`), the full
+ * qualified name matched no document title and the claim failed as unattributable.
+ */
+function productNameAlternatives(name: string): string[] {
+  const alternatives = [name];
+  const paren = /^(.*?)\s*\(([^()]{3,})\)\s*$/.exec(name);
+  if (paren) alternatives.push(paren[1].trim(), paren[2].trim());
+  for (const part of name.split(/\s+\/\s+/)) alternatives.push(part.trim());
+  return [...new Set(alternatives.filter((n) => n.length >= 3))];
+}
+
+/**
+ * B0-1131 — the sources whose TITLE carries a product name's distinctive core (its words minus
+ * `GENERIC_PRODUCT_NAME_WORDS`, at least five characters, as a whole-word phrase): "triforce
+ * disinfectant" ⇒ "Efficacy Data 333 Triforce". Only when every such source is the same product
+ * (one product line, or one title): a core like "ge fight bac" that names both the RTU and the
+ * Wipes titles attributes nothing here, so a claim can never borrow a sibling product's document.
+ */
+function sourcesNamedByDistinctiveCore(head: string, sources: readonly RegulatedClaimSource[]): RegulatedClaimSource[] {
+  const words = head.replace(/[^a-z0-9]+/g, ' ').trim();
+  const core = words.split(' ').filter((w) => !GENERIC_PRODUCT_NAME_WORDS.has(w)).join(' ');
+  if (core.length < 5 || core === words) return [];
+  const matches = sources.filter((s) =>
+    ` ${normalizeProductNameForCompare(s.title).replace(/[^a-z0-9]+/g, ' ')} `.includes(` ${core} `),
+  );
+  const products = new Set(matches.map((s) => s.productLineKey ?? `title:${normalizeProductNameForCompare(s.title)}`));
+  return products.size === 1 ? matches : [];
 }
 
 /**
@@ -1412,8 +1535,16 @@ const HEADING_LINE_PATTERN = /^(?:#{1,6}\s+\S.*|\*\*[^*]+\*\*:?|[^-*•\d].*:)$/
  * past sibling bullets (at most 12 lines) to the nearest non-bullet line, and only accepts it when
  * it reads as a heading. Null for a sentence that is not itself a list bullet.
  */
-function headingProductAbove(draftAnswer: string, sentence: string): string | null {
-  const at = draftAnswer.indexOf(sentence.trim());
+function headingProductAbove(draftAnswer: string, sentence: string, sentenceOffset?: number): string | null {
+  const trimmed = sentence.trim();
+  // B0-1131 — THIS occurrence of the sentence, not the first one with the same text: a list that
+  // repeats "- Effective against SARS-CoV-2 with a 1-minute contact time." under several product
+  // headings attributed every copy to the first heading (live ROW-09 drafts), so a later product's
+  // bullet grounded on the first product's document.
+  const at =
+    sentenceOffset !== undefined && draftAnswer.startsWith(trimmed, sentenceOffset)
+      ? sentenceOffset
+      : draftAnswer.indexOf(trimmed);
   if (at < 0) return null;
   const lines = draftAnswer.slice(0, at).split('\n');
   const currentLine = (lines.pop() ?? '') + sentence.trim();
@@ -1457,8 +1588,26 @@ const NON_EPITHET_WORDS = new Set([
  * lowercase species epithet that directly follows a genus ("Klebsiella aerogenes"), so a species
  * swap ("Klebsiella pneumoniae" for "aerogenes") cannot ground on the genus alone.
  */
+/**
+ * B0-1131 — an organism term and a document compare with hyphens read as spaces: the efficacy
+ * sheets store "SARS CoV 2 (Cause of COVID 19)" where the draft (and the label) write "SARS-CoV-2".
+ * Comparison only, like the product-name fold in `normalizeProductNameForCompare`.
+ */
+function foldHyphens(value: string): string {
+  return value.replace(/[-‐‑–—]/g, ' ').replace(/\s+/g, ' ');
+}
+
+/** Class nouns that gloss a named organism ("Trichophyton mentagrophytes (athlete's foot fungus)") rather than add a claim. */
+const GENERIC_ORGANISM_NOUNS = new Set([
+  'bacteria', 'bacterium', 'bacterial', 'virus', 'viruses', 'viral', 'pathogen', 'pathogens', 'germ', 'germs',
+  'fungi', 'fungus', 'fungal', 'micro-organism', 'micro-organisms', 'microorganism', 'microorganisms',
+  'microbe', 'microbes', 'organism', 'organisms',
+]);
+
 function efficacyOrganismTerms(sentence: string): string[] {
-  const text = stripSentenceMarkup(sentence);
+  // B0-1131 — an organism named only inside a negated hedge ("(not effective against spores)") is
+  // not part of the claim being verified; see `efficacyClaimText`.
+  const text = stripSentenceMarkup(efficacyClaimText(sentence));
   const terms: string[] = [];
   for (const m of text.matchAll(new RegExp(EFFICACY_ORGANISM_PATTERN.source, 'gi'))) {
     // Only a bacterial / fungal GENUS takes a species epithet ("Klebsiella aerogenes"); a virus or
@@ -1468,27 +1617,36 @@ function efficacyOrganismTerms(sentence: string): string[] {
     const epithet = isGenus ? after?.[1] : undefined;
     terms.push(epithet && !NON_EPITHET_WORDS.has(epithet) ? `${m[0]} ${epithet}` : m[0]);
   }
-  return [...new Set(terms)];
+  const unique = [...new Set(terms)];
+  // B0-1131 — with a specific organism named, a class noun beside it is a gloss, not a second claim
+  // the document must also print ("Trichophyton mentagrophytes (athlete's foot fungus)" — the
+  // efficacy sheet lists the organism and never says "fungus"). A sentence naming only class nouns
+  // ("kills bacteria and viruses") still requires every one of them.
+  const specific = unique.filter((term) => !GENERIC_ORGANISM_NOUNS.has(term.toLowerCase()));
+  return specific.length > 0 ? specific : unique;
 }
 
 /**
  * B0-888 — key-term fallback grounding for `compatibility` / `efficacy_claim` ONLY: a PARAPHRASE of
  * a verbatim source line ("Labeled to kill HIV-1 on pre-cleaned environmental surfaces" vs. the
- * label's own wording) never passes `isSentenceGrounded`'s whole-sentence/quoted-span compare, but
+ * label's own wording) never passes `sentenceGroundingMatch`'s whole-sentence/quoted-span compare, but
  * IS grounded when the sentence (or its containing context) attributes a specific source (see
  * `attributedSources`) AND that source's body carries the same material/organism key term together
  * with a claim verb. Restricting this to an ATTRIBUTED source -- and only these two categories --
  * keeps the fabrication check intact: a claim naming a material/organism the attributed source
  * never mentions still fails, and `hazard`/`first_aid`/token categories never take this path at all.
  */
-function isKeyTermGrounded(
-  sentence: string,
+function keyTermGroundingMatch(
+  rawSentence: string,
   contextText: string,
   category: 'compatibility' | 'efficacy_claim',
   sources: readonly RegulatedClaimSource[],
   draftAnswer: string,
-): boolean {
-  const candidates = attributedSources(sentence, contextText, sources, draftAnswer);
+  sentenceOffset?: number,
+): { source: RegulatedClaimSource; matched: string[] } | null {
+  // B0-1131 — a negated parenthetical hedge is not part of the claim (see `efficacyClaimText`).
+  const sentence = category === 'efficacy_claim' ? efficacyClaimText(rawSentence) : rawSentence;
+  const candidates = attributedSources(rawSentence, contextText, sources, draftAnswer, sentenceOffset);
   // B0-1131 — `attributedSources` only falls back to the locked product line when it has exactly
   // ONE document, so a product with a label, SDS and efficacy sheet all locked (live: AF79, five
   // locked documents) attributed nothing and every organism bullet failed. For `efficacy_claim`,
@@ -1500,18 +1658,18 @@ function isKeyTermGrounded(
       if (source.isLockedProductLineSource && !candidates.includes(source)) candidates.push(source);
     }
   }
-  if (candidates.length === 0) return false;
+  if (candidates.length === 0) return null;
 
   const keyTermPattern =
     category === 'compatibility' ? COMPATIBILITY_MATERIAL_PATTERN : EFFICACY_ORGANISM_PATTERN;
   const verbPattern = category === 'compatibility' ? COMPATIBILITY_CLAIM_PATTERN : EFFICACY_VERB_PATTERN;
 
   const keyTermMatch = sentence.match(keyTermPattern)?.[0];
-  if (!keyTermMatch) return false;
+  if (!keyTermMatch) return null;
   const hasClaimVerb =
     verbPattern.test(sentence) ||
     (category === 'efficacy_claim' && EFFICACY_STRONG_PATTERN.test(sentence));
-  if (!hasClaimVerb) return false;
+  if (!hasClaimVerb) return null;
 
   // B0-1131 — efficacy: EVERY organism the sentence names (with its species epithet when one follows,
   // "Klebsiella aerogenes") must be in the same document, not just the first match; otherwise
@@ -1519,16 +1677,17 @@ function isKeyTermGrounded(
   const keyTerms = (
     category === 'efficacy_claim' ? efficacyOrganismTerms(sentence) : [keyTermMatch]
   ).map((term) => normalizeSentenceForGroundingCompare(term));
-  if (keyTerms.length === 0 || keyTerms.some((term) => !term)) return false;
+  if (keyTerms.length === 0 || keyTerms.some((term) => !term)) return null;
 
-  return candidates.some((source) => {
-    const normalizedBody = normalizeSentenceForGroundingCompare(source.documentBody);
-    if (!keyTerms.every((term) => normalizedBody.includes(term))) return false;
+  const source = candidates.find((candidate) => {
+    const normalizedBody = foldHyphens(normalizeSentenceForGroundingCompare(candidate.documentBody));
+    if (!keyTerms.every((term) => normalizedBody.includes(foldHyphens(term)))) return false;
     return (
-      verbPattern.test(source.documentBody) ||
-      (category === 'efficacy_claim' && EFFICACY_STRONG_PATTERN.test(source.documentBody))
+      verbPattern.test(candidate.documentBody) ||
+      (category === 'efficacy_claim' && EFFICACY_STRONG_PATTERN.test(candidate.documentBody))
     );
   });
+  return source ? { source, matched: keyTerms } : null;
 }
 
 /**
@@ -1594,20 +1753,21 @@ function sourceStatesHazardTerm(body: string, term: string): boolean {
  * A hazard, PPE item or incompatibility the document never prints still fails, as does a sentence
  * with no attributable product document. `first_aid` and every token category stay verbatim-only.
  */
-function isHazardValueTermGrounded(
+function hazardValueTermGroundingMatch(
   sentence: string,
   contextText: string,
   sources: readonly RegulatedClaimSource[],
   draftAnswer: string,
-): boolean {
+  sentenceOffset?: number,
+): { source: RegulatedClaimSource; channel: 'hazard_value_terms' | 'locked_line_documents'; matched: string[] } | null {
   const terms = extractHazardValueTerms(sentence);
-  if (terms.length === 0) return false;
+  if (terms.length === 0) return null;
   const bodyOf = (source: RegulatedClaimSource) =>
     normalizeSentenceForGroundingCompare(source.documentBody).replace(/-/g, ' ');
 
   // One attributed document (cited, "per the X label", bullet head, or named by its full title)
   // that prints every value term.
-  const attributed = attributedSources(sentence, contextText, sources, draftAnswer);
+  const attributed = attributedSources(sentence, contextText, sources, draftAnswer, sentenceOffset);
   const sentenceText = ` ${normalizeProductNameForCompare(stripSentenceMarkup(sentence))} `;
   for (const source of sources) {
     const title = normalizeProductNameForCompare(source.title);
@@ -1615,17 +1775,25 @@ function isHazardValueTermGrounded(
       attributed.push(source);
     }
   }
-  if (attributed.some((source) => terms.every((term) => sourceStatesHazardTerm(bodyOf(source), term)))) {
-    return true;
-  }
+  const attributedSource = attributed.find((source) =>
+    terms.every((term) => sourceStatesHazardTerm(bodyOf(source), term)),
+  );
+  if (attributedSource) return { source: attributedSource, channel: 'hazard_value_terms', matched: terms };
 
   // Or the locked product line's own documents together: every one is the SAME product (label, SDS,
   // diluted-use SDS), so a value printed on any of them belongs to the product the turn locked.
   // Live: "per the Speedex Concentrate SDS" attributes the label titled "Speedex Concentrate", while
   // H314 / Category 1 are printed in the locked line's SDS titled "528 DIL MXE".
-  const lockedBodies = sources.filter((s) => s.isLockedProductLineSource).map(bodyOf);
-  if (lockedBodies.length === 0) return false;
-  return terms.every((term) => lockedBodies.some((body) => sourceStatesHazardTerm(body, term)));
+  const locked = sources.filter((s) => s.isLockedProductLineSource);
+  if (locked.length === 0) return null;
+  if (!terms.every((term) => locked.some((source) => sourceStatesHazardTerm(bodyOf(source), term)))) {
+    return null;
+  }
+  // The binding names the locked document printing the most of the sentence's values.
+  const best = locked
+    .map((source) => ({ source, count: terms.filter((term) => sourceStatesHazardTerm(bodyOf(source), term)).length }))
+    .sort((a, b) => b.count - a.count)[0];
+  return { source: best.source, channel: 'locked_line_documents', matched: terms };
 }
 
 /**
@@ -1645,10 +1813,11 @@ function explainUngroundedSentence(
   contextText: string,
   sources: readonly RegulatedClaimSource[],
   draftAnswer: string,
+  sentenceOffset?: number,
 ): string {
   if (sources.length === 0) return 'no_sources_retrieved';
   const lockedOrAttributed = (): RegulatedClaimSource[] => {
-    const attributed = attributedSources(sentence, contextText, sources, draftAnswer);
+    const attributed = attributedSources(sentence, contextText, sources, draftAnswer, sentenceOffset);
     const candidates = [...attributed];
     if (attributed.every((s) => s.isLockedProductLineSource)) {
       for (const s of sources) if (s.isLockedProductLineSource && !candidates.includes(s)) candidates.push(s);
@@ -1670,13 +1839,46 @@ function explainUngroundedSentence(
         ? efficacyOrganismTerms(sentence)
         : [sentence.match(COMPATIBILITY_MATERIAL_PATTERN)?.[0] ?? ''].filter(Boolean);
     if (terms.length === 0) return 'no_verbatim_match';
-    const candidates = category === 'efficacy_claim' ? lockedOrAttributed() : attributedSources(sentence, contextText, sources, draftAnswer);
+    const candidates = category === 'efficacy_claim' ? lockedOrAttributed() : attributedSources(sentence, contextText, sources, draftAnswer, sentenceOffset);
     if (candidates.length === 0) return 'no_attributable_product_document';
-    const bodies = candidates.map((s) => normalizeSentenceForGroundingCompare(s.documentBody));
-    const missing = terms.filter((term) => !bodies.some((body) => body.includes(normalizeSentenceForGroundingCompare(term))));
+    const bodies = candidates.map((s) => foldHyphens(normalizeSentenceForGroundingCompare(s.documentBody)));
+    const missing = terms.filter((term) => !bodies.some((body) => body.includes(foldHyphens(normalizeSentenceForGroundingCompare(term)))));
     return `claim_terms_missing_from_attributed_documents:${(missing.length ? missing : ['claim_verb']).join('|')}`;
   }
   return 'no_verbatim_match';
+}
+
+/**
+ * B0-1131 — the first of a source's stitched chunks whose (normalised) text carries every one of
+ * `needles`, or, failing that, the first carrying any of them (a key-term binding's organism and
+ * claim verb may sit in different chunks). Null without chunks, or when the evidence straddles a
+ * chunk boundary. Normalised chunk text is cached per source and normaliser.
+ */
+const normalizedChunkCache = new WeakMap<RegulatedClaimSource, Map<(value: string) => string, string[]>>();
+
+function resolveGroundingChunkId(
+  source: RegulatedClaimSource,
+  needles: readonly string[],
+  normalize: (value: string) => string,
+): string | null {
+  const chunks = source.chunks;
+  if (!chunks || chunks.length === 0 || needles.length === 0) return null;
+  let byNormalizer = normalizedChunkCache.get(source);
+  if (!byNormalizer) {
+    byNormalizer = new Map();
+    normalizedChunkCache.set(source, byNormalizer);
+  }
+  let normalizedChunks = byNormalizer.get(normalize);
+  if (!normalizedChunks) {
+    normalizedChunks = chunks.map((chunk) => normalize(chunk.text));
+    byNormalizer.set(normalize, normalizedChunks);
+  }
+  const hyphenless = (value: string) => value.replace(/-/g, ' ');
+  const carries = (text: string, needle: string) => text.includes(needle) || hyphenless(text).includes(needle);
+  const all = normalizedChunks.findIndex((text) => needles.every((needle) => carries(text, needle)));
+  if (all >= 0) return chunks[all].chunkId;
+  const any = normalizedChunks.findIndex((text) => needles.some((needle) => carries(text, needle)));
+  return any >= 0 ? chunks[any].chunkId : null;
 }
 
 /**
@@ -1714,15 +1916,62 @@ export function evaluateRegulatedClaimGrounding(input: {
 
   const categoriesDetected: RegulatedClaimCategory[] = [];
   const ungroundedCategories: RegulatedClaimCategory[] = [];
-  const ungroundedDetails: Array<{
-    category: RegulatedClaimCategory;
-    snippet: string;
-    evidenceCheck?: string;
-  }> = [];
+  const ungroundedDetails: RegulatedClaimGroundingResult['ungroundedDetails'] = [];
+  // B0-1131 — the draft's sentences once, each with the offset of ITS occurrence in the draft, so
+  // attribution (heading above, pronoun channel) and the planner's occurrence index refer to this
+  // sentence and not the first one with the same text.
+  const draftSentences = splitIntoSentences(input.draftAnswer);
+  const draftSentenceOffsets: number[] = [];
+  {
+    let cursor = 0;
+    for (const sentence of draftSentences) {
+      const at = input.draftAnswer.indexOf(sentence, cursor);
+      draftSentenceOffsets.push(at);
+      if (at >= 0) cursor = at + sentence.length;
+    }
+  }
+  /** Leading whitespace on the draft line that starts at `offset` (0 for an unlocated sentence). */
+  const indentAtOffset = (offset: number): number => {
+    if (offset < 0) return 0;
+    const lineStart = input.draftAnswer.lastIndexOf('\n', offset - 1) + 1;
+    return offset - lineStart;
+  };
+  /** How many non-overlapping occurrences of `snippet` precede `offset` — the planner's walk order. */
+  const occurrenceBefore = (snippet: string, offset: number): number => {
+    let count = 0;
+    let from = 0;
+    for (;;) {
+      const at = input.draftAnswer.indexOf(snippet, from);
+      if (at < 0 || at >= offset) return count;
+      count += 1;
+      from = at + snippet.length;
+    }
+  };
   // B0-888 — categories where at least one sentence was grounded via the key-term fallback or the
   // adjacent-verbatim-quote exemption rather than a plain verbatim match; see the gate record at
   // this function's call site for how this is surfaced (`inputs.groundingMode`).
   const keyTermGroundedCategories: RegulatedClaimCategory[] = [];
+  // B0-1131 — one binding per grounded claim, recorded on the path that grounded it. Audit only:
+  // nothing below reads this back into a verdict.
+  const groundedBindings: RegulatedClaimGroundingBinding[] = [];
+  const bind = (
+    category: RegulatedClaimCategory,
+    span: string,
+    source: RegulatedClaimSource,
+    channel: RegulatedClaimGroundingBinding['channel'],
+    matched: string[],
+    normalize: (value: string) => string,
+  ) => {
+    groundedBindings.push({
+      category,
+      span: span.slice(0, 240),
+      documentId: source.documentId,
+      title: source.title,
+      chunkId: resolveGroundingChunkId(source, matched, normalize),
+      channel,
+      matched,
+    });
+  };
 
   const checkTokenCategory = (
     category: RegulatedClaimCategory,
@@ -1733,6 +1982,12 @@ export function evaluateRegulatedClaimGrounding(input: {
     const ungroundedTokens = tokens.filter(
       (t) => !isTokenGrounded(t, normalizedSourceBodiesUnit),
     );
+    for (const token of new Set(tokens)) {
+      if (ungroundedTokens.includes(token)) continue;
+      const normalized = normalizeUnitToken(token);
+      const index = normalizedSourceBodiesUnit.findIndex((body) => body.includes(normalized));
+      if (index >= 0) bind(category, token, input.sources[index], 'verbatim', [normalized], normalizeUnitToken);
+    }
     // Grounded if AT LEAST ONE occurrence of the value verifies -- but every distinct
     // ungrounded token is still reported so a genuinely fabricated number is caught even
     // when it appears alongside one real, sourced value.
@@ -1760,7 +2015,7 @@ export function evaluateRegulatedClaimGrounding(input: {
   const checkContactTimeTokens = (tokens: string[]) => {
     if (tokens.length === 0) return;
     categoriesDetected.push('contact_time');
-    const allSentences = splitIntoSentences(input.draftAnswer);
+    const allSentences = draftSentences;
     const unitBody = new Map(input.sources.map((s, i) => [s, normalizedSourceBodiesUnit[i] ?? '']));
     // Keyed by snippet: the bare token for a pool-wide miss; the SENTENCE for a product-specific one,
     // so the planner withholds only that product's line, not every line repeating the same value.
@@ -1772,6 +2027,9 @@ export function evaluateRegulatedClaimGrounding(input: {
         failed.set(token, input.sources.length === 0 ? 'no_sources_retrieved' : 'value_not_found_verbatim_in_any_source');
         continue;
       }
+      // B0-1131 — bound per claiming sentence to the named product's own document when one is
+      // attributed; a sentence naming no product binds to the first pool document carrying it.
+      let boundToSentence = false;
       for (let idx = 0; idx < allSentences.length; idx += 1) {
         const sentence = allSentences[idx];
         if (!sentence.toLowerCase().includes(token.toLowerCase())) continue;
@@ -1780,9 +2038,14 @@ export function evaluateRegulatedClaimGrounding(input: {
         // name. A neighbouring sentence's [doc:] citation or the locked-line fallback is NOT used
         // here: in a product list the next bullet's citation belongs to a different product, and
         // measuring this against stored answers showed exactly that misattribution.
-        const names = productNamesInSentence(sentence, input.draftAnswer);
+        const names = productNamesInSentence(sentence, input.draftAnswer, draftSentenceOffsets[idx]);
         const attributed = input.sources.filter((s) =>
-          names.some((n) => titleNamesBulletHead(s.title, n) || documentPrintsProductName(s, n)),
+          names.some(
+            (n) =>
+              titleNamesBulletHead(s.title, n) ||
+              documentPrintsProductName(s, n) ||
+              sourcesNamedByDistinctiveCore(n, input.sources).includes(s),
+          ),
         );
         if (attributed.length === 0) continue;
         // Every retrieved document on the same product line as a named one is that product's too.
@@ -1794,12 +2057,20 @@ export function evaluateRegulatedClaimGrounding(input: {
         for (const s of input.sources) {
           if (s.documentId.startsWith('verified-facts') && !candidates.includes(s)) candidates.push(s);
         }
-        if (!candidates.some((s) => (unitBody.get(s) ?? '').includes(normalized))) {
+        const carrier = candidates.find((s) => (unitBody.get(s) ?? '').includes(normalized));
+        if (!carrier) {
           failed.set(
             sentence.slice(0, 240),
             `contact_time_not_in_claimed_product_documents:${candidates.map((s) => s.title).join('|')}`,
           );
+          continue;
         }
+        bind('contact_time', sentence, carrier, 'verbatim', [normalized], normalizeUnitToken);
+        boundToSentence = true;
+      }
+      if (!boundToSentence) {
+        const index = normalizedSourceBodiesUnit.findIndex((body) => body.includes(normalized));
+        if (index >= 0) bind('contact_time', token, input.sources[index], 'verbatim', [normalized], normalizeUnitToken);
       }
     }
     if (failed.size > 0) {
@@ -1828,7 +2099,7 @@ export function evaluateRegulatedClaimGrounding(input: {
       sentenceBeforePreceding?: string,
     ) => boolean,
   ) => {
-    const allSentences = splitIntoSentences(input.draftAnswer);
+    const allSentences = draftSentences;
     const claimIndices: number[] = [];
     for (let i = 0; i < allSentences.length; i += 1) {
       const precedingSentence = i > 0 ? allSentences[i - 1] : undefined;
@@ -1846,59 +2117,76 @@ export function evaluateRegulatedClaimGrounding(input: {
     const keyTermPattern =
       category === 'compatibility' ? COMPATIBILITY_MATERIAL_PATTERN : EFFICACY_ORGANISM_PATTERN;
     let groundedViaKeyTermPath = false;
-    const ungroundedSentences: Array<{ sentence: string; evidenceCheck: string }> = [];
+    const ungroundedSentences: Array<{ sentence: string; evidenceCheck: string; occurrence: number }> = [];
 
     for (const idx of claimIndices) {
       const sentence = allSentences[idx];
-      if (isSentenceGrounded(sentence, normalizedSourceBodiesPlain, isClaimTrigger)) {
+      const verbatim = sentenceGroundingMatch(sentence, normalizedSourceBodiesPlain, isClaimTrigger);
+      if (verbatim) {
+        bind(category, sentence, input.sources[verbatim.index], verbatim.channel, verbatim.matched, normalizeSentenceForGroundingCompare);
         continue;
       }
 
+      // "Its containing bullet": a window of the sentence plus its immediate neighbours, since
+      // attribution ("per the X label", "[doc:uuid]") is often stated once for the whole bullet
+      // rather than repeated on every sentence inside it.
+      // B0-1131 — except a PRECEDING sibling list item: in a flat list the previous item's
+      // "- Source: … [doc:…]" line sits right above the next product's claim and attributed it to
+      // the wrong product. A parent item or heading (less indented, or not an item) still counts.
+      const prev = allSentences[idx - 1];
+      const prevIsSiblingItem =
+        prev !== undefined &&
+        BULLET_ITEM_PREFIX_PATTERN.test(prev) &&
+        BULLET_ITEM_PREFIX_PATTERN.test(sentence) &&
+        indentAtOffset(draftSentenceOffsets[idx - 1]) >= indentAtOffset(draftSentenceOffsets[idx]);
+      const contextText = [prevIsSiblingItem ? undefined : prev, sentence, allSentences[idx + 1]]
+        .filter((s): s is string => Boolean(s))
+        .join(' ');
+
       // B0-923 — hazard VALUE terms verbatim in the attributed product's own document.
       if (category === 'hazard') {
-        const contextText = [allSentences[idx - 1], sentence, allSentences[idx + 1]]
-          .filter((s): s is string => Boolean(s))
-          .join(' ');
-        if (isHazardValueTermGrounded(sentence, contextText, input.sources, input.draftAnswer)) {
+        const hazard = hazardValueTermGroundingMatch(sentence, contextText, input.sources, input.draftAnswer, draftSentenceOffsets[idx]);
+        if (hazard) {
           groundedViaKeyTermPath = true;
+          bind(category, sentence, hazard.source, hazard.channel, hazard.matched, normalizeSentenceForGroundingCompare);
           continue;
         }
       }
 
       if (useKeyTermFallback && (category === 'compatibility' || category === 'efficacy_claim')) {
-        // "Its containing bullet": a window of the sentence plus its immediate neighbours, since
-        // attribution ("per the X label", "[doc:uuid]") is often stated once for the whole bullet
-        // rather than repeated on every sentence inside it.
-        const contextText = [allSentences[idx - 1], sentence, allSentences[idx + 1]]
-          .filter((s): s is string => Boolean(s))
-          .join(' ');
-        if (isKeyTermGrounded(sentence, contextText, category, input.sources, input.draftAnswer)) {
+        const keyTerm = keyTermGroundingMatch(sentence, contextText, category, input.sources, input.draftAnswer, draftSentenceOffsets[idx]);
+        if (keyTerm) {
           groundedViaKeyTermPath = true;
+          bind(category, sentence, keyTerm.source, 'key_term', keyTerm.matched, normalizeSentenceForGroundingCompare);
           continue;
         }
 
         // B0-888 — an ungrounded PARAPHRASE immediately followed by a grounded verbatim quote that
         // names the same material/organism is sufficiently grounded by that adjacent quote.
         const next = allSentences[idx + 1];
-        if (
-          next &&
-          keyTermPattern.test(next) &&
-          isSentenceGrounded(next, normalizedSourceBodiesPlain, isClaimTrigger)
-        ) {
+        const adjacent =
+          next && keyTermPattern.test(next)
+            ? sentenceGroundingMatch(next, normalizedSourceBodiesPlain, isClaimTrigger)
+            : null;
+        if (adjacent) {
           groundedViaKeyTermPath = true;
+          bind(category, sentence, input.sources[adjacent.index], 'adjacent_quote', adjacent.matched, normalizeSentenceForGroundingCompare);
           continue;
         }
       }
 
+      const snippet = sentence.slice(0, 240);
       ungroundedSentences.push({
         sentence,
         evidenceCheck: explainUngroundedSentence(
           category,
           sentence,
-          [allSentences[idx - 1], sentence, allSentences[idx + 1]].filter((s): s is string => Boolean(s)).join(' '),
+          contextText,
           input.sources,
           input.draftAnswer,
+          draftSentenceOffsets[idx],
         ),
+        occurrence: draftSentenceOffsets[idx] >= 0 ? occurrenceBefore(snippet, draftSentenceOffsets[idx]) : 0,
       });
     }
 
@@ -1908,7 +2196,7 @@ export function evaluateRegulatedClaimGrounding(input: {
     if (ungroundedSentences.length > 0) {
       ungroundedCategories.push(category);
       for (const s of ungroundedSentences) {
-        ungroundedDetails.push({ category, snippet: s.sentence.slice(0, 240), evidenceCheck: s.evidenceCheck });
+        ungroundedDetails.push({ category, snippet: s.sentence.slice(0, 240), evidenceCheck: s.evidenceCheck, occurrence: s.occurrence });
       }
     }
   };
@@ -1933,6 +2221,7 @@ export function evaluateRegulatedClaimGrounding(input: {
     ungroundedCategories: [...new Set(ungroundedCategories)],
     ungroundedDetails,
     keyTermGroundedCategories: [...new Set(keyTermGroundedCategories)],
+    groundedBindings,
   };
 }
 

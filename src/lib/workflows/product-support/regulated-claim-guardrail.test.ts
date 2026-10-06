@@ -2596,3 +2596,371 @@ describe('evaluateRegulatedClaimGrounding — B0-1143 product line and spelled-o
     ).not.toContain('contact_time');
   });
 });
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 claim-to-source bindings (groundedBindings)', () => {
+  const CHUNKED_LABEL = {
+    ...LABEL_SOURCE,
+    chunks: [
+      { chunkId: 'chunk-reg', text: 'Product: Test Disinfectant\nEPA Reg. No. 1677-129' },
+      { chunkId: 'chunk-dir', text: 'Directions for Use:\nDilute at 2 oz. per gallon of water for general disinfection.' },
+      { chunkId: 'chunk-kill', text: 'Kill Claims:\nEffective against Staphylococcus aureus with a 10 minute contact time.' },
+      { chunkId: 'chunk-haz', text: 'Hazards and Precautions:\nCauses severe skin burns and eye damage. Wear protective gloves and eye protection.' },
+      { chunkId: 'chunk-fa', text: 'First Aid:\nIf swallowed, call a poison control center or doctor immediately.' },
+    ],
+  };
+
+  it('binds each grounded value token to the document and chunk that prints it', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Test Disinfectant is EPA Reg. No. 1677-129. Dilute at 2 oz per gallon of water.',
+      sources: [CHUNKED_LABEL],
+    });
+    expect(result.ungroundedCategories).toEqual([]);
+    expect(result.groundedBindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: 'epa_registration', documentId: 'doc-label-1', chunkId: 'chunk-reg', channel: 'verbatim' }),
+        expect.objectContaining({ category: 'dilution_ratio', documentId: 'doc-label-1', chunkId: 'chunk-dir', channel: 'verbatim' }),
+      ]),
+    );
+    for (const binding of result.groundedBindings) {
+      expect(binding.matched.length).toBeGreaterThan(0);
+      expect(binding.title).toBe('Test Disinfectant Label');
+    }
+  });
+
+  it('binds a verbatim efficacy sentence and its contact time to the kill-claims chunk', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Effective against Staphylococcus aureus with a 10 minute contact time.',
+      sources: [CHUNKED_LABEL],
+    });
+    expect(result.ungroundedCategories).toEqual([]);
+    expect(result.groundedBindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: 'efficacy_claim', chunkId: 'chunk-kill', channel: 'verbatim' }),
+        expect.objectContaining({ category: 'contact_time', chunkId: 'chunk-kill', channel: 'verbatim' }),
+      ]),
+    );
+  });
+
+  it('binds a key-term grounded paraphrase to the attributed document (ROW-09 shape) with channel key_term', () => {
+    const QUAT = {
+      documentId: '59987b46-0000-4000-8000-000000000001',
+      title: 'Quat Stat 5',
+      documentBody: 'Effective against SARS-Related Coronavirus 2\n(SARS-CoV-2) in 1 minute. Kills Pseudomonas aeruginosa.',
+      chunks: [
+        { chunkId: 'q-chunk-0', text: 'Kills Pseudomonas aeruginosa.' },
+        { chunkId: 'q-chunk-1', text: 'Effective against SARS-Related Coronavirus 2\n(SARS-CoV-2) in 1 minute.' },
+      ],
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `- **Quat-Stat 5**: Effective against SARS-CoV-2 with a 1-minute contact time.\n\nSource: [doc:${QUAT.documentId}]`,
+      sources: [QUAT],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    const binding = result.groundedBindings.find((b) => b.category === 'efficacy_claim');
+    expect(binding).toMatchObject({ documentId: QUAT.documentId, title: 'Quat Stat 5', channel: 'key_term', chunkId: 'q-chunk-1' });
+    expect(binding?.matched.join(' ')).toMatch(/sars/i);
+    expect(binding?.span).toContain('Quat-Stat 5');
+  });
+
+  it('binds a hazard sentence grounded by its value terms with channel hazard_value_terms', () => {
+    const SPEEDEX_CHUNKED = {
+      ...SPEEDEX_LABEL_SOURCE,
+      chunks: [
+        { chunkId: 'sx-haz', text: 'DANGER! CAUSES SEVERE SKIN BURNS AND EYE DAMAGE. MAY CAUSE AN ALLERGIC SKIN REACTION.\nSKIN CORROSION - Category 1. SERIOUS EYE DAMAGE - Category 1. Signal word: Danger. H314 + H317' },
+        { chunkId: 'sx-ppe', text: 'Recommended: splash\ngoggles. Wear protective\nChemical resistant gloves.\nWash hands thoroughly after handling.' },
+      ],
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling and using this product, as it can cause severe skin burns and eye damage (SDS Section 2).',
+      sources: [SPEEDEX_CHUNKED],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+    const binding = result.groundedBindings.find((b) => b.category === 'hazard');
+    expect(binding).toMatchObject({ documentId: SPEEDEX_LABEL_SOURCE.documentId, title: 'Speedex Concentrate', channel: 'hazard_value_terms' });
+    expect(binding?.matched).toEqual(expect.arrayContaining(['severe skin burns', 'gloves', 'goggles']));
+    // The values sit in two chunks; the binding names the first chunk carrying any of them.
+    expect(binding?.chunkId).toBe('sx-haz');
+  });
+
+  it('records no binding for an ungrounded claim, and chunkId null when the source has no chunks', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Test Disinfectant is EPA Reg. No. 1677-129. Dilute at 4 oz per gallon of water.',
+      sources: [LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toEqual(['dilution_ratio']);
+    expect(result.groundedBindings.map((b) => b.category)).toEqual(['epa_registration']);
+    expect(result.groundedBindings[0].chunkId).toBeNull();
+  });
+
+  it('is audit-only: bindings never change the verdict fields', () => {
+    const draftAnswer = 'Effective against Staphylococcus aureus with a 10 minute contact time. Dilute at 2 oz per gallon.';
+    const withChunks = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [CHUNKED_LABEL] });
+    const withoutChunks = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [LABEL_SOURCE] });
+    const verdict = (r: typeof withChunks) => ({
+      categoriesDetected: r.categoriesDetected,
+      ungroundedCategories: r.ungroundedCategories,
+      ungroundedDetails: r.ungroundedDetails,
+      keyTermGroundedCategories: r.keyTermGroundedCategories,
+    });
+    expect(verdict(withChunks)).toEqual(verdict(withoutChunks));
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 parenthetical hedge inside an efficacy claim', () => {
+  const PINE_QUAT = {
+    documentId: '4629d646-6b68-4511-8795-cc221c91fbb3',
+    title: 'Efficacy Data 304 Pine Quat',
+    documentKind: 'efficacy',
+    documentBody: 'Pine Quat Disinfectant. Effective against Pseudomonas aeruginosa in 10 minutes.',
+  };
+  const PH7Q = {
+    documentId: '719fddff-bc0b-4058-ac54-960058e2358f',
+    title: 'Efficacy Data 316 PH7Q',
+    documentKind: 'efficacy',
+    documentBody: 'pH7Q Neutral Disinfectant. Organism: SARS-CoV-2. Effective against SARS-CoV-2.',
+  };
+
+  it('still verifies the claim when a negated hedge sits in parentheses (fabricated organism fails)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**6. Pine Quat Disinfectant**\n- Effective against Ebola virus (not listed in the efficacy data; confirm on the label).\n- Source: [doc:${PINE_QUAT.documentId}]`,
+      sources: [PINE_QUAT],
+    });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+    expect(result.ungroundedDetails[0].snippet).toContain('Ebola virus (not listed');
+  });
+
+  it('grounds the hedged claim when the attributed document lists the organism', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**6. pH7Q Neutral Disinfectant**\n- Effective against SARS-CoV-2 (contact time not stated in the efficacy data).\n- Source: [doc:${PH7Q.documentId}]`,
+      sources: [PH7Q, PINE_QUAT],
+    });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(PH7Q.documentId);
+  });
+
+  it('does not require an organism named only inside the negated parenthesis', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**pH7Q Neutral Disinfectant**\n- Effective against SARS-CoV-2 (not effective against spores).\n- Source: [doc:${PH7Q.documentId}]`,
+      sources: [PH7Q],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('a negation in the main clause is still a conservative statement, not a claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product does not kill spores (see the label for its registered claims).',
+      sources: [PH7Q],
+    });
+    expect(result.categoriesDetected).not.toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 identical bullets under different product headings', () => {
+  const GE = {
+    documentId: 'f2ccc9d5-d443-449e-9d3f-4ddfc8a74fe0',
+    title: 'Efficacy Data 390 Ge Fight Bac RTU',
+    documentKind: 'efficacy',
+    documentBody: 'GE Fight Bac RTU. Effective against SARS-CoV-2 in 1 minute.',
+  };
+  const PINE_QUAT = {
+    documentId: '4629d646-6b68-4511-8795-cc221c91fbb3',
+    title: 'Efficacy Data 304 Pine Quat',
+    documentKind: 'efficacy',
+    documentBody: 'Pine Quat. Effective against Pseudomonas aeruginosa in 10 minutes.',
+  };
+  const bullet = '- Effective against SARS-CoV-2 with a 1-minute contact time.';
+  // The live ROW-09 shape: a heading per product, the claim bullet, then that product's Source bullet.
+  const draftAnswer = [
+    '**1. GE Fight Bac RTU**',
+    bullet,
+    `- Source: GE Fight Bac RTU efficacy data. [doc:${GE.documentId}]`,
+    '',
+    '**2. Pine Quat**',
+    bullet,
+    `- Source: Pine Quat efficacy data. [doc:${PINE_QUAT.documentId}]`,
+  ].join('\n');
+
+  it('judges each copy against ITS heading: the Pine Quat copy fails, the GE copy is bound to GE', () => {
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [GE, PINE_QUAT] });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+    const details = result.ungroundedDetails.filter((d) => d.category === 'efficacy_claim');
+    expect(details).toHaveLength(1);
+    expect(details[0]).toMatchObject({ snippet: bullet, occurrence: 1 });
+    expect(details[0].evidenceCheck).toMatch(/^claim_terms_missing_from_attributed_documents:/);
+    const bindings = result.groundedBindings.filter((b) => b.category === 'efficacy_claim');
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]).toMatchObject({ documentId: GE.documentId, channel: 'key_term' });
+  });
+
+  it('the planner withholds only the failed occurrence and keeps the grounded identical bullet', () => {
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [GE, PINE_QUAT] });
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer,
+      userMessage: 'Which Betco disinfectants are effective against SARS-CoV-2 and what are their contact times?',
+      grounding,
+      productLineLock: null,
+      sources: [{ documentKind: 'efficacy' }, { documentKind: 'efficacy' }],
+    });
+    expect(plan.mode).toBe('sentence_redaction');
+    if (plan.mode === 'decline') throw new Error('unreachable');
+    expect(plan.withheldSpans).toHaveLength(1);
+    const lines = plan.redactedText.split('\n');
+    expect(lines[1]).toBe(bullet);
+    expect(lines[5]).toMatch(/withheld/);
+    expect(plan.redactedText.split(bullet).length - 1).toBe(1);
+  });
+
+  it('grounds both copies when both headings’ documents carry the organism', () => {
+    const PINE_QUAT_SARS = { ...PINE_QUAT, documentBody: 'Pine Quat. Effective against SARS-CoV-2 in 10 minutes.' };
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [GE, PINE_QUAT_SARS] });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    const bound = result.groundedBindings.filter((b) => b.category === 'efficacy_claim').map((b) => b.documentId);
+    expect(bound).toEqual([GE.documentId, PINE_QUAT_SARS.documentId]);
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 attribution gaps found by replay', () => {
+  const TRIFORCE = {
+    documentId: '9953c191-47b9-4167-8784-452c688f6a9e',
+    title: 'Efficacy Data 333 Triforce',
+    documentKind: 'efficacy',
+    productLineKey: 'LINE-TRIFORCE',
+    documentBody: 'Triforce. Effective against SARS-CoV-2 in 1 minute.',
+  };
+  const ONE_MINUTE_PROFILE = {
+    documentId: 'a1b2c3d4-0000-4000-8000-000000000011',
+    title: '1 Minute Disinfectant',
+    documentKind: 'product_line_profile',
+    productLineKey: 'LINE-TRIFORCE',
+    documentBody: 'One-step disinfectant for hard surfaces.',
+  };
+  const GE_RTU = {
+    documentId: 'f2ccc9d5-d443-449e-9d3f-4ddfc8a74fe0',
+    title: 'Efficacy Data 390 Ge Fight Bac RTU',
+    documentKind: 'efficacy',
+    productLineKey: 'LINE-GE-RTU',
+    documentBody: 'GE Fight Bac RTU. Effective against SARS-CoV-2 in 1 minute.',
+  };
+  const GE_WIPES = {
+    documentId: 'f42e7404-76d7-4ba7-a60d-5d35c64aa5e7',
+    title: 'Efficacy Data Ge Fight Bac Wipes',
+    documentKind: 'efficacy',
+    productLineKey: 'LINE-GE-WIPES',
+    documentBody: 'GE Fight Bac Wipes. Effective against Norovirus in 30 seconds.',
+  };
+  const QUAT_LABEL = {
+    documentId: '23d9e335-fe9e-476a-b1b6-38ddeeaa316b',
+    title: 'Quat Stat 5',
+    documentKind: 'label',
+    documentBody: 'Effective against SARS-Related Coronavirus 2 (SARS-CoV-2) in 1 minute.',
+  };
+  const QUAT_EFFICACY = {
+    documentId: '1f0d1d94-b59b-469b-9436-4e0f19a1d82d',
+    title: 'Efficacy Data 341 Quat Stat 5',
+    documentKind: 'efficacy',
+    documentBody: 'Quat Stat 5. Pseudomonas aeruginosa 10 minutes.',
+  };
+
+  it('a qualified heading ("Triforce Disinfectant (1 Minute Disinfectant)") attributes the one title carrying its core', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**5. Triforce Disinfectant (1 Minute Disinfectant)**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `- Source: Triforce efficacy data. [doc:${TRIFORCE.documentId}]`,
+      ].join('\n'),
+      sources: [GE_RTU, TRIFORCE, ONE_MINUTE_PROFILE],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(TRIFORCE.documentId);
+  });
+
+  it('a core shared by two products ("GE Fight Bac" → RTU and Wipes) attributes neither', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**2. GE Fight Bac Wipes**',
+        '- Effective against SARS-CoV-2 with a 30-second contact time.',
+        `- Source: wipes efficacy data. [doc:${GE_WIPES.documentId}]`,
+      ].join('\n'),
+      sources: [GE_RTU, GE_WIPES],
+    });
+    // The Wipes title matches the heading exactly and is cited; its sheet lacks SARS-CoV-2, and the
+    // RTU sheet must not be borrowed through the shared "ge fight bac" core.
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('reads every id in a multi-id citation marker ("[doc:a; doc:b]")', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '3. **Quat-Stat 5 / 5 Minute Alkaline Disinfectant**',
+        '   - Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `   - Source: Quat Stat 5 label and Efficacy Data 341 Quat Stat 5 [doc:${QUAT_LABEL.documentId}; doc:${QUAT_EFFICACY.documentId}]`,
+      ].join('\n'),
+      sources: [QUAT_LABEL, QUAT_EFFICACY, GE_RTU],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(QUAT_LABEL.documentId);
+  });
+
+  it('a class-noun gloss beside a named organism is not a second claim ("(athlete’s foot fungus)")', () => {
+    const FIGHT_BAC = {
+      documentId: 'cbb72d77-5f55-4e2e-ba81-20dbc5155faa',
+      title: 'Efficacy Data 311 Fight Bac',
+      documentKind: 'efficacy',
+      documentBody: 'Betco Disinfectant Fight-Bac RTU. Trichophyton mentagrophytes 10 minutes. Kills listed organisms.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**4. Disinfectant Fight-Bac™ RTU**',
+        '- **Fungicidal claim:** Effective against Trichophyton mentagrophytes (athlete’s foot fungus).',
+        `Source: Fight Bac efficacy data [doc:${FIGHT_BAC.documentId}]`,
+      ].join('\n'),
+      sources: [FIGHT_BAC],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    // A sentence naming only class nouns still needs every one of them.
+    const generic = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**Disinfectant Fight-Bac™ RTU**\n- Kills bacteria and fungi.\nSource: [doc:${FIGHT_BAC.documentId}]`,
+      sources: [FIGHT_BAC],
+    });
+    expect(generic.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('a preceding sibling item’s Source line never attributes the next product’s claim (flat list)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `- Source: GE efficacy data. [doc:${GE_RTU.documentId}]`,
+        '- **GE Fight Bac Wipes**: Effective against SARS-CoV-2 with a 30-second contact time.',
+        `- Source: wipes efficacy data. [doc:${GE_WIPES.documentId}]`,
+      ].join('\n'),
+      sources: [GE_RTU, GE_WIPES],
+    });
+    const details = result.ungroundedDetails.filter((d) => d.category === 'efficacy_claim');
+    expect(details).toHaveLength(1);
+    expect(details[0].snippet).toContain('GE Fight Bac Wipes');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(GE_RTU.documentId);
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 organism term vs efficacy-sheet spelling', () => {
+  it('"SARS-CoV-2" grounds on a sheet that stores "SARS CoV 2 (Cause of COVID 19)"', () => {
+    const TRIFORCE = {
+      documentId: '9953c191-47b9-4167-8784-452c688f6a9e',
+      title: 'Efficacy Data 333 Triforce',
+      documentKind: 'efficacy',
+      documentBody: 'Triforce. SARS CoV 2 (Cause of COVID 19) 60 seconds. Kills listed organisms.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**5. Triforce Disinfectant (1 Minute Disinfectant)**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `- Source: Triforce efficacy data. [doc:${TRIFORCE.documentId}]`,
+      ].join('\n'),
+      sources: [TRIFORCE],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+});

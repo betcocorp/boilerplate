@@ -2142,8 +2142,11 @@ export function planRegulatedClaimRedaction(input: {
    * containing sentence withheld — not just the first. A sentence already withheld for one category
    * (or one occurrence) is left alone the next time it is reached.
    */
-  let redactedText = input.draftAnswer;
-  const removedSentences = new Set<string>();
+  // B0-1131 — removals are collected as RANGES of the original draft and spliced once at the end,
+  // instead of `replaceAll(sentence, marker)` on a running copy: `replaceAll` also removed every
+  // identical copy of a sentence elsewhere in the draft, which is wrong once each copy is judged on
+  // its own (identical bullets under different product headings; the one that grounded stays).
+  const removals: Array<{ start: number; end: number; marker: string }> = [];
   const unlocatedSnippets: string[] = [];
   const withheldSpans: Array<{ category: RegulatedClaimCategory; span: string; evidenceCheck: string }> = [];
 
@@ -2152,26 +2155,37 @@ export function planRegulatedClaimRedaction(input: {
       if (!matchesCategory(detail.category)) continue;
       let matchedAnyOccurrence = false;
       let searchFrom = 0;
+      // B0-1131 — a sentence-shaped detail names WHICH occurrence failed (`occurrence`); the other
+      // copies of the same text (identical bullets under other products' headings) were judged on
+      // their own and are left alone when they grounded. Token-shaped details carry no occurrence
+      // and still withhold every containing sentence, as before.
+      let occurrence = -1;
       for (;;) {
         const occurrenceIndex = input.draftAnswer.indexOf(detail.snippet, searchFrom);
         if (occurrenceIndex < 0) break;
+        occurrence += 1;
         matchedAnyOccurrence = true;
         searchFrom = occurrenceIndex + detail.snippet.length;
+        if (detail.occurrence !== undefined && detail.occurrence !== occurrence) continue;
         const sentence = expandRegulatedClaimSnippetToSentence(
           input.draftAnswer,
           detail.snippet,
           occurrenceIndex,
         );
-        if (!sentence || removedSentences.has(sentence) || !redactedText.includes(sentence)) {
-          continue;
-        }
-        removedSentences.add(sentence);
+        if (!sentence) continue;
+        // The containing sentence starts at or before the snippet occurrence.
+        let start = input.draftAnswer.lastIndexOf(sentence, occurrenceIndex);
+        if (start < 0 || start + sentence.length <= occurrenceIndex) start = input.draftAnswer.indexOf(sentence, occurrenceIndex);
+        if (start < 0) continue;
+        const end = start + sentence.length;
+        // A sentence already withheld for one category (or one occurrence) is left alone.
+        if (removals.some((r) => start < r.end && end > r.start)) continue;
+        removals.push({ start, end, marker: regulatedClaimWithheldMarker(detail.category) });
         withheldSpans.push({
           category: detail.category,
           span: sentence,
           evidenceCheck: detail.evidenceCheck ?? 'unspecified',
         });
-        redactedText = redactedText.replaceAll(sentence, regulatedClaimWithheldMarker(detail.category));
       }
       if (!matchedAnyOccurrence) {
         unlocatedSnippets.push(detail.snippet);
@@ -2180,6 +2194,19 @@ export function planRegulatedClaimRedaction(input: {
   };
   withholdPass(isSentenceRedactable);
   withholdPass((category) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(category));
+
+  let redactedText = input.draftAnswer;
+  if (removals.length > 0) {
+    removals.sort((a, b) => a.start - b.start);
+    let cursor = 0;
+    const parts: string[] = [];
+    for (const r of removals) {
+      parts.push(input.draftAnswer.slice(cursor, r.start), r.marker);
+      cursor = r.end;
+    }
+    parts.push(input.draftAnswer.slice(cursor));
+    redactedText = parts.join('');
+  }
 
   if (redactedText === input.draftAnswer) {
     // Nothing at all could be located, so nothing was redacted; serving the untouched draft under a
@@ -5357,6 +5384,8 @@ export async function runProductSupportWorkflow(input: {
       documentKind: s.documentKind,
       // B0-1143 — groups a product's profile, label and SDS for per-product contact-time grounding.
       productLineKey: productLineKeyByDocumentId.get(s.documentId) ?? null,
+      // B0-1131 — the stitched chunks, so each grounded claim can be bound to its evidence chunk.
+      chunks: fullDocumentBodies.get(s.documentId)?.chunks,
     }));
     /**
      * B0-1144 — the exact pool the guardrail judged this turn against, persisted on every
@@ -5462,6 +5491,7 @@ export async function runProductSupportWorkflow(input: {
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             groundedSourceCount: regulatedClaimGroundingPool.length,
             groundingSources: regulatedClaimGroundingPool,
+            groundedBindings: regulatedClaimGrounding.groundedBindings,
           },
           thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
           verdict: 'bypassed',
@@ -5538,9 +5568,11 @@ export async function runProductSupportWorkflow(input: {
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             redactionMode: regulatedClaimRedactionPlan.mode,
-            // B0-1131 — the pool this verdict was judged against, and every span removed with why.
+            // B0-1131 — the pool this verdict was judged against, every span removed with why, and
+            // what each KEPT claim was bound to (document, chunk, grounding path, matched strings).
             groundedSourceCount: regulatedClaimGroundingPool.length,
             groundingSources: regulatedClaimGroundingPool,
+            groundedBindings: regulatedClaimGrounding.groundedBindings,
             ...(regulatedClaimRedactionPlan.mode !== 'decline'
               ? { withheldSpans: regulatedClaimRedactionPlan.withheldSpans }
               : {}),
@@ -5588,6 +5620,7 @@ export async function runProductSupportWorkflow(input: {
           ungroundedCategories: [],
           groundedSourceCount: regulatedClaimGroundingPool.length,
           groundingSources: regulatedClaimGroundingPool,
+          groundedBindings: regulatedClaimGrounding.groundedBindings,
           groundingMode:
             regulatedClaimGrounding.keyTermGroundedCategories.length > 0 ? 'key_term' : 'verbatim',
           // What the guardrail rejected on the REVISED draft, i.e. what our own revision pass
@@ -5621,6 +5654,8 @@ export async function runProductSupportWorkflow(input: {
           ungroundedCategories: [],
           groundedSourceCount: regulatedClaimGroundingPool.length,
           groundingSources: regulatedClaimGroundingPool,
+          // B0-1131 — what each claim was bound to (document, chunk, grounding path, matched strings).
+          groundedBindings: regulatedClaimGrounding.groundedBindings,
           // B0-888 — 'key_term' when at least one compatibility/efficacy_claim sentence on this
           // draft was grounded via the key-term/adjacent-quote fallback rather than a plain
           // verbatim match; 'verbatim' otherwise (including when nothing regulated was detected).
