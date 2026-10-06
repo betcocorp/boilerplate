@@ -9,6 +9,7 @@ import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-sp
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { productSupportTools } from '~/lib/tools/definitions';
+import { ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/decisive-assertion-coverage';
 import {
   BATHROOM_SPECIALIST_SYSTEM_PROMPT,
   effectivePromptIdForDecision,
@@ -80,6 +81,8 @@ export type PromptBundleInputs = {
   shared: SharedPromptTexts;
   /** The validator system prompt — part of the run's prompt surface, not of any one item's route. */
   validatorPrompt: string;
+  /** The bounded pre-validator answer-coverage repair prompt. */
+  answerCoverageRevisionPrompt: string;
   /** Tool definitions exactly as sent to the model (order is significant). */
   tools: unknown;
 };
@@ -198,6 +201,7 @@ export function canonicalPromptBundleInput(input: PromptBundleInputs): string {
     canonicalField('preamble', input.shared.preamble),
     canonicalField('sharedInstructions', input.shared.sharedInstructions),
     canonicalField('validator', input.validatorPrompt),
+    canonicalField('answerCoverageRevision', input.answerCoverageRevisionPrompt),
     canonicalField('tools', stableStringify(input.tools)),
   ].join('');
 }
@@ -256,6 +260,7 @@ export const PROMPT_BUNDLE_VERSION: string = computePromptBundleVersionFrom({
   specialists: PRODUCT_SUPPORT_SPECIALIST_PROMPTS,
   shared: PRODUCT_SUPPORT_SHARED_PROMPTS,
   validatorPrompt: VALIDATOR_SYSTEM_PROMPT,
+  answerCoverageRevisionPrompt: ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT,
   tools: productSupportTools,
 });
 

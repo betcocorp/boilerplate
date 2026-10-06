@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { productSupportTools } from '~/lib/tools/definitions';
+import { ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/decisive-assertion-coverage';
 import {
   PRODUCT_SUPPORT_PREAMBLE,
   PRODUCT_SUPPORT_SHARED_INSTRUCTIONS,
@@ -52,6 +53,7 @@ const fixtureBundle: PromptBundleInputs = {
   specialists: fixtureSpecialists,
   shared: fixtureShared,
   validatorPrompt: 'validator policy',
+  answerCoverageRevisionPrompt: 'answer coverage revision policy',
   tools: [{ type: 'function', name: 'search_product_docs', parameters: { type: 'object' } }],
 };
 
@@ -273,6 +275,7 @@ describe('promptBundleVersion (B0-393)', () => {
           sharedInstructions: PRODUCT_SUPPORT_SHARED_INSTRUCTIONS,
         },
         validatorPrompt: VALIDATOR_SYSTEM_PROMPT,
+        answerCoverageRevisionPrompt: ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT,
         tools: productSupportTools,
       }),
     );

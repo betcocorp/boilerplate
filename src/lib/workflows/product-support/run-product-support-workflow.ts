@@ -51,6 +51,14 @@ import {
 import { requireFloorProcedureTool } from '~/lib/workflows/product-support/floor-procedure-backstop';
 import { applyFloorRecoatRationaleBackstop } from '~/lib/workflows/product-support/floor-recoat-rationale-backstop';
 import { applyDilutionDwellBackstop } from '~/lib/workflows/product-support/dilution-dwell-backstop';
+import {
+  ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT,
+  buildDecisiveAssertions,
+  coverageEvidenceSummary,
+  coverageRevisionIssues,
+  evaluateAnswerCoverage,
+  selectCoverageRevision,
+} from '~/lib/workflows/product-support/decisive-assertion-coverage';
 import { applyProductPageUrlCitationBackstop } from '~/lib/workflows/product-support/product-page-url-citation-backstop';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
@@ -911,6 +919,9 @@ export type RetrievedSourceMeta = {
   snippet: string;
   documentBody: string;
   documentKind: string | null;
+  requestedSectionType?: string | null;
+  selectedSectionTypes?: string[];
+  documentBodyChunkIds?: string[];
   /** B0-257: source PDF/markdown S3 location, carried through for regulated-claim citation. */
   s3Key: string | null;
   sourceUri: string | null;
@@ -1605,6 +1616,9 @@ export function collectSourceMetaFromToolOutputs(
           snippet?: string;
           documentBody?: string;
           documentKind?: string;
+          requestedSectionType?: string | null;
+          selectedSectionTypes?: string[];
+          documentBodyChunkIds?: string[];
           s3Key?: string | null;
           sourceUri?: string | null;
         }>;
@@ -1628,6 +1642,20 @@ export function collectSourceMetaFromToolOutputs(
         const s3Key = typeof source.s3Key === 'string' && source.s3Key.trim() ? source.s3Key : null;
         const sourceUri =
           typeof source.sourceUri === 'string' && source.sourceUri.trim() ? source.sourceUri : null;
+        const requestedSectionType =
+          typeof source.requestedSectionType === 'string' && source.requestedSectionType.trim()
+            ? source.requestedSectionType.trim()
+            : null;
+        const selectedSectionTypes = Array.isArray(source.selectedSectionTypes)
+          ? source.selectedSectionTypes.filter(
+              (value): value is string => typeof value === 'string' && value.trim().length > 0,
+            )
+          : [];
+        const documentBodyChunkIds = Array.isArray(source.documentBodyChunkIds)
+          ? source.documentBodyChunkIds.filter(
+              (value): value is string => typeof value === 'string' && value.trim().length > 0,
+            )
+          : [];
 
         if (existing) {
           // Prefer the entry that carries the larger document body (full text vs snippet).
@@ -1640,6 +1668,15 @@ export function collectSourceMetaFromToolOutputs(
               documentKind:
                 existing.documentKind ??
                 (typeof source.documentKind === 'string' ? source.documentKind : null),
+              requestedSectionType: existing.requestedSectionType ?? requestedSectionType,
+              selectedSectionTypes:
+                (existing.selectedSectionTypes?.length ?? 0) > 0
+                  ? existing.selectedSectionTypes
+                  : selectedSectionTypes,
+              documentBodyChunkIds:
+                (existing.documentBodyChunkIds?.length ?? 0) > 0
+                  ? existing.documentBodyChunkIds
+                  : documentBodyChunkIds,
               s3Key: existing.s3Key ?? s3Key,
               sourceUri: existing.sourceUri ?? sourceUri,
             });
@@ -1655,6 +1692,9 @@ export function collectSourceMetaFromToolOutputs(
           documentBody,
           documentKind:
             typeof source.documentKind === 'string' ? source.documentKind : null,
+          requestedSectionType,
+          selectedSectionTypes,
+          documentBodyChunkIds,
           s3Key,
           sourceUri,
         });
@@ -2917,6 +2957,10 @@ export async function runProductSupportWorkflow(input: {
    */
   // B0-984 — read once per turn; the same value gates the runtimes below and is recorded here.
   const factToolEnforcementEnabled = await isFactToolEnforcementEnabled();
+  const answerCoverageEnabled = await getBooleanSetting(
+    'BEX_DECISIVE_ASSERTION_COVERAGE_ENABLED',
+    true,
+  );
   const runtimeConfig: RuntimeConfig = {
     useValidator,
     earlyDeclineGateEnabled,
@@ -4879,6 +4923,110 @@ export async function runProductSupportWorkflow(input: {
     });
     markStepClosed(agentStep.id);
 
+    const decisiveAssertions = answerCoverageEnabled
+      ? buildDecisiveAssertions({ query: input.userMessage, sources: sourceMeta })
+      : [];
+    let answerCoverage = evaluateAnswerCoverage({
+      draftAnswer,
+      requirements: decisiveAssertions,
+    });
+
+    if (answerCoverage.status === 'revision_required') {
+      const coverageStep = await insertWorkflowStep({
+        workflow_run_id: run.id,
+        step_name: 'answer_coverage_revision',
+        status: 'running',
+        input: jsonContent({
+          missingAssertionIds: answerCoverage.missingAssertionIds,
+          conflictingAssertionIds: answerCoverage.conflictingAssertionIds,
+          requirements: decisiveAssertions.map((assertion) => ({
+            id: assertion.id,
+            category: assertion.category,
+            origin: assertion.origin,
+            sourceDocumentId: assertion.sourceDocumentId,
+            sourceChunkIds: assertion.sourceChunkIds,
+            selectedSectionTypes: assertion.selectedSectionTypes,
+            authority: assertion.authority,
+          })),
+          ...recordPrompt({
+            stage: 'revision',
+            instructions: ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT,
+            model: await resolveRevisionModel(input.modelTag),
+            runtime: 'responses',
+          }),
+        }),
+      });
+      markStepOpen(coverageStep.id);
+
+      try {
+        const coverageRevision = await runRevisionPass({
+          draftAnswer,
+          validatorIssues: coverageRevisionIssues(answerCoverage, draftAnswer),
+          evidenceSummary: coverageEvidenceSummary(decisiveAssertions),
+          modelTag: input.modelTag,
+          mode: 'answer_coverage',
+        });
+        const revisionSelection = selectCoverageRevision({
+          originalDraft: draftAnswer,
+          revisionCandidate: coverageRevision.text,
+          requirements: decisiveAssertions,
+        });
+        answerCoverage = revisionSelection.coverage;
+        draftAnswer = revisionSelection.draftAnswer;
+        if (revisionSelection.adopted) {
+          answerProvenance = 'revision_pass';
+        }
+        await completeWorkflowStep(coverageStep.id, {
+          status: 'completed',
+          output: jsonContent({
+            status: answerCoverage.status,
+            missingAssertionIds: answerCoverage.missingAssertionIds,
+            conflictingAssertionIds: answerCoverage.conflictingAssertionIds,
+            revised: Boolean(coverageRevision.text.trim()),
+            adopted: revisionSelection.adopted,
+            usage: coverageRevision.usage,
+          }),
+        });
+      } catch (error) {
+        answerCoverage = {
+          ...answerCoverage,
+          status: 'revision_failed',
+        };
+        await completeWorkflowStep(coverageStep.id, {
+          status: 'completed',
+          output: jsonContent({
+            status: answerCoverage.status,
+            missingAssertionIds: answerCoverage.missingAssertionIds,
+            conflictingAssertionIds: answerCoverage.conflictingAssertionIds,
+            revised: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        });
+      } finally {
+        markStepClosed(coverageStep.id);
+      }
+    }
+
+    logInfo('answer.coverage', {
+      trace_id: wfCtx.traceId,
+      workflow_run_id: wfCtx.workflowRunId,
+      conversation_id: wfCtx.conversationId,
+      enabled: answerCoverageEnabled,
+      status: answerCoverage.status,
+      requirement_count: decisiveAssertions.length,
+      requirement_categories: [...new Set(decisiveAssertions.map((item) => item.category))],
+      requirement_document_ids: [
+        ...new Set(
+          decisiveAssertions
+            .map((item) => item.sourceDocumentId)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ],
+      requirement_chunk_ids: [...new Set(decisiveAssertions.flatMap((item) => item.sourceChunkIds))],
+      missing_assertion_ids: answerCoverage.missingAssertionIds,
+      conflicting_assertion_ids: answerCoverage.conflictingAssertionIds,
+    });
+
     const validationStep = await insertWorkflowStep({
       workflow_run_id: run.id,
       step_name: 'validator',
@@ -6351,6 +6499,23 @@ export async function runProductSupportWorkflow(input: {
     if (productPageUrlCitationResult.applied) {
       finalText = productPageUrlCitationResult.answer;
     }
+
+    const finalAnswerCoverage = evaluateAnswerCoverage({
+      draftAnswer: finalText,
+      requirements: decisiveAssertions,
+      afterRevision: true,
+    });
+    logInfo('answer.coverage.final', {
+      trace_id: wfCtx.traceId,
+      workflow_run_id: wfCtx.workflowRunId,
+      conversation_id: wfCtx.conversationId,
+      status: finalAnswerCoverage.status,
+      missing_assertion_ids: finalAnswerCoverage.missingAssertionIds,
+      conflicting_assertion_ids: finalAnswerCoverage.conflictingAssertionIds,
+      validator_removed_assertion:
+        answerCoverage.status === 'complete' && finalAnswerCoverage.status === 'revision_failed',
+      answer_provenance: answerProvenance,
+    });
 
     // B0-493 — run-level retrieval configuration rollup, computed from the FINAL resolved trace
     // (every forced/injected search call included), not just the model's own calls.
