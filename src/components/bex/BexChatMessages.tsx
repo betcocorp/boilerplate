@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  Route,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
@@ -417,7 +418,23 @@ function BexAiElementsMessages({
                     <AssistantDetails messageId={m.id} meta={m.meta} />
                   ) : null}
                   {!isUser && !isStreamingPlaceholder ? (
-                    <div className="flex justify-end">
+                    <div className="flex justify-end gap-1">
+                      {isAdminChrome && (m.meta?.workflowRunId ?? m.workflowRunId) ? (
+                        <Button
+                          asChild
+                          aria-label="Open trace report"
+                          className="h-8 rounded-xl text-xs"
+                          size="sm"
+                          variant="ghost"
+                        >
+                          <Link
+                            href={`/admin/observability/${m.meta?.workflowRunId ?? m.workflowRunId}`}
+                          >
+                            <Route className="size-3.5" />
+                            Trace
+                          </Link>
+                        </Button>
+                      ) : null}
                       <Button
                         aria-label="Copy message"
                         className="h-8 rounded-xl text-xs"
