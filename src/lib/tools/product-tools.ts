@@ -266,7 +266,9 @@ function sourcePayload(
     documentBodyChunkIds: s.documentBodyChunkIds,
     originalMatchedChunkId: s.originalMatchedChunkId,
     requestedSectionType: s.requestedSectionType,
+    selectedSectionTypes: s.selectedSectionTypes,
     sectionOverrideApplied: s.sectionOverrideApplied,
+    sectionFallbackReason: s.sectionFallbackReason,
     // B0-490 — `similarity` is the unambiguous key (the raw pgvector/hybrid score for the
     // surviving match); `confidence` is kept alongside it for back-compat with any reader still
     // keying off the old name, but is never the field a NEW reader should source from.
@@ -307,7 +309,9 @@ function sourcePayload(
       documentBodyChunkIds: [VERIFIED_FACTS_SOURCE_ID],
       originalMatchedChunkId: null,
       requestedSectionType: null,
+      selectedSectionTypes: [],
       sectionOverrideApplied: false,
+      sectionFallbackReason: null,
       similarity: 1,
       confidence: 1,
       // Synthetic source — never went through retrieval, so it has no rerank verdict. Null, not 0:

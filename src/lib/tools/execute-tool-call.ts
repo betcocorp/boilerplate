@@ -107,8 +107,10 @@ export type ExecutedToolCall = {
 function logMatchedChunkWindows(
   payload: Record<string, unknown>,
   input: { name: string; callId: string; auditCtx?: AuditContext },
+  modelPayload?: Record<string, unknown> | null,
 ): void {
   if (!Array.isArray(payload.sources)) return;
+  const modelSources = Array.isArray(modelPayload?.sources) ? modelPayload.sources : [];
 
   const windows = payload.sources.flatMap((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
@@ -118,6 +120,14 @@ function logMatchedChunkWindows(
       ? source.documentBodyChunkIds.filter((id): id is string => typeof id === 'string')
       : [];
     if (windowChunkIds.length === 0) return [];
+    const modelSource = modelSources.find((candidate) => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+      const record = candidate as Record<string, unknown>;
+      return record.documentId === source.documentId && record.chunkId === source.chunkId;
+    }) as Record<string, unknown> | undefined;
+    const modelWindowChunkIds = Array.isArray(modelSource?.documentBodyChunkIds)
+      ? modelSource.documentBodyChunkIds.filter((id): id is string => typeof id === 'string')
+      : null;
 
     return [
       {
@@ -129,7 +139,12 @@ function logMatchedChunkWindows(
             : null,
         requested_section_type:
           typeof source.requestedSectionType === 'string' ? source.requestedSectionType : null,
+        selected_section_types: Array.isArray(source.selectedSectionTypes)
+          ? source.selectedSectionTypes.filter((value): value is string => typeof value === 'string')
+          : [],
         section_override_applied: source.sectionOverrideApplied === true,
+        section_fallback_reason:
+          typeof source.sectionFallbackReason === 'string' ? source.sectionFallbackReason : null,
         document_kind:
           typeof source.documentKind === 'string' ? source.documentKind : null,
         window_chunk_ids: windowChunkIds,
@@ -140,6 +155,16 @@ function logMatchedChunkWindows(
           typeof source.documentBodyTruncated === 'boolean'
             ? source.documentBodyTruncated
             : null,
+        model_context_present: modelSource !== undefined,
+        model_window_chunk_ids: modelWindowChunkIds,
+        model_window_chunk_count: modelWindowChunkIds?.length ?? null,
+        model_window_chars:
+          typeof modelSource?.documentBodyChars === 'number' ? modelSource.documentBodyChars : null,
+        model_window_truncated:
+          typeof modelSource?.documentBodyTruncated === 'boolean'
+            ? modelSource.documentBodyTruncated
+            : null,
+        model_chunk_provenance_complete: modelWindowChunkIds !== null,
       },
     ];
   });
@@ -268,7 +293,6 @@ export async function executeToolCall(input: {
       input.name,
       resolveToolTimeoutMs(input.name),
     );
-    logMatchedChunkWindows(payload, input);
     const out = JSON.stringify(payload);
 
     // B0-437 — only carry a model variant when it is actually smaller; an equal-size variant would
@@ -295,6 +319,19 @@ export async function executeToolCall(input: {
       });
     }
     const modelFacing = budget.applied ? budget.output : useModelOut ? modelOut : null;
+    let modelPayloadForDiagnostics: Record<string, unknown> | null = payload;
+    if (modelFacing !== null) {
+      try {
+        const parsed = JSON.parse(modelFacing) as unknown;
+        modelPayloadForDiagnostics =
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : null;
+      } catch {
+        modelPayloadForDiagnostics = null;
+      }
+    }
+    logMatchedChunkWindows(payload, input, modelPayloadForDiagnostics);
 
     return {
       output: out,

@@ -38,6 +38,8 @@ describe('isClaimLikeQuery — B0-443 phrasing matrix', () => {
     'flammable',
     'corrosive',
     'directions for use',
+    'sanitize a soft surface',
+    'disinfect upholstered furniture',
   ];
 
   // Not claim-like phrasing at all -- guards against the fix over-matching.

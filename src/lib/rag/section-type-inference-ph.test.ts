@@ -12,4 +12,10 @@ describe('pH section-type inference', () => {
   it('does not match the letters ph inside unrelated words', () => {
     expect(inferSectionTypeFromQuery('Which upholstery cleaner should I use?')).toBeNull();
   });
+
+  it('prioritizes an explicit PPE request over a product name containing Concentrate', () => {
+    expect(
+      inferSectionTypeFromQuery('What PPE do I need when using Speedex Concentrate?'),
+    ).toBe('exposure_ppe');
+  });
 });

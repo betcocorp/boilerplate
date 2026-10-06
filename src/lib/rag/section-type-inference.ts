@@ -21,6 +21,11 @@ const QUERY_PATTERNS: Array<{ pattern: RegExp; sectionType: string }> = [
     pattern: /\b(bactericidal|germicidal|antibacterial efficacy|disinfectant efficacy|kills?\b.{0,30}\b(bacteria|germs?|staph(ylococcus)?|salmonella|e\.?\s?coli|pseudomonas|listeria))\b/i,
     sectionType: 'bactericidal_efficacy',
   },
+  // Section 8 — Exposure / PPE. Keep this ahead of broad formulation terms such as "concentrate".
+  {
+    pattern: /\b(ppe|personal protective|gloves|goggles|respirator|exposure limit|osha pel|acgih tlv|ventilation requirement)\b/i,
+    sectionType: 'exposure_ppe',
+  },
   {
     pattern: /\b(contact time|dwell time|kill time|log reduction|percent reduction|% reduction|epa kill claim|efficacy (claim|data|test|report)|dilution ratio|oz.{0,3}gal|mL?.{0,3}L|ppm|parts per million|dilution|prepare|mix|concentrate|rtU|ready to use|undiluted)\b/i,
     sectionType: 'organism_contact_time',
@@ -64,11 +69,6 @@ const QUERY_PATTERNS: Array<{ pattern: RegExp; sectionType: string }> = [
   {
     pattern: /\b(ecolog(y|ical)|aquatic toxicity|bioaccumulation|persistence|environmental fate)\b/i,
     sectionType: 'ecological',
-  },
-  // Section 8 — Exposure / PPE
-  {
-    pattern: /\b(ppe|personal protective|gloves|goggles|respirator|exposure limit|osha pel|acgih tlv|ventilation requirement)\b/i,
-    sectionType: 'exposure_ppe',
   },
   // Section 9 — Physical Properties
   {

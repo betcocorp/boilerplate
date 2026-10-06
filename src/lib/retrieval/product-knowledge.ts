@@ -8,8 +8,8 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
   assembleChunkIndexSetBody,
-  assembleDocumentSectionBodies,
   assembleNeighborChunkBodies,
+  assembleSelectedDocumentPassages,
   chunkWindowKey,
   fetchDocumentSourceRefs,
   fetchProductLineWebUrls,
@@ -32,6 +32,10 @@ import {
   type ProductLineFacts,
 } from '~/lib/retrieval/product-facts';
 import { suppressNearDuplicateMatches } from '~/lib/retrieval/near-duplicate-suppression';
+import {
+  passageSectionTypesForDocument,
+  resolvePassageIntent,
+} from '~/lib/retrieval/passage-intent';
 import { MODEL_DOCUMENT_BODY_MAX_CHARS } from '~/lib/tools/model-tool-payload';
 import { logWarn } from '~/lib/observability/logger';
 
@@ -91,11 +95,14 @@ export type CuratedSource = {
    * Falls back to the single matched chunk id when windowed assembly wasn't available.
    */
   documentBodyChunkIds: string[];
-  /** Original similarity-selected chunk when an SDS section override changed the grounding anchor. */
+  /** Original similarity-selected chunk when a same-document passage changed the grounding anchor. */
   originalMatchedChunkId: string | null;
-  /** Fine-grained SDS section requested by query intent when a same-document override was applied. */
+  /** Passage intent requested by the query when same-document hydration was attempted. */
   requestedSectionType: string | null;
+  /** Fine-grained SDS/label sections that produced the hydrated body. */
+  selectedSectionTypes: string[];
   sectionOverrideApplied: boolean;
+  sectionFallbackReason: 'no_matching_section' | 'assembly_error' | null;
   // B0-548: `matchedChunkText` (the untruncated matched chunk) used to live here too, but it was
   // always a substring of `documentBody` (or, when body assembly fell back to the single chunk,
   // byte-identical to it) with no downstream reader — `snippet` already covers the short-preview
@@ -432,7 +439,13 @@ function buildCuratedSource(
   body: AssembledDocumentBody | undefined,
   sourceRef: DocumentSourceRef | undefined,
   webUrl: string | undefined,
-  sectionOverride?: { originalMatchedChunkId: string; requestedSectionType: string },
+  sectionSelection?: {
+    originalMatchedChunkId: string | null;
+    requestedSectionType: string;
+    selectedSectionTypes: string[];
+    applied: boolean;
+    fallbackReason: 'no_matching_section' | 'assembly_error' | null;
+  },
 ): CuratedSource {
   const fallbackBody = match.chunk_text;
   const documentBody = body && body.body.length > 0 ? body.body : fallbackBody;
@@ -448,9 +461,11 @@ function buildCuratedSource(
     documentBodyTruncated: body?.truncated ?? false,
     documentBodyTokenEstimate: body?.estimatedTokens ?? null,
     documentBodyChunkIds: body?.chunkIds ?? (fallbackBody ? [match.chunk_id] : []),
-    originalMatchedChunkId: sectionOverride?.originalMatchedChunkId ?? null,
-    requestedSectionType: sectionOverride?.requestedSectionType ?? null,
-    sectionOverrideApplied: sectionOverride !== undefined,
+    originalMatchedChunkId: sectionSelection?.originalMatchedChunkId ?? null,
+    requestedSectionType: sectionSelection?.requestedSectionType ?? null,
+    selectedSectionTypes: sectionSelection?.selectedSectionTypes ?? [],
+    sectionOverrideApplied: sectionSelection?.applied === true,
+    sectionFallbackReason: sectionSelection?.fallbackReason ?? null,
     similarity: match.similarity,
     rerankScore: match.rerank_score ?? null,
     rerankRank: match.rerank_rank ?? null,
@@ -515,7 +530,9 @@ type CurationOptions = {
   maxPerDocument?: number;
   /** B0-974 — see `selectCuratedMatches`'s option of the same name (`./source-selection.ts`). */
   productAnchored?: boolean;
-  /** Replace each selected SDS's generic window with chunks from this section in the same document. */
+  /** Query text used to resolve document-specific passage intent after document selection. */
+  query?: string;
+  /** Fine-grained SDS section inferred by existing callers; also maps to label section families. */
   preferredSdsSectionType?: string | null;
 };
 
@@ -554,13 +571,14 @@ async function selectCuratedSourceMatches(
  * so B0-438 runs it once, on the winning pass only.
  *
  * B0-547: hydrates a small window around each matched chunk (`assembleNeighborChunkBodies`)
- * rather than the whole parent document (`assembleDocumentBodies`) — a retrieval tool's answer
- * is grounded by the chunk that actually matched, and the 1-2 chunks immediately around it, not
- * every section of the source document.
+ * rather than the whole parent document (`assembleDocumentBodies`). When a passage intent is
+ * available, that generic window is replaced only by matching sections from the same selected
+ * SDS/label document; failed or empty passage selection preserves the original window.
  */
 async function hydrateCuratedSources(
   selected: RagSearchMatch[],
   preferredSdsSectionType?: string | null,
+  query = '',
 ): Promise<CuratedSource[]> {
   if (selected.length === 0) {
     return [];
@@ -578,39 +596,49 @@ async function hydrateCuratedSources(
         .filter((key): key is string => Boolean(key)),
     ),
   ];
-  const normalizedSectionType = preferredSdsSectionType?.trim() || null;
-  const sdsDocumentIds = normalizedSectionType
-    ? selected
-        .filter((match) => match.document_kind.toLowerCase() === 'sds')
-        .map((match) => match.document_id)
-    : [];
-  const sectionBodiesPromise = normalizedSectionType
-    ? assembleDocumentSectionBodies(sdsDocumentIds, normalizedSectionType).catch((error) => {
-        logWarn('rag.retrieval.section_override_failed', {
-          section_type: normalizedSectionType,
-          document_ids: sdsDocumentIds,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return new Map();
+  const passageIntent = resolvePassageIntent(query, preferredSdsSectionType);
+  const passageRequests = passageIntent
+    ? selected.flatMap((match) => {
+        const documentKind = match.document_kind.toLowerCase();
+        const sectionTypes = passageSectionTypesForDocument(passageIntent, documentKind);
+        return sectionTypes.length > 0
+          ? [{ documentId: match.document_id, documentKind, sectionTypes, query }]
+          : [];
       })
-    : Promise.resolve(new Map());
+    : [];
+  let passageAssemblyFailed = false;
+  const passageBodiesPromise =
+    passageRequests.length > 0
+      ? assembleSelectedDocumentPassages(passageRequests, {
+          maxCharsPerDocument: MODEL_DOCUMENT_BODY_MAX_CHARS,
+        }).catch((error) => {
+          passageAssemblyFailed = true;
+          logWarn('rag.retrieval.section_override_failed', {
+            passage_intent: passageIntent?.key ?? null,
+            document_ids: passageRequests.map((request) => request.documentId),
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return new Map();
+        })
+      : Promise.resolve(new Map());
 
-  const [bodies, sectionBodies, sourceRefs, webUrls] = await Promise.all([
+  const [bodies, passageBodies, sourceRefs, webUrls] = await Promise.all([
     assembleNeighborChunkBodies(windowRequests),
-    sectionBodiesPromise,
+    passageBodiesPromise,
     fetchDocumentSourceRefs(documentIds),
     fetchProductLineWebUrls(productLineKeys),
   ]);
   const overriddenDocuments = new Set<string>();
 
   return selected.map((match) => {
-    const section =
-      normalizedSectionType &&
-      match.document_kind.toLowerCase() === 'sds' &&
-      !overriddenDocuments.has(match.document_id)
-        ? sectionBodies.get(match.document_id)
+    const attemptedSections = passageRequests.find(
+      (request) => request.documentId === match.document_id,
+    )?.sectionTypes;
+    const passage =
+      attemptedSections && !overriddenDocuments.has(match.document_id)
+        ? passageBodies.get(match.document_id)
         : undefined;
-    const anchor = section?.chunks[0];
+    const anchor = passage?.chunks[0];
     if (anchor) overriddenDocuments.add(match.document_id);
     const effectiveMatch: RagSearchMatch = anchor
       ? {
@@ -626,17 +654,29 @@ async function hydrateCuratedSources(
         }
       : match;
     const body =
-      section?.body ??
+      passage?.body ??
       bodies.get(chunkWindowKey({ documentId: match.document_id, chunkIndex: match.chunk_index }));
+    const sectionSelection =
+      passageIntent && attemptedSections
+        ? {
+            originalMatchedChunkId: anchor ? match.chunk_id : null,
+            requestedSectionType: passageIntent.key,
+            selectedSectionTypes: passage?.selectedSectionTypes ?? [],
+            applied: Boolean(anchor),
+            fallbackReason: anchor
+              ? null
+              : passageAssemblyFailed
+                ? ('assembly_error' as const)
+                : ('no_matching_section' as const),
+          }
+        : undefined;
 
     return buildCuratedSource(
       effectiveMatch,
       body,
       sourceRefs.get(match.document_id),
       match.product_line_key ? webUrls.get(match.product_line_key.toUpperCase()) : undefined,
-      anchor && normalizedSectionType
-        ? { originalMatchedChunkId: match.chunk_id, requestedSectionType: normalizedSectionType }
-        : undefined,
+      sectionSelection,
     );
   });
 }
@@ -648,6 +688,7 @@ async function curateUniqueDocumentSources(
   return hydrateCuratedSources(
     await selectCuratedSourceMatches(matches, options),
     options.preferredSdsSectionType,
+    options.query,
   );
 }
 
@@ -753,7 +794,7 @@ const CLAIM_LIKE_SECTION_TYPES = new Set([
  * "oz/gal"-style and "ounce(s) per gallon" literal were recognized).
  */
 const CLAIM_LIKE_QUERY_PATTERN =
-  /\bdilut\w*\b|\b(?:oz|ounces?)\.?\s*(?:\/|per)?\s*gal(?:lon)?s?\b|\bmix ratio\b|\bready.?to.?use\b|\bRTU\b|\bepa\s*reg\w*\b|\bcontact time\b|\bdwell time\b|\bkill\b|\befficacy\b|\bhazard\w*\b|\bfirst aid\b|\bcorrosive\b|\bflammable\b|\bppe\b|\bdirections for use\b/i;
+  /\bdilut\w*\b|\b(?:oz|ounces?)\.?\s*(?:\/|per)?\s*gal(?:lon)?s?\b|\bmix ratio\b|\bready.?to.?use\b|\bRTU\b|\bepa\s*reg\w*\b|\bcontact time\b|\bdwell time\b|\bkill\b|\befficacy\b|\bsanitiz\w*\b|\bdisinfect\w*\b|\bhazard\w*\b|\bfirst aid\b|\bcorrosive\b|\bflammable\b|\bppe\b|\bdirections for use\b/i;
 
 /** Exported for table-driven unit testing of the claim-like phrasing matrix (B0-443). */
 export function isClaimLikeQuery(query: string): boolean {
@@ -1252,11 +1293,12 @@ async function runProductKnowledgeQuery(input: {
     const explicitPool = mergeKnowledgeSupplement(rawMatches, supplementMatches);
     const curated =
       supplementMatches.length === 0
-        ? await hydrateCuratedSources(lineSelected, sectionType)
+        ? await hydrateCuratedSources(lineSelected, sectionType, input.query)
         : await curateUniqueDocumentSources(explicitPool, {
             limit,
             requiredDocumentKinds,
             maxPerDocument,
+            query: input.query,
             preferredSdsSectionType: sectionType,
           });
     const { sources: explicitSources, expansion: explicitExpansion } =
@@ -1323,6 +1365,8 @@ async function runProductKnowledgeQuery(input: {
       limit,
       maxPerDocument,
       requiredDocumentKinds: requiredDocumentKindsForSkip,
+      query: input.query,
+      preferredSdsSectionType: sectionType,
     });
 
     // B0-556 — no line was resolved, so no SDS can be attributed to this product. In practice this
@@ -1435,7 +1479,11 @@ async function runProductKnowledgeQuery(input: {
   });
 
   if (resolution.lockedProductLineKey == null) {
-    const broadHydrated = await hydrateCuratedSources(await broadSelectedPromise, sectionType);
+    const broadHydrated = await hydrateCuratedSources(
+      await broadSelectedPromise,
+      sectionType,
+      input.query,
+    );
     // B0-556 — corpus-wide search with no line filter and nothing resolved: every SDS here belongs
     // to an arbitrary product line, so none of it may ground a hazard answer.
     const { sources: broadCurated, withheldCount: withheldSds } = withholdUnanchoredSafetySources(
@@ -1529,6 +1577,7 @@ async function runProductKnowledgeQuery(input: {
   const finalHydrated = await hydrateCuratedSources(
     shouldUseBroadFallback ? broadSelected : anchoredSelected,
     sectionType,
+    input.query,
   );
   const strategy = shouldUseBroadFallback
     ? 'anchored_with_broad_fallback'
