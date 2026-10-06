@@ -346,11 +346,17 @@ function mergeProductTierFacts(
   return merged;
 }
 
+/** B0-1131 — lowercase, punctuation as spaces: "SARS-CoV-2" and "SARS CoV 2 (Cause of COVID 19)" align. */
+function normalizeOrganismForMatch(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 function filterEfficacyByOrganism(facts: ProductLineFacts, needle?: string): ProductLineFacts {
   if (!needle) return facts;
+  const normalizedNeedle = normalizeOrganismForMatch(needle);
   return {
     ...facts,
-    efficacy: facts.efficacy.filter((e) => e.organism.toLowerCase().includes(needle)),
+    efficacy: facts.efficacy.filter((e) => normalizeOrganismForMatch(e.organism).includes(normalizedNeedle)),
   };
 }
 

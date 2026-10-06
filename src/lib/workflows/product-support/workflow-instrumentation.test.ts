@@ -93,7 +93,7 @@ vi.mock('~/supabase/clients/service-role', () => ({
 }));
 
 /**
- * B0-638 — BEX_AI_SDK_GENERATION_ENABLED, BEX_LLM_ROUTER_ENABLED, BEX_LLM_ROUTER_SHADOW_MODE and
+ * B0-638 — BEX_LLM_ROUTER_ENABLED, BEX_LLM_ROUTER_SHADOW_MODE and
  * BEX_DISABLE_CONFIDENCE_GATING moved from `process.env` to the `settings` table. `beforeEach`
  * seeds this file's own defaults (below); individual tests override with `settingOverrides.set`.
  */
@@ -143,8 +143,7 @@ vi.mock('~/lib/openai/client', () => ({
     tag && tag.startsWith('claude-') ? tag : 'gpt-test',
 }));
 
-const runResponsesWithToolLoopMock = vi.fn();
-const runAiSdkWithToolLoopMock = vi.fn();
+const runGenerationLoopMock = vi.fn();
 const executeProductToolMock = vi.fn();
 const lookupCrossReferenceMock = vi.fn();
 const runValidatorPassMock = vi.fn();
@@ -158,27 +157,8 @@ const runRevisionPassMock = vi.fn();
  */
 const regulatedClaimGroundingMock = vi.fn();
 
-vi.mock('~/lib/openai/responses-runtime', () => ({
-  runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
-  // B0-563 — real mapping (not a stub): `classifyUserIntent`/`extractCompetitorProduct` call this
-  // on whatever fake response `openaiResponsesCreateMock` resolves to in the tests below.
-  usageFromResponse: (response: {
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      total_tokens?: number;
-      input_tokens_details?: { cached_tokens?: number };
-    };
-  }) => ({
-    promptTokens: response.usage?.input_tokens ?? 0,
-    completionTokens: response.usage?.output_tokens ?? 0,
-    totalTokens: response.usage?.total_tokens ?? 0,
-    cachedPromptTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
-  }),
-}));
-
 vi.mock('~/lib/bex/ai-sdk-runtime', () => ({
-  runAiSdkWithToolLoop: (...args: unknown[]) => runAiSdkWithToolLoopMock(...args),
+  runAiSdkWithToolLoop: (...args: unknown[]) => runGenerationLoopMock(...args),
 }));
 
 // Real `executeToolCall` (and therefore real previews + truncation flags) over a fake tool layer.
@@ -236,10 +216,10 @@ import {
   computePromptVersion,
   PROMPT_BUNDLE_VERSION,
 } from '~/lib/workflows/product-support/prompt-version';
+import { REGULATED_CLAIM_GOVERNING_RULES } from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
 import { REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/validator';
 import {
   EARLY_DECLINE_CONFIDENCE,
-  isResponsesApiResponseId,
   runProductSupportWorkflow,
   VALIDATOR_BYPASS_REASON,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -290,11 +270,10 @@ function generationCalling(
       throw options.throwAfterTools;
     }
     return {
-      lastResponse: {},
-      finalResponseId: 'resp_final',
+      finalResponseId: null,
       assistantText: options.assistantText ?? 'Dilute per the label instructions.',
       toolTrace: [],
-      responseIds: ['resp_1'],
+      responseIds: ['ai_sdk_1'],
       usage: AGENT_USAGE,
       usageByCall: [AGENT_USAGE],
     };
@@ -338,7 +317,6 @@ beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
   settingOverrides.clear();
-  settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
   // B0-734 — the gate is a settings row defaulting to false; the legacy tests in this file were
   // written against the gate-on world, so pin it on here and opt out per test.
   settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', true);
@@ -359,7 +337,7 @@ beforeEach(() => {
   });
   resetIntentClassifierCache();
 
-  runResponsesWithToolLoopMock.mockImplementation(
+  runGenerationLoopMock.mockImplementation(
     generationCalling([
       {
         name: 'search_product_docs',
@@ -407,15 +385,12 @@ describe('prompt capture (B0-389)', () => {
     const prompt = promptRecordSchema.parse(stepInput('openai_responses_agent').prompt);
     expect(prompt.stage).toBe('openai_responses_agent');
     expect(prompt.model).toBe('gpt-test');
-    expect(prompt.runtime).toBe('responses');
+    expect(prompt.runtime).toBe('ai-sdk');
     expect(prompt.instructions).toContain('You are Bex product support');
     // The captured text is the whole assembled prompt, routing hint included.
     expect(prompt.instructions).toContain('Orchestrator hint (non-authoritative)');
     // Pre-existing keys survive.
-    expect(stepInput('openai_responses_agent')).toMatchObject({
-      model: 'gpt-test',
-      hasPreviousResponse: false,
-    });
+    expect(stepInput('openai_responses_agent')).toMatchObject({ model: 'gpt-test' });
   });
 
   it('writes step input/output that satisfies the B0-388 passthrough contracts', async () => {
@@ -433,14 +408,12 @@ describe('prompt capture (B0-389)', () => {
     }
   });
 
-  it('records the ai-sdk runtime when the generation flag selects it', async () => {
-    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', true);
-    runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
+  it('records the ai-sdk runtime on the agent step', async () => {
+    runGenerationLoopMock.mockImplementation(generationCalling([]));
 
     await run();
 
-    expect(runAiSdkWithToolLoopMock).toHaveBeenCalledTimes(1);
-    expect(runResponsesWithToolLoopMock).not.toHaveBeenCalled();
+    expect(runGenerationLoopMock).toHaveBeenCalledTimes(1);
     expect(promptRecordSchema.parse(stepInput('openai_responses_agent').prompt).runtime).toBe(
       'ai-sdk',
     );
@@ -491,7 +464,7 @@ describe('prompt capture (B0-389)', () => {
       'orchestration_planner',
       'early_decline_gate',
     ]);
-    expect(runResponsesWithToolLoopMock).not.toHaveBeenCalled();
+    expect(runGenerationLoopMock).not.toHaveBeenCalled();
   });
 });
 
@@ -757,7 +730,7 @@ describe('validator/revision usage capture (B0-554)', () => {
 describe('tool trace persistence (B0-390)', () => {
   /** Cross-reference run: pinned tool_choice, safety-net lookup, and a force-injected search. */
   function arrangeCrossReferenceRun() {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -825,7 +798,7 @@ describe('tool trace persistence (B0-390)', () => {
 
   it('attributes a repeat call of the pinned tool to the model, not to tool_choice', async () => {
     arrangeCrossReferenceRun();
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -869,7 +842,7 @@ describe('tool trace persistence (B0-390)', () => {
       productName: longProductName,
       topic: 'dilution',
     });
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         { name: 'search_product_docs', argumentsJson, callId: 'call_long' },
       ]),
@@ -927,7 +900,7 @@ describe('tool trace persistence (B0-390)', () => {
   });
 
   it('persists the partial trace when the run throws mid-generation', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -957,7 +930,7 @@ describe('tool trace persistence (B0-390)', () => {
   });
 
   it('keeps the speculative call when the run throws before the model requests anything', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(async () => {
+    runGenerationLoopMock.mockImplementation(async () => {
       throw new Error('model unavailable');
     });
 
@@ -997,7 +970,7 @@ function singleGateRecord(gate: GateId): GateRecord {
 
 /** A cross-reference run whose curated override replaces the model's draft wholesale. */
 function arrangeOverrideRun() {
-  runResponsesWithToolLoopMock.mockImplementation(
+  runGenerationLoopMock.mockImplementation(
     generationCalling([
       {
         name: 'lookup_cross_reference',
@@ -1198,7 +1171,7 @@ describe('similarity rollup feeds the recommendation gate raw, not post-filter (
    * raw top similarity (58%, below LOW_SIMILARITY_THRESHOLD) is well under the post-curation max
    * similarity carried on `sources[]` (95%) — the exact gap the B0-490 bug hid. */
   function arrangeLowRawHighSelectedRun() {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -1400,7 +1373,7 @@ describe('answer provenance (B0-391)', () => {
   });
 
   it('reports a cross-reference headline stapled onto the model draft as cross_reference_composed', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -1435,7 +1408,7 @@ describe('answer provenance (B0-391)', () => {
   });
 
   it('does not claim composition when the composer left the model text unchanged', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -1478,7 +1451,7 @@ describe('answer provenance (B0-391)', () => {
 
 describe('regulated-claim guardrail partial redaction (B0-829)', () => {
   it('surgically redacts only the ungrounded token-shaped claim and keeps the grounded content', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -1520,7 +1493,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
   });
 
   it('falls through to the full-decline copy unchanged when a sentence-shaped category (hazard) is ungrounded', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -1552,7 +1525,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
   });
 
   it('falls through to the full-decline copy unchanged when every detected category is ungrounded', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -1588,6 +1561,8 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
 
 describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
   const DC_QUESTION = 'Do dilution control systems require plumbing or electrical work?';
+  /** B0-1131 — a safety question keeps the full decline for an unverifiable hazard / first-aid sentence. */
+  const DC_SAFETY_QUESTION = 'Is the concentrate in a dilution control system hazardous if it splashes in my eyes?';
   const GROUNDED_PARA =
     'Dilution control systems usually need a water connection but not electrical work. A licensed plumber is typically required for new lines, backflow prevention, or hard-plumbed runs. Local code and the authority having jurisdiction decide whether an approved backflow preventer or an air gap is required.';
   const COMPAT_SENTENCE =
@@ -1596,7 +1571,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
 
   /** A freeformQuery-only search over knowledge docs with no product-line lock — the golden shape. */
   function arrangeKnowledgeTurn(draft: string, lock?: { lockedProductLineKey: string }) {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -1657,6 +1632,44 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
     const record = singleGateRecord('regulated_claim_guardrail');
     return record;
   }
+
+  it('B0-1144: persists the exact pool the guardrail judged against, even on a speculative-only turn that cites nothing', async () => {
+    arrangeKnowledgeTurn(GROUNDED_PARA);
+    // The model calls no tool: the only retrieval is the workflow's speculative pre-fetch, whose
+    // resolution did not lock, so B0-635 keeps it out of the cited `sources`.
+    runGenerationLoopMock.mockImplementation(generationCalling([], { assistantText: GROUNDED_PARA }));
+    // Live shape (ROW-09/23, B0-1131): the pre-fetch's resolution was `skipped_ambiguous`.
+    const base = executeProductToolMock.getMockImplementation()!;
+    executeProductToolMock.mockImplementation(async (...args: unknown[]) => {
+      const value = await (base as (...a: unknown[]) => Promise<{ retrieval: Record<string, unknown> }>)(...args);
+      return {
+        ...value,
+        retrieval: {
+          ...value.retrieval,
+          productLineResolution: { candidates: [], lockedProductLineKey: null, lockReason: 'skipped_ambiguous' },
+        },
+      };
+    });
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: [],
+      ungroundedCategories: [],
+      ungroundedDetails: [],
+      keyTermGroundedCategories: [],
+    });
+
+    const out = await run({ userMessage: DC_QUESTION });
+
+    const judged = (regulatedClaimGroundingMock.mock.calls[0]?.[0] as { sources: Array<{ documentId: string }> }).sources;
+    expect(judged.map((s) => s.documentId)).toContain('doc-kb-1');
+    const inputs = regulatedGateRecord().inputs as {
+      groundedSourceCount: number;
+      groundingSources: Array<{ documentId: string; title: string; documentKind: string | null }>;
+    };
+    expect(inputs.groundingSources.map((s) => s.documentId)).toEqual(judged.map((s) => s.documentId));
+    expect(inputs.groundedSourceCount).toBe(judged.length);
+    expect(inputs.groundingSources[0]).toMatchObject({ title: 'Dilution Control Systems — Installation Overview', documentKind: 'knowledge' });
+    expect(out.sources.map((s) => s.documentId)).not.toContain('doc-kb-1');
+  });
 
   it('withholds ONE ungrounded compatibility sentence from a knowledge answer and keeps the rest verbatim', async () => {
     const draft = `${GROUNDED_PARA} ${COMPAT_SENTENCE}`;
@@ -1719,7 +1732,35 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
     expect(out.answerText).toContain(GROUNDED_PARA);
   });
 
-  it('never redacts an ungrounded hazard or first_aid sentence — full decline, even on a knowledge answer', async () => {
+  it('never redacts an ungrounded hazard or first_aid sentence on a SAFETY question — full decline, even on a knowledge answer (B0-1131)', async () => {
+    for (const [category, sentence] of [
+      ['hazard', 'Causes severe skin burns and eye damage.'],
+      ['first_aid', 'If swallowed, rinse mouth and call a poison center immediately.'],
+    ] as const) {
+      arrangeKnowledgeTurn(`${GROUNDED_PARA} ${sentence}`);
+      regulatedClaimGroundingMock.mockReturnValueOnce({
+        categoriesDetected: [category],
+        ungroundedCategories: [category],
+        ungroundedDetails: [{ category, snippet: sentence }],
+        keyTermGroundedCategories: [],
+      });
+
+      const out = await run({ userMessage: DC_SAFETY_QUESTION });
+
+      expect(out.answerProvenance).toBe('validator_fallback');
+      expect(out.answerText).toContain("I can't verify the");
+      expect(out.answerText).not.toContain(GROUNDED_PARA);
+      expect(out.answerText).not.toContain(sentence);
+      expect(regulatedGateRecord().verdict).toBe('rejected');
+      expect(regulatedGateRecord().inputs).toMatchObject({
+        declineReason: 'safety_critical_sentence_category',
+      });
+      expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'rejected' });
+      fake = createFakeSupabase();
+    }
+  });
+
+  it('withholds only the hazard / first_aid sentence on a non-safety knowledge question, with the SDS pointer (B0-1131)', async () => {
     for (const [category, sentence] of [
       ['hazard', 'Causes severe skin burns and eye damage.'],
       ['first_aid', 'If swallowed, rinse mouth and call a poison center immediately.'],
@@ -1734,15 +1775,11 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
 
       const out = await run({ userMessage: DC_QUESTION });
 
-      expect(out.answerProvenance).toBe('validator_fallback');
-      expect(out.answerText).toContain("I can't verify the");
-      expect(out.answerText).not.toContain(GROUNDED_PARA);
+      expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+      expect(out.answerText).toContain(GROUNDED_PARA);
       expect(out.answerText).not.toContain(sentence);
-      expect(regulatedGateRecord().verdict).toBe('rejected');
-      expect(regulatedGateRecord().inputs).toMatchObject({
-        declineReason: 'safety_critical_sentence_category',
-      });
-      expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'rejected' });
+      expect(out.answerText).toContain(REGULATED_CLAIM_GOVERNING_RULES[category]);
+      expect(out.validation.requires_human_review).toBe(true);
       fake = createFakeSupabase();
     }
   });
@@ -1770,7 +1807,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
    * thing that varies between the two cases below is the SHAPE of the user's question.
    */
   function arrangeLabelLedLockedTurn(draft: string) {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -1896,7 +1933,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       ungroundedDetails: [{ category: 'contact_time', snippet: '60 second contact time' }],
       keyTermGroundedCategories: [],
     });
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -1931,6 +1968,8 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
 describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-923)', () => {
   const WOOD_QUESTION =
     "What's the difference between a wood floor sealer and a wood floor finish?";
+  /** B0-1131 — the decline-path cases need a safety question; elsewhere a hazard sentence is withheld. */
+  const WOOD_SAFETY_QUESTION = 'Are oil-based wood floor finishes flammable, and what PPE do I need?';
   /** The model's own draft: substantive, and it asserts nothing regulated the guardrail rejects. */
   const MODEL_DRAFT =
     'A sealer penetrates the wood and blocks the grain so the finish above it stays uniform. A finish is the wear layer that takes the traffic and carries the gloss level. Basic Coatings systems pair one sealer coat with two or more finish coats.';
@@ -1958,7 +1997,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
    * `!validation.approved` block never runs and the assertions isolate the guardrail's own effect.
    */
   function arrangeRevisedTurn(revisedText = REVISED_DRAFT) {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -2055,7 +2094,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
     // Every draft this turn is rejected for hazard, pre-revision included.
     groundingByDraft([], HAZARD_REJECTION);
 
-    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+    const out = await run({ userMessage: WOOD_SAFETY_QUESTION, useValidator: true });
 
     expect(out.answerProvenance).toBe('validator_fallback');
     expect(out.answerText).toContain("I can't verify the");
@@ -2073,7 +2112,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
 
   it('(b) fail-closed: a pre-revision draft with its OWN ungrounded claim is never served', async () => {
     const MODEL_DRAFT_WITH_DILUTION = `${MODEL_DRAFT} Dilute the finish at 4 oz per gallon.`;
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -2119,7 +2158,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
       ],
     ]);
 
-    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+    const out = await run({ userMessage: WOOD_SAFETY_QUESTION, useValidator: true });
 
     expect(out.answerProvenance).not.toBe('pre_revision_draft_restored');
     expect(out.answerText).not.toContain('4 oz per gallon');
@@ -2142,7 +2181,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
   });
 
   it('(c) a turn with no revision pass is unaffected — one evaluation, unchanged decline', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -2156,7 +2195,7 @@ describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-92
     );
     groundingByDraft([], HAZARD_REJECTION);
 
-    const out = await run({ userMessage: WOOD_QUESTION });
+    const out = await run({ userMessage: WOOD_SAFETY_QUESTION });
 
     expect(runRevisionPassMock).not.toHaveBeenCalled();
     expect(regulatedClaimGroundingMock).toHaveBeenCalledTimes(1);
@@ -2181,7 +2220,7 @@ describe('usage/safety coverage gate requires a product subject (B0-872)', () =>
 
   /** The live shape of the five golden misses: a freeformQuery-only search over knowledge docs. */
   function arrangeKnowledgeTurn(message: string) {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -2268,7 +2307,7 @@ describe('usage/safety coverage gate requires a product subject (B0-872)', () =>
 
   it('a usage question about a NAMED product with no label/SDS retrieved still gets the template (B0-367 row unchanged)', async () => {
     // The model named the product in its search call; only usage text came back, no safety text.
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -2342,13 +2381,11 @@ describe('prompt identity on the final output (B0-393 wiring)', () => {
   it('stamps the prompt version, bundle version and chat context on an answered run', async () => {
     const out = await run({
       priorMessages: [{ role: 'user', content: 'earlier question' }],
-      previousOpenaiResponseId: 'resp_prev',
     });
 
     expect(out.promptVersion).toBe(computePromptVersion(out.routingDecision ?? ''));
     expect(out.promptBundleVersion).toBe(PROMPT_BUNDLE_VERSION);
     expect(out.priorMessageCount).toBe(1);
-    expect(out.previousResponseId).toBe('resp_prev');
   });
 
   it('stamps them on the early-decline path too, which never calls a model', async () => {
@@ -2357,12 +2394,11 @@ describe('prompt identity on the final output (B0-393 wiring)', () => {
     expect(out.promptVersion).toBe(computePromptVersion(out.routingDecision ?? ''));
     expect(out.promptBundleVersion).toBe(PROMPT_BUNDLE_VERSION);
     expect(out.priorMessageCount).toBe(0);
-    expect(out.previousResponseId).toBeNull();
   });
 });
 
 /* -------------------------------------------------------------------------- *
- * B0-519 — cap conversation history before replaying it via previous_response_id
+ * B0-519 — cap conversation history before replaying it to the (stateless) generation loop
  * -------------------------------------------------------------------------- */
 
 describe('capped conversation history (B0-519)', () => {
@@ -2370,25 +2406,19 @@ describe('capped conversation history (B0-519)', () => {
     delete process.env.BEX_HISTORY_MAX_MESSAGES;
   });
 
-  it('below the cap: keeps chaining via previousResponseId, unchanged from before this ticket', async () => {
+  it('below the cap: replays the whole prior conversation to the generation loop', async () => {
     process.env.BEX_HISTORY_MAX_MESSAGES = '10';
+    const priorMessages = [{ role: 'user' as const, content: 'earlier question' }];
 
-    const out = await run({
-      priorMessages: [{ role: 'user', content: 'earlier question' }],
-      previousOpenaiResponseId: 'resp_prev',
-    });
+    const out = await run({ priorMessages });
 
-    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(call.previousResponseId).toBe('resp_prev');
-    expect(call.history).toBeUndefined();
+    const call = runGenerationLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.history).toEqual(priorMessages);
     expect(out.historyCapApplied).toBe(false);
-    expect(stepInput('openai_responses_agent')).toMatchObject({
-      hasPreviousResponse: true,
-      historyCapApplied: false,
-    });
+    expect(stepInput('openai_responses_agent')).toMatchObject({ historyCapApplied: false });
   });
 
-  it('over the cap: breaks the previous_response_id chain and replays only the capped tail', async () => {
+  it('over the cap: replays only the capped tail, oldest-first, and says so', async () => {
     process.env.BEX_HISTORY_MAX_MESSAGES = '2';
     const priorMessages = [
       { role: 'user' as const, content: 'turn 1 user' },
@@ -2397,11 +2427,9 @@ describe('capped conversation history (B0-519)', () => {
       { role: 'assistant' as const, content: 'turn 2 assistant' },
     ];
 
-    const out = await run({ priorMessages, previousOpenaiResponseId: 'resp_prev' });
+    const out = await run({ priorMessages });
 
-    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    // The chain is broken (never resumed) even though the caller passed a previousOpenaiResponseId.
-    expect(call.previousResponseId).toBeNull();
+    const call = runGenerationLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
     // Only the most recent `BEX_HISTORY_MAX_MESSAGES` messages are replayed, oldest-first.
     expect(call.history).toEqual([
       { role: 'user', content: 'turn 2 user' },
@@ -2409,32 +2437,7 @@ describe('capped conversation history (B0-519)', () => {
     ]);
     // Reported on the run and on the agent step, for observability.
     expect(out.historyCapApplied).toBe(true);
-    expect(out.previousResponseId).toBe('resp_prev'); // raw echo of what was received, unchanged
-    expect(stepInput('openai_responses_agent')).toMatchObject({
-      hasPreviousResponse: false,
-      historyCapApplied: true,
-    });
-  });
-
-  it('caps the AI SDK runtime the same way, always stateless', async () => {
-    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', true);
-    process.env.BEX_HISTORY_MAX_MESSAGES = '2';
-    runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
-
-    const priorMessages = [
-      { role: 'user' as const, content: 'turn 1 user' },
-      { role: 'assistant' as const, content: 'turn 1 assistant' },
-      { role: 'user' as const, content: 'turn 2 user' },
-      { role: 'assistant' as const, content: 'turn 2 assistant' },
-    ];
-
-    await run({ priorMessages });
-
-    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(call.history).toEqual([
-      { role: 'user', content: 'turn 2 user' },
-      { role: 'assistant', content: 'turn 2 assistant' },
-    ]);
+    expect(stepInput('openai_responses_agent')).toMatchObject({ historyCapApplied: true });
   });
 
   it('falls back to the default cap on an invalid env value', async () => {
@@ -2442,7 +2445,6 @@ describe('capped conversation history (B0-519)', () => {
 
     const out = await run({
       priorMessages: [{ role: 'user', content: 'earlier question' }],
-      previousOpenaiResponseId: 'resp_prev',
     });
 
     // A single prior message never exceeds the (double-digit) default cap.
@@ -2770,7 +2772,7 @@ describe('retrieval configuration rollup (B0-493)', () => {
   });
 
   it('marks retrievalStrategy mixed when two search calls this turn disagree', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'search_product_docs',
@@ -2830,7 +2832,7 @@ describe('agent self-reported confidence (B0-491)', () => {
     `<!--BEX_AGENT_CONFIDENCE {"agentConfidence":${agentConfidence},"agentConfidenceBasis":"${agentConfidenceBasis}"}-->`;
 
   it('captures a valid self-reported confidence and strips the marker from the visible answer', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -2855,7 +2857,7 @@ describe('agent self-reported confidence (B0-491)', () => {
   });
 
   it('persists agentConfidence on the agent workflow_steps row alongside the tool trace', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([], { assistantText: `Answer.\n${MARKER(0.72, 'partial evidence')}` }),
     );
 
@@ -2885,7 +2887,7 @@ describe('agent self-reported confidence (B0-491)', () => {
   });
 
   it('a self-scored-below-0.80 run is identifiable from agentConfidence alone, without reading answer text', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([], {
         assistantText: `I don't have enough information to answer that.\n${MARKER(0.35, 'no verified source found')}`,
       }),
@@ -2900,7 +2902,7 @@ describe('agent self-reported confidence (B0-491)', () => {
   it('feeds agentConfidence into the recommendation gate as baseConfidence, replacing the bypass-heuristic value', async () => {
     // Cross-reference route: the bypass-heuristic confidence would be 0.9 (sources.length > 0).
     // The agent's own self-reported confidence (0.62) must be what the gate actually calibrates on.
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -2952,7 +2954,7 @@ describe('agent self-reported confidence (B0-491)', () => {
   });
 
   it('falls back to the validator/heuristic confidence for the gate when the agent reported no score', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -3047,7 +3049,7 @@ describe('confidence provenance (B0-492)', () => {
   });
 
   it('is agent_self_scored (no pre-cap) when the recommendation gate ran but did not cap the agent score further', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -3092,7 +3094,7 @@ describe('confidence provenance (B0-492)', () => {
   });
 
   it('is gate_capped (pre-cap = agent_self_scored) when the recommendation gate caps the agent score for low retrieval similarity', async () => {
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling(
         [
           {
@@ -3141,7 +3143,7 @@ describe('confidence provenance (B0-492)', () => {
     // No marker this turn (agentConfidence null): the gate calibrates on the bypass-heuristic 0.9.
     // `extractCompetitorProduct` falls back to `brand: null` in this test file's default mocks, so
     // the missing-brand cap (ceiling 0.8) fires and must win the outer min against 0.9.
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -3194,7 +3196,6 @@ describe('runtime config and gate activation (B0-494)', () => {
     expect(out.runtimeConfig).toMatchObject({
       useValidator: false,
       earlyDeclineGateEnabled: true,
-      aiSdkGenerationEnabled: false,
       confidenceGatingDisabled: false,
       agentMode: 'orchestrator',
       routedDirectly: false,
@@ -3425,98 +3426,31 @@ describe('consolidated signals analysis (B0-786)', () => {
 });
 
 /* -------------------------------------------------------------------------- *
- * B0-908 — provider-aware generation runtime selection
+ * B0-914 — one generation loop for every provider
  * -------------------------------------------------------------------------- */
 
-describe('provider-aware runtime selection (B0-908)', () => {
-  it('runs a claude-* model on the AI SDK loop with the flag off, and reports that runtime', async () => {
-    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
-    // Like the real AI SDK runtime, report no OpenAI response id (`generationCalling` fakes the
-    // Responses shape, `resp_final` included).
-    runAiSdkWithToolLoopMock.mockImplementation(async (opts: unknown) => ({
-      ...(await generationCalling([])(opts)),
-      finalResponseId: null,
-    }));
+describe('single generation loop (B0-914)', () => {
+  it.each(['claude-sonnet-5', 'gpt-4.1'])(
+    'runs %s on the AI SDK loop and reports that runtime',
+    async (modelTag) => {
+      runGenerationLoopMock.mockImplementation(generationCalling([]));
 
-    const out = await run({ modelTag: 'claude-sonnet-5' });
+      const out = await run({ modelTag });
 
-    expect(runAiSdkWithToolLoopMock).toHaveBeenCalledTimes(1);
-    expect(runResponsesWithToolLoopMock).not.toHaveBeenCalled();
-    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(call.modelTag).toBe('claude-sonnet-5');
+      expect(runGenerationLoopMock).toHaveBeenCalledTimes(1);
+      const call = runGenerationLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(call.modelTag).toBe(modelTag);
+      // No provider chain id is ever handed to the loop; memory is the replayed history.
+      expect(call).not.toHaveProperty('previousResponseId');
 
-    const prompt = promptRecordSchema.parse(stepInput('openai_responses_agent').prompt);
-    expect(prompt.model).toBe('claude-sonnet-5');
-    expect(prompt.runtime).toBe('ai-sdk');
-    expect(stepInput('openai_responses_agent')).toMatchObject({ model: 'claude-sonnet-5' });
-    // The persisted run config reports the runtime that ran, not the raw settings row.
-    expect(out.runtimeConfig?.aiSdkGenerationEnabled).toBe(true);
-    // No OpenAI response id exists on this path; the synthetic marker keeps the chain populated.
-    expect(out.latestOpenaiResponseId).toBe(`ai_sdk:${out.workflowRunId}`);
-  });
-
-  it('keeps OpenAI models on the Responses loop when the flag is off', async () => {
-    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
-
-    const out = await run({ modelTag: 'gpt-4.1' });
-
-    expect(runResponsesWithToolLoopMock).toHaveBeenCalledTimes(1);
-    expect(runAiSdkWithToolLoopMock).not.toHaveBeenCalled();
-    expect(promptRecordSchema.parse(stepInput('openai_responses_agent').prompt).runtime).toBe(
-      'responses',
-    );
-    expect(out.runtimeConfig?.aiSdkGenerationEnabled).toBe(false);
-  });
-
-  it('never hands a prior OpenAI response id to the AI SDK loop on a Claude turn', async () => {
-    process.env.BEX_HISTORY_MAX_MESSAGES = '10';
-    runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
-
-    await run({
-      modelTag: 'claude-sonnet-5',
-      priorMessages: [{ role: 'user', content: 'earlier question' }],
-      previousOpenaiResponseId: 'resp_prev',
-    });
-
-    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(call).not.toHaveProperty('previousResponseId');
-    expect(call.history).toEqual([{ role: 'user', content: 'earlier question' }]);
-    // The agent step describes the call that was made: the chain was not used.
-    expect(stepInput('openai_responses_agent')).toMatchObject({
-      hasPreviousResponse: false,
-      historyCapApplied: false,
-    });
-  });
-
-  it('breaks the Responses chain and replays history when the stored id is an ai_sdk: marker', async () => {
-    process.env.BEX_HISTORY_MAX_MESSAGES = '10';
-    const priorMessages = [
-      { role: 'user' as const, content: 'claude turn user' },
-      { role: 'assistant' as const, content: 'claude turn assistant' },
-    ];
-
-    const out = await run({
-      modelTag: 'gpt-4.1',
-      priorMessages,
-      previousOpenaiResponseId: 'ai_sdk:00000000-0000-0000-0000-000000000000',
-    });
-
-    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    // A synthetic marker is never sent upstream as previous_response_id (it would 400).
-    expect(call.previousResponseId).toBeNull();
-    expect(call.history).toEqual(priorMessages);
-    expect(out.historyCapApplied).toBe(false);
-    expect(stepInput('openai_responses_agent')).toMatchObject({ hasPreviousResponse: false });
-  });
-
-  it('isResponsesApiResponseId accepts resp_ ids and rejects the synthetic markers', () => {
-    expect(isResponsesApiResponseId('resp_abc123')).toBe(true);
-    expect(isResponsesApiResponseId('ai_sdk:run-1')).toBe(false);
-    expect(isResponsesApiResponseId('cross-reference:trace-1')).toBe(false);
-    expect(isResponsesApiResponseId('')).toBe(false);
-    expect(isResponsesApiResponseId(null)).toBe(false);
-    expect(isResponsesApiResponseId(undefined)).toBe(false);
-  });
+      const prompt = promptRecordSchema.parse(stepInput('openai_responses_agent').prompt);
+      expect(prompt.runtime).toBe('ai-sdk');
+      // The legacy per-run flag is no longer written.
+      expect(out.runtimeConfig?.aiSdkGenerationEnabled).toBeUndefined();
+      // The AI SDK has no provider response id; the synthetic marker keeps the column populated.
+      expect(out.latestOpenaiResponseId).toBe(`ai_sdk:${out.workflowRunId}`);
+    },
+  );
 });
 
 /* -------------------------------------------------------------------------- *
@@ -3528,7 +3462,7 @@ describe('provider-aware runtime selection (B0-908)', () => {
 describe('fact-tool enforcement observability (B0-948)', () => {
   /** Runs a normal turn, but has the generation runtime report the given enforcement outcome. */
   function arrangeEnforcementOutcome(outcome: Record<string, unknown> | null) {
-    runResponsesWithToolLoopMock.mockImplementation(async (opts: unknown) => {
+    runGenerationLoopMock.mockImplementation(async (opts: unknown) => {
       const typed = opts as {
         executeTool: ExecuteTool;
         onFactToolEnforced?: (value: Record<string, unknown>) => void;
@@ -3542,11 +3476,10 @@ describe('fact-tool enforcement observability (B0-948)', () => {
         typed.onFactToolEnforced?.(outcome);
       }
       return {
-        lastResponse: {},
-        finalResponseId: 'resp_final',
+        finalResponseId: null,
         assistantText: 'Rewritten against the approved-surface list.',
         toolTrace: [],
-        responseIds: ['resp_1'],
+        responseIds: ['ai_sdk_1'],
         usage: AGENT_USAGE,
         usageByCall: [AGENT_USAGE],
       };
@@ -3555,7 +3488,7 @@ describe('fact-tool enforcement observability (B0-948)', () => {
 
   it('passes the policy to the generation runtime', async () => {
     await run();
-    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const call = runGenerationLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(typeof call.requireFactTool).toBe('function');
     expect(typeof call.onFactToolEnforced).toBe('function');
   });

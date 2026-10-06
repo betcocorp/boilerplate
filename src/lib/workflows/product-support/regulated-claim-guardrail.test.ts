@@ -835,7 +835,7 @@ describe('evaluateRegulatedClaimGrounding — B0-888 key-term fallback and adjac
     expect(result.ungroundedCategories).toContain('compatibility');
   });
 
-  it('never applies the key-term fallback to hazard claims -- verbatim is still required', () => {
+  it('still declines a hazard claim whose value term is absent from the source (B0-923 value-term path)', () => {
     const result = evaluateRegulatedClaimGrounding({
       draftAnswer: 'This product causes severe skin burns per the label.',
       sources: [
@@ -1275,27 +1275,51 @@ describe('planRegulatedClaimRedaction — product-usage-specific requires a usag
     }
   });
 
-  it('still declines outright for an ungrounded hazard sentence, whatever the question shape', () => {
+  function hazardPlan(question: string, category: 'hazard' | 'first_aid', sentence: string) {
+    return planRegulatedClaimRedaction({
+      draftAnswer: `${IDENTITY_ANSWER} ${sentence}`,
+      userMessage: question,
+      grounding: {
+        categoriesDetected: [category],
+        ungroundedCategories: [category],
+        ungroundedDetails: [{ category, snippet: sentence }],
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: LOCKED,
+      sources: LABEL_LED_SOURCES,
+    });
+  }
+
+  it('still declines outright for an ungrounded hazard / first-aid sentence on a safety or exposure question (B0-1131)', () => {
     const hazard = 'Causes severe skin burns and eye damage.';
+    const firstAid = 'If in eyes, rinse cautiously with water for 15 minutes.';
     for (const question of [
-      'Do you have a product called Hard as Nailz?',
       'How do I use Hard As Nails safely?',
+      'What PPE does Hard As Nails require?',
+      'Someone got floor stripper splashed in their eyes. What do I do?',
+      'Is Hard As Nails flammable?',
+      'My employee breathed in the fumes, is that dangerous?',
+      'Can I mix Hard As Nails with bleach?',
     ]) {
-      const plan = planRegulatedClaimRedaction({
-        draftAnswer: `${IDENTITY_ANSWER} ${hazard}`,
-        userMessage: question,
-        grounding: {
-          categoriesDetected: ['hazard'],
-          ungroundedCategories: ['hazard'],
-          ungroundedDetails: [{ category: 'hazard', snippet: hazard }],
-          keyTermGroundedCategories: [],
-        },
-        productLineLock: LOCKED,
-        sources: LABEL_LED_SOURCES,
-      });
-      expect(plan.mode, question).toBe('decline');
-      if (plan.mode !== 'decline') continue;
-      expect(plan.reason, question).toBe('safety_critical_sentence_category');
+      for (const [category, sentence] of [['hazard', hazard], ['first_aid', firstAid]] as const) {
+        const plan = hazardPlan(question, category, sentence);
+        expect(plan.mode, `${category}: ${question}`).toBe('decline');
+        if (plan.mode !== 'decline') continue;
+        expect(plan.reason, question).toBe('safety_critical_sentence_category');
+      }
+    }
+  });
+
+  it('withholds only the hazard / first-aid sentence on a non-safety question, keeping the rest (B0-1131 ROW-01)', () => {
+    const hazard = 'For Push, there are no known significant hazards, and no special signal word or hazard statements are required.';
+    for (const question of ['Do you have a product called Hard as Nailz?', 'Where do I find the SDS for Push?']) {
+      const plan = hazardPlan(question, 'hazard', hazard);
+      expect(plan.mode, question).toBe('sentence_redaction');
+      if (plan.mode === 'decline') continue;
+      expect(plan.redactedText).toContain(IDENTITY_ANSWER);
+      expect(plan.redactedText).not.toContain(hazard);
+      expect(plan.redactedText).toContain('[one hazard statement withheld — not verifiable against a retrieved label]');
+      expect(plan.withheldCategories).toEqual(['hazard']);
     }
   });
 
@@ -1861,5 +1885,1082 @@ describe('evaluateRegulatedClaimGrounding — bullet-head attribution and abbrev
     expect(plan.redactedText).toContain('[two efficacy claims withheld — not verifiable against a retrieved label]');
     expect(plan.redactedText).not.toContain('[one efficacy claim withheld');
     expect(plan.redactedText).toContain('- Rest Stop™: The label explicitly states it kills HIV-1.');
+  });
+});
+
+/**
+ * B0-923 — hazard value-term grounding. Every "grounds" draft below is a live `ungroundedDetails`
+ * snippet (app 6.12.0/7.0.0) that declined a whole answer although each hazard value in it is
+ * printed on the product's own label. Fixture bodies are excerpts of the live documents.
+ */
+const SPEEDEX_LABEL_SOURCE = {
+  documentId: 'c7d2e59f-7945-4f3f-aae6-9b5611fef7a7',
+  title: 'Speedex Concentrate',
+  isLockedProductLineSource: true,
+  documentBody: [
+    'DANGER! CAUSES SEVERE SKIN BURNS AND EYE DAMAGE. MAY CAUSE AN ALLERGIC SKIN REACTION.',
+    'SKIN CORROSION - Category 1. SERIOUS EYE DAMAGE - Category 1. Signal word: Danger. H314 + H317',
+    'Recommended: splash',
+    'goggles. Wear protective',
+    'Chemical resistant gloves.',
+    'Wash hands thoroughly after handling.',
+  ].join('\n'),
+};
+
+const PUSH_SDS_SOURCE = {
+  documentId: 'b0e2d441-a7cb-4bee-9c6e-01aee328edb8',
+  title: 'Push (Mint) M000133',
+  isLockedProductLineSource: true,
+  documentBody: [
+    'SECTION 2: Hazards identification',
+    'Classification of the substance or mixture: Not classified.',
+    'Signal word: No signal word.',
+    'Hazard statements: No known significant effects or critical hazards.',
+  ].join('\n'),
+};
+
+describe('evaluateRegulatedClaimGrounding — B0-923 hazard value-term grounding', () => {
+  it('grounds framed PPE + hazard prose whose every value term is on the locked product label', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling and using this product, as it can cause severe skin burns and eye damage (SDS Section 2).',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).not.toContain('hazard');
+    expect(result.keyTermGroundedCategories).toContain('hazard');
+  });
+
+  it('grounds a GHS class / category / signal word / H-code transcription', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- **PPE:** Speedex Concentrate is classified **Skin Corrosion Category 1 / Serious Eye Damage Category 1, Signal word Danger, H314**.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('grounds a negative classification only against a source that prints it negated', () => {
+    const draftAnswer =
+      '- Product is not classified as hazardous under the OSHA Hazard Communication Standard; there is no signal word (SDS Section 2).';
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer, sources: [PUSH_SDS_SOURCE] }).ungroundedCategories,
+    ).not.toContain('hazard');
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer, sources: [SPEEDEX_LABEL_SOURCE] }).ungroundedCategories,
+    ).toContain('hazard');
+  });
+
+  it('still declines a value term the attributed document never prints', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Always wear a respirator and splash goggles with this product, as it causes severe skin burns.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still declines when the source states the opposite polarity', () => {
+    const nonFlammable = {
+      documentId: 'doc-nf',
+      title: 'Test Cleaner',
+      isLockedProductLineSource: true,
+      documentBody: 'Non-flammable. Not corrosive. Keep out of reach of children.',
+    };
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'This product is flammable, so store it away from heat.',
+        sources: [nonFlammable],
+      }).ungroundedCategories,
+    ).toContain('hazard');
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'This product is corrosive to skin, so wear gloves.',
+        sources: [nonFlammable],
+      }).ungroundedCategories,
+    ).toContain('hazard');
+  });
+
+  it('still declines when no source is attributed to the product (not locked, not cited, not named)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling this product, as it can cause severe skin burns and eye damage.',
+      sources: [{ ...SPEEDEX_LABEL_SOURCE, isLockedProductLineSource: false }],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('never lets first_aid take the value-term path', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'If in eyes, flush with water for 30 minutes and apply ointment.',
+      sources: [SPEEDEX_LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toContain('first_aid');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-923 generic chemistry-class prose', () => {
+  it('does not flag "Some solvent-based products are flammable"', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- Flammability: Some solvent-based products are flammable, affecting storage and handling.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('does not flag an anaphoric continuation of a sentence that named the chemistry class', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Solvent-based finishes offer strong durability and a traditional amber look. Some are flammable, affecting storage and handling.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('still flags an anaphoric continuation carrying a GHS value token', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Solvent-based finishes offer strong durability. Some are flammable liquids, signal word Danger, H226.',
+      sources: [],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still flags a product-specific hazard sentence that follows a chemistry-class sentence', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Solvent-based finishes are durable. Marathane 45 is combustible and needs a respirator.',
+      sources: [],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-923 attribution refinements (historical replay)', () => {
+  const MARATHANE_LABEL = {
+    documentId: 'doc-marathane-45',
+    title: 'Marathane 45',
+    documentBody: 'WARNING: COMBUSTIBLE. Always use a respirator when applying this product. 480 g/L VOC.',
+  };
+  const OTHER_FINISH = {
+    documentId: 'doc-other',
+    title: 'Players Choice One',
+    documentBody: 'Waterbased. Low odor. Non-flammable.',
+  };
+
+  it('attributes a sentence that names a source by its full title', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'For example, the Marathane 45 wood-gym-floor label labels the product **“COMBUSTIBLE,”** and requires a respirator during application.',
+      sources: [OTHER_FINISH, MARATHANE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('does not let a named title ground a value only another product prints', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Players Choice One is combustible and requires a respirator.',
+      sources: [OTHER_FINISH, MARATHANE_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('grounds across the locked product line documents when "per the X SDS" attributes the label instead', () => {
+    const label = { ...SPEEDEX_LABEL_SOURCE, documentBody: 'Speedex Concentrate. Heavy duty degreaser. Recommended: splash goggles.' };
+    const dilutedSds = {
+      documentId: 'doc-528-dil',
+      title: '528 DIL MXE',
+      isLockedProductLineSource: true,
+      documentBody: 'SKIN CORROSION - Category 1. Signal word: Danger. H314 - Causes severe skin burns and eye damage.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- **PPE:** Speedex Concentrate is classified **Skin Corrosion Category 1, Signal word Danger, H314**, so wear splash goggles — per the Speedex Concentrate SDS.',
+      sources: [label, dilutedSds],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('does not pool values across documents that are NOT the locked product line', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product is combustible and causes severe skin burns.',
+      sources: [
+        { ...MARATHANE_LABEL, isLockedProductLineSource: false },
+        { ...SPEEDEX_LABEL_SOURCE, isLockedProductLineSource: false },
+      ],
+    });
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('lets "Some are flammable" reach a chemistry header two sentences back through product-free prose', () => {
+    const draftAnswer = [
+      '**Solvent-Based (Oil-Modified) Finishes:**',
+      '- Higher VOCs: These finishes can emit more VOCs and harmful chemicals, leading to stronger odors and requiring more ventilation. Some are flammable, affecting storage and handling.',
+    ].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] }).categoriesDetected).not.toContain('hazard');
+  });
+
+  it('does not reach two sentences back through a sentence that names a product', () => {
+    const draftAnswer =
+      'Solvent-based finishes are durable. Marathane 45 is a classic choice. Some are flammable, affecting storage.';
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] }).ungroundedCategories).toContain('hazard');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 efficacy claims across the locked product line', () => {
+  const AF79_LABEL = {
+    documentId: 'doc-af79-label',
+    title: 'AF 79',
+    isLockedProductLineSource: true,
+    documentBody: 'Acid Free Bathroom Cleaner. Disinfects hard non-porous surfaces.',
+  };
+  const AF79_EFFICACY = {
+    documentId: 'doc-af79-efficacy',
+    title: 'af79 efficacy sheet',
+    isLockedProductLineSource: true,
+    documentBody: 'BACTERICIDAL: Pseudomonas aeruginosa, Staphylococcus aureus. Contact time: 1 minute.',
+  };
+  const OTHER_PRODUCT = {
+    documentId: 'doc-sanibet',
+    title: 'Sanibet RTU',
+    documentBody: 'Kills Norovirus. BACTERICIDAL: Salmonella enterica.',
+  };
+
+  it('grounds an organism bullet in one of several locked documents (live ROW-08)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'AF79 organisms:\n- Pseudomonas aeruginosa — bactericidal',
+      sources: [AF79_LABEL, AF79_EFFICACY],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still fails an organism no locked document lists', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'AF79 organisms:\n- Mycobacterium tuberculosis — tuberculocidal',
+      sources: [AF79_LABEL, AF79_EFFICACY],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('never grounds a claim attributed to another product on the locked product documents', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Per the Sanibet RTU label, it kills Pseudomonas aeruginosa.',
+      sources: [AF79_LABEL, AF79_EFFICACY, OTHER_PRODUCT],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 every organism must be in the document', () => {
+  const GE_FIGHT_BAC_LABEL = {
+    documentId: 'doc-ge-fight-bac',
+    title: 'GE Fight Bac RTU',
+    isLockedProductLineSource: true,
+    documentBody:
+      'FOR SOFT SURFACE SANITIZATION: Preclean. Spray GE Fight Bac 6-8 inches from soft surface until wet. Let stand for 60 seconds. Allow to air dry. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+
+  it('grounds a paraphrase naming only organisms the document lists', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella aerogenes and Staphylococcus aureus on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('fails when a second organism is not in the document (was: only the first was checked)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella aerogenes and Candida auris on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('fails a species swap on the same genus', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'GE Fight Bac RTU can sanitize soft surfaces.\n- It is effective against Klebsiella pneumoniae on soft surfaces.',
+      sources: [GE_FIGHT_BAC_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 ROW-09/23 and ROW-25 attribution', () => {
+  const QUAT_STAT_LABEL = {
+    documentId: '59987b46-0000-4000-8000-000000000001',
+    title: 'Quat Stat 5',
+    documentBody: 'Effective against SARS-Related Coronavirus 2\n(SARS-CoV-2) in 1 minute. Kills Pseudomonas aeruginosa.',
+  };
+  const GE_LABEL = {
+    documentId: '3d46dbf6-76fe-41a1-8c62-5dfc09c7e298',
+    title: 'GE Fight Bac RTU',
+    documentBody:
+      'FOR SOFT SURFACE SANITIZATION: Preclean. Spray GE Fight Bac 6-8 inches from soft surface until wet. Let stand for 60 seconds. Allow to air dry. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+  const SUSTAINABILITY = {
+    documentId: 'd8d099ed-0000-4000-8000-000000000002',
+    title: 'Betco Sustainability in Action',
+    documentBody: 'Our commitment to people and planet.',
+  };
+
+  it('matches a hyphenated product name to its un-hyphenated document title ("Quat-Stat 5" / "Quat Stat 5")', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `- **Quat-Stat 5**: Effective against SARS-CoV-2 with a 1-minute contact time.\n\nSource: [doc:${QUAT_STAT_LABEL.documentId}]`,
+      sources: [QUAT_STAT_LABEL, GE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('takes the product from a numbered heading above the bullet', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**3. Quat-Stat 5**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        '',
+        `Sources: [doc:${QUAT_STAT_LABEL.documentId}] [doc:${GE_LABEL.documentId}]`,
+      ].join('\n'),
+      sources: [QUAT_STAT_LABEL, GE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still fails a heading product whose document does not list the organism', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**GE Fight Bac RTU**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        '',
+        'Always confirm the organism claim on the label in hand before relying on it.',
+        '',
+        `Sources: [doc:${QUAT_STAT_LABEL.documentId}] [doc:${GE_LABEL.documentId}]`,
+      ].join('\n'),
+      sources: [QUAT_STAT_LABEL, GE_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('attributes the single document a draft cites (ROW-25 paraphrase, no lock)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `Yes, for soft surfaces.\n- It is effective against Klebsiella aerogenes and Staphylococcus aureus on soft surfaces.\n\nSource: [doc:${GE_LABEL.documentId}]`,
+      sources: [GE_LABEL, SUSTAINABILITY],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('does not guess when the draft cites more than one document', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `Yes, for soft surfaces.\n- It is effective against Klebsiella aerogenes and Staphylococcus aureus on soft surfaces.\n\nAlways confirm the organism claim on the label in hand before relying on it.\n\nSources: [doc:${GE_LABEL.documentId}] [doc:${QUAT_STAT_LABEL.documentId}]`,
+      sources: [GE_LABEL, QUAT_STAT_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('grounds a verbatim quote the sentence splitter left with a stray quote mark', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Effective against Klebsiella aerogenes and Staphylococcus aureus."',
+      sources: [GE_LABEL],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still fails the single cited document when it does not list the organism', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `Yes.\n- It is effective against Candida auris on soft surfaces.\n\nSource: [doc:${GE_LABEL.documentId}]`,
+      sources: [GE_LABEL, SUSTAINABILITY],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 single-cited attribution never crosses products', () => {
+  it('does not ground a lowercase-initial product bullet on the one document the draft cites', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        'Several Betco disinfectants are documented for hard-surface disinfection.',
+        '- pH7Q Dual: The label explicitly states it kills Marburg virus.',
+        '',
+        'Always confirm the organism claim on the label in hand.',
+        '',
+        'Source: Rest Stop product label [doc:7117c7a4-2558-473f-9063-4bd25229bbdc].',
+      ].join('\n'),
+      sources: [
+        {
+          documentId: '7117c7a4-2558-473f-9063-4bd25229bbdc',
+          title: 'Rest Stop',
+          documentBody: 'Rest Stop. Virucidal. Kills Pseudomonas aeruginosa, *Influenza Type A/Brazil Virus.',
+        },
+      ],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 ROW-05 product named by its own document', () => {
+  const BETCO_ONE_LABEL = {
+    documentId: '8214830a-282d-47e6-a25f-d132416d9180',
+    title: 'Betco One RTU',
+    documentKind: 'label',
+    documentBody:
+      '# Betco One RTU\nEFFICACY TESTS HAVE DEMONSTRATED THAT BetONE™\nRTU DISINFECTANT IS AN EFFECTIVE VIRUCIDE. Kills Norovirus in 1 minute.',
+  };
+  const FIGHT_BAC_EFFICACY = {
+    documentId: 'cbb72d77-5f55-4e2e-ba81-20dbc5155faa',
+    title: 'Efficacy Data 311 Fight Bac',
+    documentKind: 'efficacy',
+    documentBody: '---\nproduct_name: Betco Disinfectant Fight-Bac™ RTU\norganisms: [Norovirus, Staphylococcus aureus]\nvirucidal: Kills Norovirus.',
+  };
+  const NOROVIRUS_KNOWLEDGE = {
+    documentId: '5466397a-41a4-430d-8bb0-0116f4de8da6',
+    title: 'Norovirus Outbreaks: Betco® Cleaning and Hand Hygiene Solutions',
+    documentKind: 'knowledge',
+    documentBody: 'Sanibet RTU and BetONE RTU Disinfectant help during norovirus outbreaks. Kills norovirus.',
+  };
+  const SANIBET_LABEL = {
+    documentId: '4c672e2c-920e-4319-93e5-dd4d78c11ce0',
+    title: 'Sanibet RTU',
+    documentKind: 'label',
+    documentBody: '# Sanibet RTU\nSanitizer. Kills Campylobacter jejuni on food contact surfaces.',
+  };
+  const sources = [NOROVIRUS_KNOWLEDGE, BETCO_ONE_LABEL, FIGHT_BAC_EFFICACY, SANIBET_LABEL];
+
+  it('keeps supported list entries whose label / efficacy sheet prints the product name', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        'These Betco disinfectants carry a labeled norovirus claim:',
+        '- **BetONE™ RTU Disinfectant** (label explicitly lists norovirus among its virucidal claims)',
+        '- **Betco Disinfectant Fight-Bac™ RTU** (efficacy data lists norovirus among its virucidal claims)',
+        '- The BetONE™ RTU Disinfectant label explicitly lists norovirus among its virucidal claims.',
+      ].join('\n'),
+      sources,
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('still removes an unsupported entry whose own label has no norovirus claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        'These Betco disinfectants carry a labeled norovirus claim:',
+        '- **Sanibet RTU** (label explicitly lists norovirus among its virucidal claims)',
+      ].join('\n'),
+      sources,
+    });
+    expect(result.ungroundedDetails.map((d) => d.snippet)).toEqual([
+      '- **Sanibet RTU** (label explicitly lists norovirus among its virucidal claims)',
+    ]);
+  });
+
+  it('never treats a knowledge document that mentions the product as its document', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- **Sanibet RTU** (label explicitly lists norovirus among its virucidal claims)',
+      sources: [NOROVIRUS_KNOWLEDGE, SANIBET_LABEL],
+    });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('B0-1131 item 5 — every removed span records its claim type and the failed evidence check', () => {
+  const LABEL = {
+    documentId: 'doc-gfb',
+    title: 'GE Fight Bac RTU',
+    documentKind: 'label',
+    documentBody: 'GE Fight Bac RTU. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+
+  it('explains each ungrounded detail and lists each withheld span', () => {
+    const draft = [
+      'GE Fight Bac RTU is a ready-to-use disinfectant cleaner for hard and soft surfaces in many facilities, documented on its own label.',
+      '- It is effective against Klebsiella aerogenes and Candida auris on soft surfaces.',
+      '- Dilute at 4 oz per gallon before use.',
+      '',
+      `Source: [doc:${LABEL.documentId}]`,
+    ].join('\n');
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [LABEL] });
+    const efficacy = grounding.ungroundedDetails.find((d) => d.category === 'efficacy_claim');
+    expect(efficacy?.evidenceCheck).toBe('claim_terms_missing_from_attributed_documents:Candida auris');
+    const dilution = grounding.ungroundedDetails.find((d) => d.category === 'dilution_ratio');
+    expect(dilution?.evidenceCheck).toBe('value_not_found_verbatim_in_any_source');
+
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: draft,
+      userMessage: 'Can I use GE Fight Bac RTU on upholstery?',
+      grounding,
+      productLineLock: null,
+      sources: [{ documentKind: 'label' }],
+    });
+    expect(plan.mode).not.toBe('decline');
+    if (plan.mode === 'decline') return;
+    expect(plan.withheldSpans).toEqual([
+      {
+        category: 'efficacy_claim',
+        span: '- It is effective against Klebsiella aerogenes and Candida auris on soft surfaces.',
+        evidenceCheck: 'claim_terms_missing_from_attributed_documents:Candida auris',
+      },
+      {
+        category: 'dilution_ratio',
+        span: '- Dilute at 4 oz per gallon before use.',
+        evidenceCheck: 'value_not_found_verbatim_in_any_source',
+      },
+    ]);
+  });
+
+  it('reports no_sources_retrieved and no_attributable_product_document', () => {
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer: 'Rest Stop kills Pseudomonas aeruginosa.', sources: [] })
+        .ungroundedDetails[0]?.evidenceCheck,
+    ).toBe('no_sources_retrieved');
+    expect(
+      evaluateRegulatedClaimGrounding({
+        draftAnswer: 'Rest Stop kills Pseudomonas aeruginosa.',
+        sources: [{ documentId: 'x', title: 'Unrelated Guide', documentBody: 'Floor care basics.' }],
+      }).ungroundedDetails[0]?.evidenceCheck,
+    ).toBe('no_attributable_product_document');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 claim-subject phrasings (ROW-25 leftovers)', () => {
+  const GE = {
+    documentId: '3d46dbf6-76fe-41a1-8c62-5dfc09c7e298',
+    title: 'GE Fight Bac RTU',
+    documentKind: 'label',
+    documentBody: 'FOR SOFT SURFACE SANITIZATION: Let stand for 60 seconds. Effective against Klebsiella aerogenes and Staphylococcus aureus.',
+  };
+  const OTHER = { documentId: 'd8d099ed-0000-4000-8000-000000000002', title: 'Betco Sustainability in Action', documentBody: 'People and planet.' };
+  for (const line of [
+    '- The soft-surface claim is effective against **Klebsiella aerogenes** and **Staphylococcus aureus**.',
+    '- Kill claims for soft surface sanitization: effective against **Klebsiella aerogenes** and **Staphylococcus aureus**',
+    '- This soft-surface claim is a sanitizing claim (effective against *Klebsiella aerogenes* and *Staphylococcus aureus*).',
+  ]) {
+    it(`grounds on the single cited label: ${line.slice(0, 40)}`, () => {
+      const result = evaluateRegulatedClaimGrounding({
+        draftAnswer: `Yes, on soft surfaces.\n${line}\n\nFollow the label directions.\n\nSource: [doc:${GE.documentId}]`,
+        sources: [GE, OTHER],
+      });
+      expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    });
+  }
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 ROW-05 list formats', () => {
+  const BETCO_ONE = {
+    documentId: 'b1-label',
+    title: 'Betco One RTU',
+    documentKind: 'label',
+    documentBody: 'THAT BetONE™\nRTU DISINFECTANT IS AN EFFECTIVE VIRUCIDE. Kills Norovirus in 1 minute.',
+  };
+  const FIGHT_BAC = {
+    documentId: 'fb-eff',
+    title: 'Efficacy Data 311 Fight Bac',
+    documentKind: 'efficacy',
+    documentBody: 'product_name: Betco Disinfectant Fight-Bac™ RTU\nvirucidal: Kills Norovirus.',
+  };
+  const SANIBET = {
+    documentId: 'sb-label',
+    title: 'Sanibet RTU',
+    documentKind: 'label',
+    documentBody: 'Sanibet RTU. Kills Campylobacter jejuni.',
+  };
+  const sources = [BETCO_ONE, FIGHT_BAC, SANIBET];
+  const check = (draftAnswer: string) => evaluateRegulatedClaimGrounding({ draftAnswer, sources }).ungroundedCategories;
+
+  it('name then parenthesis', () => {
+    expect(check('- BetONE™ RTU Disinfectant (label explicitly lists norovirus as a virucidal claim)')).not.toContain('efficacy_claim');
+    expect(check('- Sanibet RTU (label explicitly lists norovirus as a virucidal claim)')).toContain('efficacy_claim');
+  });
+
+  it('numbered bold name, no citation needed when the efficacy sheet prints the name', () => {
+    expect(check('2. **Fight Bac™ RTU** (EPA Reg. No. 1839-83-4170) — Norovirus appears on its virucidal list.')).not.toContain('efficacy_claim');
+    expect(check('2. **Sanibet RTU** — Norovirus appears on its virucidal list.')).toContain('efficacy_claim');
+  });
+
+  it('sub-bullet under a bold-led line with trailing text', () => {
+    expect(check('**BetONE™ RTU Disinfectant** (ready to use)\n- Claim: Virucidal against norovirus')).not.toContain('efficacy_claim');
+    expect(check('**Sanibet RTU** (ready to use)\n- Claim: Virucidal against norovirus')).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 numbered parent items', () => {
+  const FIGHT_BAC = { documentId: 'cbb72d77-5f55-4e2e-ba81-20dbc5155faa', title: 'Efficacy Data 311 Fight Bac', documentKind: 'efficacy', documentBody: 'product_name: Betco Disinfectant Fight-Bac™ RTU\nvirucidal: Kills Norovirus.' };
+  const BETCO_ONE = { documentId: '8214830a-282d-47e6-a25f-d132416d9180', title: 'Betco One RTU', documentKind: 'label', documentBody: 'THAT BetONE™ RTU DISINFECTANT IS AN EFFECTIVE VIRUCIDE. Kills Norovirus.' };
+  const SANIBET = { documentId: 'sb', title: 'Sanibet RTU', documentKind: 'label', documentBody: 'Sanibet RTU. Kills Campylobacter jejuni.' };
+
+  it('takes the product from a numbered bold parent above indented field bullets (live 78c41f28)', () => {
+    const draft = [
+      'Three Betco disinfectants carry verified labeled norovirus kill claims:',
+      '',
+      '1. **Fight Bac™ RTU Disinfectant**',
+      '   - Claim: Virucidal against norovirus',
+      '',
+      '2. **BetONE™ RTU Disinfectant**',
+      '   - Claim: Virucidal against norovirus',
+    ].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [FIGHT_BAC, BETCO_ONE, SANIBET] }).ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('a sibling bullet that names its own product never borrows the parent or a sibling', () => {
+    const draft = ['1. **Fight Bac™ RTU Disinfectant**', '   - Sanibet RTU: Virucidal against norovirus'].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [FIGHT_BAC, SANIBET] }).ungroundedCategories).toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 claim phrases are not product names', () => {
+  const QUAT = { documentId: 'q5', title: 'Quat Stat 5', documentKind: 'label', documentBody: 'Effective against SARS-Related Coronavirus 2 (SARS-CoV-2) in 1 minute.' };
+  const GE = { documentId: 'ge', title: 'GE Fight Bac RTU', documentKind: 'label', documentBody: 'Effective against Klebsiella aerogenes and Staphylococcus aureus.' };
+
+  it('a parenthetical claim bullet still takes the product from its heading', () => {
+    const draft = ['**3. Quat-Stat 5**', '- Effective against SARS-CoV-2 with a 1-minute contact time (per label and efficacy data).', '', 'More detail follows.', '', 'Sources: [doc:q5] [doc:ge]'].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] }).ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('a "Soft-surface claim:" field bullet under the product heading grounds', () => {
+    const draft = ['**GE Fight Bac RTU**', '- **Soft-surface claim:** effective against *Klebsiella aerogenes* and *Staphylococcus aureus*.', '', 'More detail follows.', '', 'Sources: [doc:q5] [doc:ge]'].join('\n');
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] }).ungroundedCategories).not.toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1143 contact time per product', () => {
+  const QUAT = { documentId: 'q5', title: 'Quat Stat 5', documentKind: 'label', documentBody: 'Effective against SARS-CoV-2 in 1 minute. Kills Pseudomonas aeruginosa in 10 minutes contact time.' };
+  const GE = { documentId: 'ge', title: 'GE Fight Bac RTU', documentKind: 'label', documentBody: 'Effective against SARS-CoV-2 with a 30 second contact time.' };
+  const FACTS = { documentId: 'verified-facts', title: 'Verified Product Facts (structured)', documentBody: 'GE Fight Bac RTU — SARS CoV 2: contact time 60 seconds' };
+
+  it('fails a contact time stated for one product but printed only on another product label', () => {
+    const line = '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 10 minutes contact time.';
+    const draft = `${line}\n\nConfirm the label in hand before use.\n\nSources: [doc:q5] [doc:ge]`;
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] });
+    const detail = result.ungroundedDetails.find((d) => d.category === 'contact_time');
+    expect(detail?.snippet).toBe(line);
+    expect(detail?.evidenceCheck).toBe('contact_time_not_in_claimed_product_documents:GE Fight Bac RTU');
+  });
+
+  it('passes the contact time printed on the claimed product own label', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 30 second contact time.',
+      sources: [QUAT, GE],
+    });
+    expect(result.ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('keeps verified-facts rows eligible (1 minute = 60 seconds in the facts block)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 1 minute contact time.',
+      sources: [QUAT, GE, FACTS],
+    });
+    expect(result.ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('keeps the pool-wide check for a sentence attributed to no product', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Surfaces must stay wet for the full 10 minutes contact time.',
+      sources: [QUAT, GE],
+    });
+    expect(result.ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('withholds only the failing product line, not another line repeating the same value', () => {
+    const quatLine = '- **Quat-Stat 5**: Effective against SARS-CoV-2 with a 10 minutes contact time.';
+    const geLine = '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 10 minutes contact time.';
+    const draft = ['Two Betco disinfectants list SARS-CoV-2 on their labels; confirm the label in hand before use.', quatLine, geLine, '', 'Confirm the label in hand before use.', '', 'Sources: [doc:q5] [doc:ge]'].join('\n');
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [QUAT, GE] });
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: draft,
+      userMessage: 'Which Betco disinfectants are effective against SARS-CoV-2?',
+      grounding: { ...grounding, ungroundedCategories: ['contact_time'], ungroundedDetails: grounding.ungroundedDetails.filter((d) => d.category === 'contact_time') },
+      productLineLock: null,
+      sources: [{ documentKind: 'label' }],
+    });
+    expect(plan.mode).not.toBe('decline');
+    if (plan.mode === 'decline') return;
+    expect(plan.redactedText).toContain(quatLine);
+    expect(plan.redactedText).not.toContain(geLine);
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1143 product line and spelled-out times', () => {
+  const PROFILE = { documentId: 'vprd', title: 'Value Priced Restroom Disinfectant', documentKind: 'product_line_profile', productLineKey: 'A5FC', documentBody: 'Kills HIV-1 (AIDS Virus).' };
+  const LABEL = { documentId: 'rs', title: 'Rest Stop', documentKind: 'label', productLineKey: 'A5FC', documentBody: 'Effective against HIV-1 (AIDS Virus) for a contact time of five minutes at room temperature.' };
+  const OTHER = { documentId: 'b1', title: 'Betco One RTU', documentKind: 'label', productLineKey: '5567', documentBody: 'Kills HIV-1 in 5 minutes contact time.' };
+  const line = '- **Value Priced Restroom Disinfectant**: HIV-1 claim with a 5 minutes contact time.';
+  const draft = `${line}\n\nConfirm the label in hand.\n\nSources: [doc:vprd] [doc:b1]`;
+
+  it('grounds on a same-line label that spells the time out ("five minutes" = "5 minutes")', () => {
+    expect(evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [PROFILE, LABEL, OTHER] }).ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('fails when only ANOTHER product line prints the time (the B0-1143 cross-product pass)', () => {
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [PROFILE, OTHER] });
+    expect(result.ungroundedDetails.find((d) => d.category === 'contact_time')?.snippet).toBe(line);
+  });
+
+  it('reads "ten (10) minutes" as 10 minutes, comparison only', () => {
+    const tenLabel = { ...LABEL, documentBody: 'Allow surfaces to remain wet for ten (10) minutes contact time.' };
+    const ten = '- **Value Priced Restroom Disinfectant**: 10 minutes contact time.';
+    expect(
+      evaluateRegulatedClaimGrounding({ draftAnswer: `${ten}\n\nConfirm the label in hand.\n\nSources: [doc:vprd]`, sources: [PROFILE, tenLabel] }).ungroundedCategories,
+    ).not.toContain('contact_time');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 claim-to-source bindings (groundedBindings)', () => {
+  const CHUNKED_LABEL = {
+    ...LABEL_SOURCE,
+    chunks: [
+      { chunkId: 'chunk-reg', text: 'Product: Test Disinfectant\nEPA Reg. No. 1677-129' },
+      { chunkId: 'chunk-dir', text: 'Directions for Use:\nDilute at 2 oz. per gallon of water for general disinfection.' },
+      { chunkId: 'chunk-kill', text: 'Kill Claims:\nEffective against Staphylococcus aureus with a 10 minute contact time.' },
+      { chunkId: 'chunk-haz', text: 'Hazards and Precautions:\nCauses severe skin burns and eye damage. Wear protective gloves and eye protection.' },
+      { chunkId: 'chunk-fa', text: 'First Aid:\nIf swallowed, call a poison control center or doctor immediately.' },
+    ],
+  };
+
+  it('binds each grounded value token to the document and chunk that prints it', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Test Disinfectant is EPA Reg. No. 1677-129. Dilute at 2 oz per gallon of water.',
+      sources: [CHUNKED_LABEL],
+    });
+    expect(result.ungroundedCategories).toEqual([]);
+    expect(result.groundedBindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: 'epa_registration', documentId: 'doc-label-1', chunkId: 'chunk-reg', channel: 'verbatim' }),
+        expect.objectContaining({ category: 'dilution_ratio', documentId: 'doc-label-1', chunkId: 'chunk-dir', channel: 'verbatim' }),
+      ]),
+    );
+    for (const binding of result.groundedBindings) {
+      expect(binding.matched.length).toBeGreaterThan(0);
+      expect(binding.title).toBe('Test Disinfectant Label');
+    }
+  });
+
+  it('binds a verbatim efficacy sentence and its contact time to the kill-claims chunk', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Effective against Staphylococcus aureus with a 10 minute contact time.',
+      sources: [CHUNKED_LABEL],
+    });
+    expect(result.ungroundedCategories).toEqual([]);
+    expect(result.groundedBindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: 'efficacy_claim', chunkId: 'chunk-kill', channel: 'verbatim' }),
+        expect.objectContaining({ category: 'contact_time', chunkId: 'chunk-kill', channel: 'verbatim' }),
+      ]),
+    );
+  });
+
+  it('binds a key-term grounded paraphrase to the attributed document (ROW-09 shape) with channel key_term', () => {
+    const QUAT = {
+      documentId: '59987b46-0000-4000-8000-000000000001',
+      title: 'Quat Stat 5',
+      documentBody: 'Effective against SARS-Related Coronavirus 2\n(SARS-CoV-2) in 1 minute. Kills Pseudomonas aeruginosa.',
+      chunks: [
+        { chunkId: 'q-chunk-0', text: 'Kills Pseudomonas aeruginosa.' },
+        { chunkId: 'q-chunk-1', text: 'Effective against SARS-Related Coronavirus 2\n(SARS-CoV-2) in 1 minute.' },
+      ],
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `- **Quat-Stat 5**: Effective against SARS-CoV-2 with a 1-minute contact time.\n\nSource: [doc:${QUAT.documentId}]`,
+      sources: [QUAT],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    const binding = result.groundedBindings.find((b) => b.category === 'efficacy_claim');
+    expect(binding).toMatchObject({ documentId: QUAT.documentId, title: 'Quat Stat 5', channel: 'key_term', chunkId: 'q-chunk-1' });
+    expect(binding?.matched.join(' ')).toMatch(/sars/i);
+    expect(binding?.span).toContain('Quat-Stat 5');
+  });
+
+  it('binds a hazard sentence grounded by its value terms with channel hazard_value_terms', () => {
+    const SPEEDEX_CHUNKED = {
+      ...SPEEDEX_LABEL_SOURCE,
+      chunks: [
+        { chunkId: 'sx-haz', text: 'DANGER! CAUSES SEVERE SKIN BURNS AND EYE DAMAGE. MAY CAUSE AN ALLERGIC SKIN REACTION.\nSKIN CORROSION - Category 1. SERIOUS EYE DAMAGE - Category 1. Signal word: Danger. H314 + H317' },
+        { chunkId: 'sx-ppe', text: 'Recommended: splash\ngoggles. Wear protective\nChemical resistant gloves.\nWash hands thoroughly after handling.' },
+      ],
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Always wear chemical-resistant gloves and splash goggles when handling and using this product, as it can cause severe skin burns and eye damage (SDS Section 2).',
+      sources: [SPEEDEX_CHUNKED],
+    });
+    expect(result.ungroundedCategories).not.toContain('hazard');
+    const binding = result.groundedBindings.find((b) => b.category === 'hazard');
+    expect(binding).toMatchObject({ documentId: SPEEDEX_LABEL_SOURCE.documentId, title: 'Speedex Concentrate', channel: 'hazard_value_terms' });
+    expect(binding?.matched).toEqual(expect.arrayContaining(['severe skin burns', 'gloves', 'goggles']));
+    // The values sit in two chunks; the binding names the first chunk carrying any of them.
+    expect(binding?.chunkId).toBe('sx-haz');
+  });
+
+  it('records no binding for an ungrounded claim, and chunkId null when the source has no chunks', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Test Disinfectant is EPA Reg. No. 1677-129. Dilute at 4 oz per gallon of water.',
+      sources: [LABEL_SOURCE],
+    });
+    expect(result.ungroundedCategories).toEqual(['dilution_ratio']);
+    expect(result.groundedBindings.map((b) => b.category)).toEqual(['epa_registration']);
+    expect(result.groundedBindings[0].chunkId).toBeNull();
+  });
+
+  it('is audit-only: bindings never change the verdict fields', () => {
+    const draftAnswer = 'Effective against Staphylococcus aureus with a 10 minute contact time. Dilute at 2 oz per gallon.';
+    const withChunks = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [CHUNKED_LABEL] });
+    const withoutChunks = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [LABEL_SOURCE] });
+    const verdict = (r: typeof withChunks) => ({
+      categoriesDetected: r.categoriesDetected,
+      ungroundedCategories: r.ungroundedCategories,
+      ungroundedDetails: r.ungroundedDetails,
+      keyTermGroundedCategories: r.keyTermGroundedCategories,
+    });
+    expect(verdict(withChunks)).toEqual(verdict(withoutChunks));
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 parenthetical hedge inside an efficacy claim', () => {
+  const PINE_QUAT = {
+    documentId: '4629d646-6b68-4511-8795-cc221c91fbb3',
+    title: 'Efficacy Data 304 Pine Quat',
+    documentKind: 'efficacy',
+    documentBody: 'Pine Quat Disinfectant. Effective against Pseudomonas aeruginosa in 10 minutes.',
+  };
+  const PH7Q = {
+    documentId: '719fddff-bc0b-4058-ac54-960058e2358f',
+    title: 'Efficacy Data 316 PH7Q',
+    documentKind: 'efficacy',
+    documentBody: 'pH7Q Neutral Disinfectant. Organism: SARS-CoV-2. Effective against SARS-CoV-2.',
+  };
+
+  it('still verifies the claim when a negated hedge sits in parentheses (fabricated organism fails)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**6. Pine Quat Disinfectant**\n- Effective against Ebola virus (not listed in the efficacy data; confirm on the label).\n- Source: [doc:${PINE_QUAT.documentId}]`,
+      sources: [PINE_QUAT],
+    });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+    expect(result.ungroundedDetails[0].snippet).toContain('Ebola virus (not listed');
+  });
+
+  it('grounds the hedged claim when the attributed document lists the organism', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**6. pH7Q Neutral Disinfectant**\n- Effective against SARS-CoV-2 (contact time not stated in the efficacy data).\n- Source: [doc:${PH7Q.documentId}]`,
+      sources: [PH7Q, PINE_QUAT],
+    });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(PH7Q.documentId);
+  });
+
+  it('does not require an organism named only inside the negated parenthesis', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**pH7Q Neutral Disinfectant**\n- Effective against SARS-CoV-2 (not effective against spores).\n- Source: [doc:${PH7Q.documentId}]`,
+      sources: [PH7Q],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('a negation in the main clause is still a conservative statement, not a claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product does not kill spores (see the label for its registered claims).',
+      sources: [PH7Q],
+    });
+    expect(result.categoriesDetected).not.toContain('efficacy_claim');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 identical bullets under different product headings', () => {
+  const GE = {
+    documentId: 'f2ccc9d5-d443-449e-9d3f-4ddfc8a74fe0',
+    title: 'Efficacy Data 390 Ge Fight Bac RTU',
+    documentKind: 'efficacy',
+    documentBody: 'GE Fight Bac RTU. Effective against SARS-CoV-2 in 1 minute.',
+  };
+  const PINE_QUAT = {
+    documentId: '4629d646-6b68-4511-8795-cc221c91fbb3',
+    title: 'Efficacy Data 304 Pine Quat',
+    documentKind: 'efficacy',
+    documentBody: 'Pine Quat. Effective against Pseudomonas aeruginosa in 10 minutes.',
+  };
+  const bullet = '- Effective against SARS-CoV-2 with a 1-minute contact time.';
+  // The live ROW-09 shape: a heading per product, the claim bullet, then that product's Source bullet.
+  const draftAnswer = [
+    '**1. GE Fight Bac RTU**',
+    bullet,
+    `- Source: GE Fight Bac RTU efficacy data. [doc:${GE.documentId}]`,
+    '',
+    '**2. Pine Quat**',
+    bullet,
+    `- Source: Pine Quat efficacy data. [doc:${PINE_QUAT.documentId}]`,
+  ].join('\n');
+
+  it('judges each copy against ITS heading: the Pine Quat copy fails, the GE copy is bound to GE', () => {
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [GE, PINE_QUAT] });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+    const details = result.ungroundedDetails.filter((d) => d.category === 'efficacy_claim');
+    expect(details).toHaveLength(1);
+    expect(details[0]).toMatchObject({ snippet: bullet, occurrence: 1 });
+    expect(details[0].evidenceCheck).toMatch(/^claim_terms_missing_from_attributed_documents:/);
+    const bindings = result.groundedBindings.filter((b) => b.category === 'efficacy_claim');
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]).toMatchObject({ documentId: GE.documentId, channel: 'key_term' });
+  });
+
+  it('the planner withholds only the failed occurrence and keeps the grounded identical bullet', () => {
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [GE, PINE_QUAT] });
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer,
+      userMessage: 'Which Betco disinfectants are effective against SARS-CoV-2 and what are their contact times?',
+      grounding,
+      productLineLock: null,
+      sources: [{ documentKind: 'efficacy' }, { documentKind: 'efficacy' }],
+    });
+    expect(plan.mode).toBe('sentence_redaction');
+    if (plan.mode === 'decline') throw new Error('unreachable');
+    expect(plan.withheldSpans).toHaveLength(1);
+    const lines = plan.redactedText.split('\n');
+    expect(lines[1]).toBe(bullet);
+    expect(lines[5]).toMatch(/withheld/);
+    expect(plan.redactedText.split(bullet).length - 1).toBe(1);
+  });
+
+  it('grounds both copies when both headings’ documents carry the organism', () => {
+    const PINE_QUAT_SARS = { ...PINE_QUAT, documentBody: 'Pine Quat. Effective against SARS-CoV-2 in 10 minutes.' };
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [GE, PINE_QUAT_SARS] });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    const bound = result.groundedBindings.filter((b) => b.category === 'efficacy_claim').map((b) => b.documentId);
+    expect(bound).toEqual([GE.documentId, PINE_QUAT_SARS.documentId]);
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 attribution gaps found by replay', () => {
+  const TRIFORCE = {
+    documentId: '9953c191-47b9-4167-8784-452c688f6a9e',
+    title: 'Efficacy Data 333 Triforce',
+    documentKind: 'efficacy',
+    productLineKey: 'LINE-TRIFORCE',
+    documentBody: 'Triforce. Effective against SARS-CoV-2 in 1 minute.',
+  };
+  const ONE_MINUTE_PROFILE = {
+    documentId: 'a1b2c3d4-0000-4000-8000-000000000011',
+    title: '1 Minute Disinfectant',
+    documentKind: 'product_line_profile',
+    productLineKey: 'LINE-TRIFORCE',
+    documentBody: 'One-step disinfectant for hard surfaces.',
+  };
+  const GE_RTU = {
+    documentId: 'f2ccc9d5-d443-449e-9d3f-4ddfc8a74fe0',
+    title: 'Efficacy Data 390 Ge Fight Bac RTU',
+    documentKind: 'efficacy',
+    productLineKey: 'LINE-GE-RTU',
+    documentBody: 'GE Fight Bac RTU. Effective against SARS-CoV-2 in 1 minute.',
+  };
+  const GE_WIPES = {
+    documentId: 'f42e7404-76d7-4ba7-a60d-5d35c64aa5e7',
+    title: 'Efficacy Data Ge Fight Bac Wipes',
+    documentKind: 'efficacy',
+    productLineKey: 'LINE-GE-WIPES',
+    documentBody: 'GE Fight Bac Wipes. Effective against Norovirus in 30 seconds.',
+  };
+  const QUAT_LABEL = {
+    documentId: '23d9e335-fe9e-476a-b1b6-38ddeeaa316b',
+    title: 'Quat Stat 5',
+    documentKind: 'label',
+    documentBody: 'Effective against SARS-Related Coronavirus 2 (SARS-CoV-2) in 1 minute.',
+  };
+  const QUAT_EFFICACY = {
+    documentId: '1f0d1d94-b59b-469b-9436-4e0f19a1d82d',
+    title: 'Efficacy Data 341 Quat Stat 5',
+    documentKind: 'efficacy',
+    documentBody: 'Quat Stat 5. Pseudomonas aeruginosa 10 minutes.',
+  };
+
+  it('a qualified heading ("Triforce Disinfectant (1 Minute Disinfectant)") attributes the one title carrying its core', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**5. Triforce Disinfectant (1 Minute Disinfectant)**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `- Source: Triforce efficacy data. [doc:${TRIFORCE.documentId}]`,
+      ].join('\n'),
+      sources: [GE_RTU, TRIFORCE, ONE_MINUTE_PROFILE],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(TRIFORCE.documentId);
+  });
+
+  it('a core shared by two products ("GE Fight Bac" → RTU and Wipes) attributes neither', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**2. GE Fight Bac Wipes**',
+        '- Effective against SARS-CoV-2 with a 30-second contact time.',
+        `- Source: wipes efficacy data. [doc:${GE_WIPES.documentId}]`,
+      ].join('\n'),
+      sources: [GE_RTU, GE_WIPES],
+    });
+    // The Wipes title matches the heading exactly and is cited; its sheet lacks SARS-CoV-2, and the
+    // RTU sheet must not be borrowed through the shared "ge fight bac" core.
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('reads every id in a multi-id citation marker ("[doc:a; doc:b]")', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '3. **Quat-Stat 5 / 5 Minute Alkaline Disinfectant**',
+        '   - Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `   - Source: Quat Stat 5 label and Efficacy Data 341 Quat Stat 5 [doc:${QUAT_LABEL.documentId}; doc:${QUAT_EFFICACY.documentId}]`,
+      ].join('\n'),
+      sources: [QUAT_LABEL, QUAT_EFFICACY, GE_RTU],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(QUAT_LABEL.documentId);
+  });
+
+  it('a class-noun gloss beside a named organism is not a second claim ("(athlete’s foot fungus)")', () => {
+    const FIGHT_BAC = {
+      documentId: 'cbb72d77-5f55-4e2e-ba81-20dbc5155faa',
+      title: 'Efficacy Data 311 Fight Bac',
+      documentKind: 'efficacy',
+      documentBody: 'Betco Disinfectant Fight-Bac RTU. Trichophyton mentagrophytes 10 minutes. Kills listed organisms.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**4. Disinfectant Fight-Bac™ RTU**',
+        '- **Fungicidal claim:** Effective against Trichophyton mentagrophytes (athlete’s foot fungus).',
+        `Source: Fight Bac efficacy data [doc:${FIGHT_BAC.documentId}]`,
+      ].join('\n'),
+      sources: [FIGHT_BAC],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    // A sentence naming only class nouns still needs every one of them.
+    const generic = evaluateRegulatedClaimGrounding({
+      draftAnswer: `**Disinfectant Fight-Bac™ RTU**\n- Kills bacteria and fungi.\nSource: [doc:${FIGHT_BAC.documentId}]`,
+      sources: [FIGHT_BAC],
+    });
+    expect(generic.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('a preceding sibling item’s Source line never attributes the next product’s claim (flat list)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '- **GE Fight Bac RTU**: Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `- Source: GE efficacy data. [doc:${GE_RTU.documentId}]`,
+        '- **GE Fight Bac Wipes**: Effective against SARS-CoV-2 with a 30-second contact time.',
+        `- Source: wipes efficacy data. [doc:${GE_WIPES.documentId}]`,
+      ].join('\n'),
+      sources: [GE_RTU, GE_WIPES],
+    });
+    const details = result.ungroundedDetails.filter((d) => d.category === 'efficacy_claim');
+    expect(details).toHaveLength(1);
+    expect(details[0].snippet).toContain('GE Fight Bac Wipes');
+    expect(result.groundedBindings.find((b) => b.category === 'efficacy_claim')?.documentId).toBe(GE_RTU.documentId);
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-1131 organism term vs efficacy-sheet spelling', () => {
+  it('"SARS-CoV-2" grounds on a sheet that stores "SARS CoV 2 (Cause of COVID 19)"', () => {
+    const TRIFORCE = {
+      documentId: '9953c191-47b9-4167-8784-452c688f6a9e',
+      title: 'Efficacy Data 333 Triforce',
+      documentKind: 'efficacy',
+      documentBody: 'Triforce. SARS CoV 2 (Cause of COVID 19) 60 seconds. Kills listed organisms.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: [
+        '**5. Triforce Disinfectant (1 Minute Disinfectant)**',
+        '- Effective against SARS-CoV-2 with a 1-minute contact time.',
+        `- Source: Triforce efficacy data. [doc:${TRIFORCE.documentId}]`,
+      ].join('\n'),
+      sources: [TRIFORCE],
+    });
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
   });
 });

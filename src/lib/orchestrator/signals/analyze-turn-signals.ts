@@ -33,7 +33,7 @@ import {
   type TurnSignals,
 } from '~/lib/orchestrator/signals/signals-schemas';
 
-import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import type { LlmTokenUsage } from '~/lib/llm/generation-shared';
 import type { ProductEntityResolutionSource } from '~/lib/rag/entity-context';
 import type {
   BetcoEntityResolution,

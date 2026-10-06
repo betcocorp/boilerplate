@@ -393,7 +393,7 @@ const LINE_TIER_DOCUMENT_KINDS = new Set(['sds', 'product_line_profile']);
  * transcribed from an unanchored, WRONG product's label) is addressed instead at the generation
  * layer: the specialist prompts now require a decline/clarify response instead of substituting when
  * `aliasResolution.outcome` is `no_alias_match`/`ambiguous_alias` for a regulated-value question —
- * see `product-support-prompts.ts` and `bathroom-specialist-system-prompt.ts` for the added rule.
+ * see the specialist prompts (bathroom: `bathroom-specialist-system-prompt.ts`) for the added rule.
  * The structured-facts gate below (`factsForSources`) still gates the OTHER leak vector (a
  * `rag.product_line_fact`/`rag.product_efficacy` value attributed to an unanchored entity) since
  * that has no equivalent "still useful even unlocked" case and no test relies on it leaking.

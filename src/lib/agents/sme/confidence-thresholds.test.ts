@@ -28,17 +28,8 @@ import {
  * assertions must fail rather than move with it.
  */
 const EXPECTED_THRESHOLD_SENTENCE: Record<string, { prompt: string; sentence: string }> = {
-  // There are deliberately TWO bathroom prompts on the same 0.8 threshold with different
-  // consequents: the standalone SME route escalates, the product-support workflow declines with an
-  // exact phrase. Both are gated here so the shared constant can never drift from either. Whether
-  // that duplication should exist at all is B0-352's question, not B0-530's — this ticket only
-  // stops the NUMBER being written twice.
-  'bathroom (sme route)': {
-    prompt: SME_BATHROOM_SYSTEM_PROMPT,
-    sentence:
-      '- If confidence is below **0.8**, do not present a definitive recommendation. Escalate by invoking the `escalation_specialist` so a ticket can be created for human follow-up.',
-  },
-  'bathroom (product-support workflow)': {
+  // B0-352 — one bathroom prompt; the SME route and the workflow import the same text.
+  bathroom: {
     prompt: WORKFLOW_BATHROOM_SYSTEM_PROMPT,
     sentence:
       '- If confidence is below **0.8**, use the decline response below. Do not attempt to answer.',
@@ -127,16 +118,10 @@ describe('SME confidence thresholds (B0-530)', () => {
     }
   });
 
-  /**
-   * The two bathroom prompts still diverge in their CONSEQUENT (escalate vs decline) — that is
-   * B0-352's problem to resolve, and consolidating them changes what the model is told, so it is
-   * out of scope here. What this ticket guarantees is narrower and is asserted above: both state
-   * the same NUMBER, and that number is declared once.
-   */
-  it('keeps both bathroom prompts on one shared threshold despite divergent consequents', () => {
-    const gate = `**${SME_CONFIDENCE_THRESHOLDS.bathroom}**`;
-    expect(SME_BATHROOM_SYSTEM_PROMPT).toContain(`confidence is below ${gate}`);
-    expect(WORKFLOW_BATHROOM_SYSTEM_PROMPT).toContain(`confidence is below ${gate}`);
+  it('keeps a single bathroom prompt shared by the SME route and the workflow (B0-352)', () => {
+    expect(SME_BATHROOM_SYSTEM_PROMPT).toBe(WORKFLOW_BATHROOM_SYSTEM_PROMPT);
+    expect(SME_BATHROOM_SYSTEM_PROMPT).toContain('# Tool use (mandatory)');
+    expect(SME_BATHROOM_SYSTEM_PROMPT).not.toContain('escalation_specialist');
   });
 
   it('excludes cross_reference, whose gate is qualitative rather than numeric', () => {

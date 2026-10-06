@@ -550,6 +550,69 @@ export type Database = {
         }
         Relationships: []
       }
+      escalations: {
+        Row: {
+          acted_by_user_id: string | null
+          conversation_id: string | null
+          created_at: string
+          external_ticket_ref: string | null
+          id: string
+          question: string
+          reason: string
+          reference: string
+          resolution_notes: string | null
+          resolved_at: string | null
+          retrieved_sources: Json
+          source: string | null
+          specialist: string | null
+          status: string
+          summary: string
+          updated_at: string
+          user_id: string | null
+          workflow_run_id: string | null
+        }
+        Insert: {
+          acted_by_user_id?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          external_ticket_ref?: string | null
+          id?: string
+          question: string
+          reason: string
+          reference?: string
+          resolution_notes?: string | null
+          resolved_at?: string | null
+          retrieved_sources?: Json
+          source?: string | null
+          specialist?: string | null
+          status?: string
+          summary: string
+          updated_at?: string
+          user_id?: string | null
+          workflow_run_id?: string | null
+        }
+        Update: {
+          acted_by_user_id?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          external_ticket_ref?: string | null
+          id?: string
+          question?: string
+          reason?: string
+          reference?: string
+          resolution_notes?: string | null
+          resolved_at?: string | null
+          retrieved_sources?: Json
+          source?: string | null
+          specialist?: string | null
+          status?: string
+          summary?: string
+          updated_at?: string
+          user_id?: string | null
+          workflow_run_id?: string | null
+        }
+        Relationships: []
+      }
       event_logging: {
         Row: {
           created_at: string

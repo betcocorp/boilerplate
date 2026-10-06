@@ -988,11 +988,10 @@ env vars, and both the code branches and the rows are gone:
 - ~~`NEXT_PUBLIC_BEX_AI_ELEMENTS_UI`~~ — the AI Elements transcript is the only renderer.
 - ~~`BEX_AI_SDK_ROUNDTRIPS_ENABLED`~~ — never wired to behaviour; row deleted.
 
-Still live, and deliberately kept:
-
-- `BEX_AI_SDK_GENERATION_ENABLED=false` — the permanent selector between the OpenAI Responses loop
-  (canonical default) and the AI SDK `streamText` loop. See `src/docs/generation-runtimes.md`
-  (B0-378); this is a runtime choice, not a migration gate.
+- ~~`BEX_AI_SDK_GENERATION_ENABLED`~~ — was the selector between the OpenAI Responses loop and
+  the AI SDK `streamText` loop. Removed in B0-914 (2026-10-05) together with the Responses loop:
+  every model on every provider runs on the AI SDK loop and the settings row is deleted. See
+  `src/docs/generation-runtimes.md` (supersedes B0-378).
 
 ### Current Expected Behavior
 

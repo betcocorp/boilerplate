@@ -45,6 +45,12 @@ export type AssembledDocumentBody = {
    * section (like a label's "Directions for Use") was retrieved or dropped by truncation.
    */
   chunkIds: string[];
+  /**
+   * B0-1131 — the same stitched chunks with the text each contributed to `body` (heading line
+   * included, a truncated final chunk as sliced), so a regulated claim grounded against `body`
+   * can be bound back to the `rag.document_chunk` row that carries its evidence.
+   */
+  chunks?: Array<{ chunkId: string; text: string }>;
 };
 
 export type DocumentSectionChunk = DocumentChunkRow & {
@@ -209,11 +215,13 @@ function stitchChunkRows(
       truncated: false,
       estimatedTokens: null,
       chunkIds: [],
+      chunks: [],
     };
   }
 
   const segments: string[] = [];
   const chunkIds: string[] = [];
+  const chunks: Array<{ chunkId: string; text: string }> = [];
   let assembled = '';
   let truncated = false;
   let tokenSum = 0;
@@ -245,6 +253,7 @@ function stitchChunkRows(
       assembled = candidate;
       segments.push(segment);
       chunkIds.push(chunk.id);
+      chunks.push({ chunkId: chunk.id, text: segment });
       continue;
     }
 
@@ -255,6 +264,7 @@ function stitchChunkRows(
         assembled = `${assembled}${separator}${sliced}…`;
         segments.push(`${sliced}…`);
         chunkIds.push(chunk.id);
+        chunks.push({ chunkId: chunk.id, text: `${sliced}…` });
       }
     }
     truncated = true;
@@ -269,6 +279,7 @@ function stitchChunkRows(
     truncated,
     estimatedTokens: hasAnyTokenCount ? tokenSum : null,
     chunkIds,
+    chunks,
   };
 }
 

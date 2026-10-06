@@ -42,14 +42,8 @@ import {
   updateWorkflowRun,
 } from '~/lib/conversations/workflow-repository';
 import { logError, logInfo } from '~/lib/observability/logger';
-import { getOpenAIClient } from '~/lib/openai/client';
-import { selectGenerationRuntime } from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
-import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
-import type {
-  FactToolEnforcementOutcome,
-  LlmTokenUsage,
-} from '~/lib/openai/responses-runtime';
+import type { FactToolEnforcementOutcome, LlmTokenUsage } from '~/lib/llm/generation-shared';
 import {
   isFactToolEnforcementEnabled,
   requireFactToolForDraft,
@@ -145,7 +139,7 @@ import {
   fetchRecommendationContext,
 } from '~/lib/tools/cross-reference-lookup';
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
-import { productSupportToolsForRoute } from '~/lib/tools/definitions';
+import { applyEscalationToolGate, productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
 import type { ProductToolTurnOptions } from '~/lib/tools/product-tools';
 import { asRagDocumentKind } from '~/lib/rag/document-kind';
@@ -601,6 +595,17 @@ async function isEarlyDeclineGateEnabled(): Promise<boolean> {
 }
 
 /**
+ * B0-528 — gate for the `escalation_specialist` tool, read the same way as the early-decline gate
+ * above (a local wrapper over `getBooleanSetting`, which every workflow test's settings mock
+ * already provides) rather than importing `isEscalationToolEnabled` from the settings service.
+ * The KEY must stay identical to that getter's (`~/lib/settings/settings-service.ts`): the executor
+ * in `~/lib/escalations/escalation-tool.ts` re-checks the flag through it, and the two must agree.
+ */
+async function isEscalationToolEnabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_ESCALATION_TOOL_ENABLED', false);
+}
+
+/**
  * B0-559 — Betco's sport/gym floor finish & coating line is formulated for wood (hardwood) sports
  * floors only, so a message about a gym/sports floor has already answered the "which surface"
  * question the broad-recommendation decline below would otherwise ask. Without this carve-out,
@@ -621,14 +626,12 @@ export { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens };
  * an 11-turn thread was observed growing 18k → 271k tokens — which is the single largest driver of
  * the B0-434 latency tail.
  *
- * Below the cap, behavior is unchanged on both runtimes: the AI SDK replays `priorMessages` as-is,
- * and the Responses runtime keeps chaining via `previous_response_id` (the cheaper path, since the
- * stable prefix stays prompt-cached). Once a conversation's prior-message count exceeds the cap,
- * the capped *tail* (most recent messages, so referenced products / entities from the last few
- * turns are preserved) is used instead of the full history, and — on the Responses runtime only —
- * the `previous_response_id` chain is intentionally broken (never resumed) in favor of replaying
- * that capped tail as explicit messages, exactly like the AI SDK runtime already does. This turns
- * an unbounded per-turn cost into a flat one for the remainder of the conversation.
+ * Below the cap, the generation loop replays `priorMessages` as-is. Once a conversation's
+ * prior-message count exceeds the cap, the capped *tail* (most recent messages, so referenced
+ * products / entities from the last few turns are preserved) is replayed instead of the full
+ * history. This turns an unbounded per-turn cost into a flat one for the remainder of the
+ * conversation. (Before B0-914 the Responses loop chained via `previous_response_id` below the cap
+ * and was deliberately broken above it; there is no chain any more.)
  *
  * Configurable via `BEX_HISTORY_MAX_MESSAGES` without a redeploy; falls back to the default on
  * anything that is not a positive finite integer.
@@ -663,20 +666,6 @@ export function capConversationHistory(
     cappedHistory: historyCapApplied ? priorMessages.slice(-maxMessages) : [...priorMessages],
     historyCapApplied,
   };
-}
-
-/**
- * B0-908 — whether a stored `latest_openai_response_id` can be handed back to the OpenAI Responses
- * API as `previous_response_id`. The column also carries the synthetic markers the non-Responses
- * paths write (`ai_sdk:<runId>` from the AI SDK runtime, `cross-reference:<traceId>` from the SME
- * endpoint) — all namespaced with a colon, which a real `resp_…` id never contains. Now that the
- * runtime is chosen per model, a conversation can alternate between a Claude turn (AI SDK) and an
- * OpenAI turn (Responses), so the Responses loop has to treat such a marker as a broken chain and
- * replay the capped history instead of sending it upstream (a guaranteed 400).
- */
-export function isResponsesApiResponseId(id: string | null | undefined): id is string {
-  const trimmed = id?.trim() ?? '';
-  return trimmed.length > 0 && !/^[a-z_-]+:/i.test(trimmed);
 }
 
 /** Closed set of early-decline reasons, in the order `classifyEarlyDecline` tests them. */
@@ -1931,8 +1920,8 @@ const TOKEN_SHAPED_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = n
 
 /**
  * B0-871 — sentence-shaped categories that MAY be withheld sentence-by-sentence on a KNOWLEDGE
- * answer (see `planRegulatedClaimRedaction`). `hazard` and `first_aid` are deliberately absent:
- * an ungrounded GHS hazard statement or first-aid instruction always keeps the full decline.
+ * answer (see `planRegulatedClaimRedaction`). `hazard` and `first_aid` are absent here: they are
+ * redactable only on a non-safety question (B0-1131, `SAFETY_SENTENCE_REGULATED_CATEGORIES`).
  *
  * PROPOSED RULE IMPLEMENTED, PENDING TOM'S CONFIRMATION (B0-871). B0-829 excluded every
  * sentence-shaped category from partial redaction by design, decided against a contact-time
@@ -1943,6 +1932,30 @@ const TOKEN_SHAPED_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = n
 const REDACTABLE_SENTENCE_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
   RegulatedClaimCategory
 >(['compatibility', 'efficacy_claim']);
+
+/**
+ * B0-1131 — `hazard` / `first_aid`: withheld sentence-by-sentence ONLY when the question is not
+ * itself a safety / exposure question (`isSafetyOrExposureQuestion`); otherwise the full decline.
+ */
+const SAFETY_SENTENCE_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
+  RegulatedClaimCategory
+>(['hazard', 'first_aid']);
+
+/**
+ * B0-1131 — the message asks about safety, PPE, hazards, first aid or an exposure incident. Wider
+ * than `hasUsageSafetyQuestionShape` on purpose: an exposure report ("got floor stripper splashed in
+ * their eyes", "swallowed", "breathed in") names no safety keyword but is the most safety-critical
+ * question there is. Errs toward declining.
+ */
+export function isSafetyOrExposureQuestion(userMessage: string): boolean {
+  const text = userMessage.toLowerCase();
+  return (
+    hasUsageSafetyQuestionShape(text) ||
+    /\b(?:hazards?|hazardous|dangerous|danger|toxic|poison\w*|flammab\w*|combustib\w*|corrosiv\w*|burns?|burned|irritat\w*|exposure|exposed|splash\w*|spill\w*|swallow\w*|ingest\w*|inhal\w*|breath\w*|fumes?|vapou?rs?|eyes?|skin|gloves?|goggles|respirator|protective|mix(?:ed|ing)?|emergency)\b/.test(
+      text,
+    )
+  );
+}
 
 /**
  * B0-871 — `evaluateRegulatedClaimGrounding` (`validator.ts`) reports a sentence-shaped claim as
@@ -2037,6 +2050,12 @@ export type RegulatedClaimRedactionPlan =
        * non-empty list is a defect to investigate, surfaced on the gate record, never a decline.
        */
       unlocatedSnippets?: string[];
+      /**
+       * B0-1131 — every span actually removed: the verbatim sentence, its claim category, and the
+       * evidence check that failed (`ungroundedDetails[].evidenceCheck`). The eval artifact for
+       * "which span was removed, of what type, and why".
+       */
+      withheldSpans: Array<{ category: RegulatedClaimCategory; span: string; evidenceCheck: string }>;
     };
 
 /**
@@ -2046,7 +2065,8 @@ export type RegulatedClaimRedactionPlan =
  * requires_human_review=true) identically for both outcomes.
  *
  * Policy, in evaluation order:
- * 1. Any ungrounded `hazard` or `first_aid` ⇒ decline. Always.
+ * 1. Any ungrounded `hazard` or `first_aid` ⇒ decline when the question is a safety / exposure
+ *    question (`isSafetyOrExposureQuestion`); otherwise withheld sentence-by-sentence as in 3 (B0-1131).
  * 2. Every ungrounded category token-shaped (B0-829) and nothing else on the draft grounded ⇒
  *    decline (`nothing_grounded_to_keep`); otherwise withhold each token-shaped claim (mode
  *    `token_redaction`) — see B0-1000 below for HOW.
@@ -2106,11 +2126,17 @@ export function planRegulatedClaimRedaction(input: {
   const ungrounded = grounding.ungroundedCategories;
   const orderedWithheldCategories = [...new Set(ungrounded)].sort();
 
-  if (
-    ungrounded.some(
-      (c) => !TOKEN_SHAPED_REGULATED_CATEGORIES.has(c) && !REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(c),
-    )
-  ) {
+  // B0-1131 — an unverifiable hazard / first-aid sentence still declines the whole answer when the
+  // QUESTION is about safety or exposure (there, that sentence is the answer, and a partial reply
+  // could read as "no precaution needed"). On any other question it is withheld sentence-by-sentence
+  // like `compatibility` / `efficacy_claim`, so it no longer erases unrelated, supported content
+  // (live ROW-01: "Where do I find the SDS for Push?" lost its SDS-location answer).
+  const safetySentencesRedactable = !isSafetyOrExposureQuestion(input.userMessage);
+  const isSentenceRedactable = (c: RegulatedClaimCategory) =>
+    REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(c) ||
+    (safetySentencesRedactable && SAFETY_SENTENCE_REGULATED_CATEGORIES.has(c));
+
+  if (ungrounded.some((c) => !TOKEN_SHAPED_REGULATED_CATEGORIES.has(c) && !isSentenceRedactable(c))) {
     return { mode: 'decline', reason: 'safety_critical_sentence_category' };
   }
 
@@ -2156,38 +2182,71 @@ export function planRegulatedClaimRedaction(input: {
    * containing sentence withheld — not just the first. A sentence already withheld for one category
    * (or one occurrence) is left alone the next time it is reached.
    */
-  let redactedText = input.draftAnswer;
-  const removedSentences = new Set<string>();
+  // B0-1131 — removals are collected as RANGES of the original draft and spliced once at the end,
+  // instead of `replaceAll(sentence, marker)` on a running copy: `replaceAll` also removed every
+  // identical copy of a sentence elsewhere in the draft, which is wrong once each copy is judged on
+  // its own (identical bullets under different product headings; the one that grounded stays).
+  const removals: Array<{ start: number; end: number; marker: string }> = [];
   const unlocatedSnippets: string[] = [];
+  const withheldSpans: Array<{ category: RegulatedClaimCategory; span: string; evidenceCheck: string }> = [];
 
   const withholdPass = (matchesCategory: (category: RegulatedClaimCategory) => boolean) => {
     for (const detail of grounding.ungroundedDetails) {
       if (!matchesCategory(detail.category)) continue;
       let matchedAnyOccurrence = false;
       let searchFrom = 0;
+      // B0-1131 — a sentence-shaped detail names WHICH occurrence failed (`occurrence`); the other
+      // copies of the same text (identical bullets under other products' headings) were judged on
+      // their own and are left alone when they grounded. Token-shaped details carry no occurrence
+      // and still withhold every containing sentence, as before.
+      let occurrence = -1;
       for (;;) {
         const occurrenceIndex = input.draftAnswer.indexOf(detail.snippet, searchFrom);
         if (occurrenceIndex < 0) break;
+        occurrence += 1;
         matchedAnyOccurrence = true;
         searchFrom = occurrenceIndex + detail.snippet.length;
+        if (detail.occurrence !== undefined && detail.occurrence !== occurrence) continue;
         const sentence = expandRegulatedClaimSnippetToSentence(
           input.draftAnswer,
           detail.snippet,
           occurrenceIndex,
         );
-        if (!sentence || removedSentences.has(sentence) || !redactedText.includes(sentence)) {
-          continue;
-        }
-        removedSentences.add(sentence);
-        redactedText = redactedText.replaceAll(sentence, regulatedClaimWithheldMarker(detail.category));
+        if (!sentence) continue;
+        // The containing sentence starts at or before the snippet occurrence.
+        let start = input.draftAnswer.lastIndexOf(sentence, occurrenceIndex);
+        if (start < 0 || start + sentence.length <= occurrenceIndex) start = input.draftAnswer.indexOf(sentence, occurrenceIndex);
+        if (start < 0) continue;
+        const end = start + sentence.length;
+        // A sentence already withheld for one category (or one occurrence) is left alone.
+        if (removals.some((r) => start < r.end && end > r.start)) continue;
+        removals.push({ start, end, marker: regulatedClaimWithheldMarker(detail.category) });
+        withheldSpans.push({
+          category: detail.category,
+          span: sentence,
+          evidenceCheck: detail.evidenceCheck ?? 'unspecified',
+        });
       }
       if (!matchedAnyOccurrence) {
         unlocatedSnippets.push(detail.snippet);
       }
     }
   };
-  withholdPass((category) => REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(category));
+  withholdPass(isSentenceRedactable);
   withholdPass((category) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(category));
+
+  let redactedText = input.draftAnswer;
+  if (removals.length > 0) {
+    removals.sort((a, b) => a.start - b.start);
+    let cursor = 0;
+    const parts: string[] = [];
+    for (const r of removals) {
+      parts.push(input.draftAnswer.slice(cursor, r.start), r.marker);
+      cursor = r.end;
+    }
+    parts.push(input.draftAnswer.slice(cursor));
+    redactedText = parts.join('');
+  }
 
   if (redactedText === input.draftAnswer) {
     // Nothing at all could be located, so nothing was redacted; serving the untouched draft under a
@@ -2232,6 +2291,7 @@ export function planRegulatedClaimRedaction(input: {
     mode: allUngroundedAreTokenShaped ? 'token_redaction' : 'sentence_redaction',
     redactedText,
     withheldCategories: orderedWithheldCategories,
+    withheldSpans,
     ...(unlocatedSnippets.length > 0 ? { unlocatedSnippets } : {}),
   };
 }
@@ -2555,54 +2615,18 @@ export async function runProductSupportWorkflow(input: {
   agentMode?: BexChatAgentMode;
   /** B0-681 — see `RouterTypeOverride`. Absent everywhere except the test-run workbench. */
   routerTypeOverride?: RouterTypeOverride;
-  previousOpenaiResponseId?: string | null;
   priorMessages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
-  /**
-   * B0-908 — the model is resolved FIRST because the generation runtime is now chosen per model,
-   * not per deploy: a `claude-*` id can only be served by the AI SDK loop (the Responses loop is
-   * the OpenAI Responses API), so `modelProviderFor` decides before the settings flag is even
-   * consulted. The flag keeps its B0-378 meaning for OpenAI models — an opt-in to run them on the
-   * AI SDK loop, off by default — and `useAiSdkGeneration` is the EFFECTIVE decision, which is what
-   * `agentRuntime`, `runtimeConfig.aiSdkGenerationEnabled` and the recorded prompt all report.
-   */
   const model = await resolveModel(input.modelTag);
-  const aiSdkGenerationSetting = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
   /**
-   * B0-912 — the same expression as before, moved behind `selectGenerationRuntime`
-   * (`~/lib/llm/generation-runtime.ts`) so the eval harness can label a RUN with the loop that
-   * served it without re-deriving the rule. Selection behaviour is unchanged by that ticket
-   * (visibility only — converging on one loop is B0-914).
-   */
-  const useAiSdkGeneration =
-    selectGenerationRuntime({ model, aiSdkGenerationSetting }) === 'ai_sdk';
-  /**
-   * B0-519 — capped once, up front, so every consumer (the `hasPreviousResponse` step record below,
-   * and both generation runtimes further down) agrees on the same decision for this turn. See
-   * `capConversationHistory`.
+   * B0-519 — capped once, up front, so every consumer (the `historyCapApplied` step record below
+   * and the generation loop further down) agrees on the same decision for this turn. See
+   * `capConversationHistory`. Generation is stateless (B0-914): this capped tail is the whole
+   * conversation memory the model sees.
    */
   const { cappedHistory, historyCapApplied } = capConversationHistory(input.priorMessages ?? []);
-  /**
-   * B0-519 — the Responses runtime's `previous_response_id` chain is the actual growth driver
-   * (OpenAI replays the whole server-side chain as input tokens on every chained call); once the
-   * conversation is over the cap, stop resuming it and fall back to the same bounded, explicit
-   * replay the AI SDK runtime already does. Below the cap this is just `input.previousOpenaiResponseId`,
-   * unchanged from before this ticket.
-   *
-   * B0-908 — a second chain-break: the stored id is a synthetic marker from a prior non-Responses
-   * turn (`ai_sdk:<runId>` after a Claude turn or an AI SDK opt-in turn) — see
-   * `isResponsesApiResponseId`. And when THIS turn runs on the AI SDK loop the chain is simply not
-   * used: the id is nulled so `hasPreviousResponse` describes the call that was actually made, and a
-   * real `resp_…` id from a prior OpenAI turn is never handed to the stateless loop.
-   */
-  const responsesChainBroken =
-    historyCapApplied ||
-    (input.previousOpenaiResponseId != null &&
-      !isResponsesApiResponseId(input.previousOpenaiResponseId));
-  const effectivePreviousResponseId =
-    responsesChainBroken || useAiSdkGeneration ? null : (input.previousOpenaiResponseId ?? null);
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
   // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
@@ -2940,7 +2964,6 @@ export async function runProductSupportWorkflow(input: {
   const runtimeConfig: RuntimeConfig = {
     useValidator,
     earlyDeclineGateEnabled,
-    aiSdkGenerationEnabled: useAiSdkGeneration,
     factToolEnforcementEnabled,
     rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
     multiIntentQueryExpansionEnabled: await getBooleanSetting('RAG_MULTI_INTENT_ENABLED', false),
@@ -3009,7 +3032,18 @@ export async function runProductSupportWorkflow(input: {
    * cacheable prefix — instructions + tool schemas — stays byte-identical for every call that shares
    * the key, both within this tool loop and across later turns routed the same way.
    */
-  const routeTools = productSupportToolsForRoute(routingDecision);
+  /**
+   * B0-528 — `escalation_specialist` is in every route's set but is only SENT while the
+   * `BEX_ESCALATION_TOOL_ENABLED` settings row is true (default false, so eval/harness runs create
+   * no `escalations` rows until it is deliberately switched on). Read once per turn so the tool list
+   * cannot change between rounds; flipping the flag changes the cacheable prefix exactly as any
+   * definitions change would, and the executor re-checks the flag independently.
+   */
+  const escalationToolEnabled = await isEscalationToolEnabled();
+  const routeTools = applyEscalationToolGate(
+    productSupportToolsForRoute(routingDecision),
+    escalationToolEnabled,
+  );
 
   /**
    * B0-392 — the specialist policy that ACTUALLY ran, which is not always `routingDecision`:
@@ -3175,12 +3209,8 @@ export async function runProductSupportWorkflow(input: {
   // The OpenAI client is still constructed on a Claude turn for the Responses-only helpers below
   // (it only needs OPENAI_API_KEY present); the validator, revision pass and intent classifier now
   // route by model id through `~/lib/llm/structured-completion`, so they follow the selected provider.
-  const client = getOpenAIClient();
-  /**
-   * B0-389 — which generation runtime the agent prompt ran on; same decision that picks the branch
-   * (B0-908: provider-derived for `claude-*`, flag-derived for OpenAI models).
-   */
-  const agentRuntime: PromptRecord['runtime'] = useAiSdkGeneration ? 'ai-sdk' : 'responses';
+  /** B0-389 — which generation runtime the agent prompt ran on. One loop since B0-914. */
+  const agentRuntime: PromptRecord['runtime'] = 'ai-sdk';
 
   /**
    * B0-428 / B0-429 — time to first assistant token, surfaced as the "Stream" column on
@@ -3262,7 +3292,13 @@ export async function runProductSupportWorkflow(input: {
   // B0-780 — carries which specialist policy is running down into `executeProductTool` (via
   // `executeToolCall`'s `auditCtx`), so retrieval can bind to that specialist's product category
   // (see `resolveKnowledgeCategoryExclusions` in `~/lib/tools/product-tools.ts`).
-  const wfCtx = { ...ctx, workflowRunId: run.id, specialistId: effectivePromptId as string };
+  // B0-528 — `runSource` rides along the same way for the `escalation_specialist` executor.
+  const wfCtx = {
+    ...ctx,
+    workflowRunId: run.id,
+    specialistId: effectivePromptId as string,
+    runSource: input.source,
+  };
 
   /**
    * B0-386 — ids of steps inserted `running` and not yet completed, oldest first. Every step
@@ -3390,9 +3426,8 @@ export async function runProductSupportWorkflow(input: {
       promptVersion,
       promptBundleVersion: PROMPT_BUNDLE_VERSION,
       priorMessageCount: input.priorMessages?.length ?? 0,
-      previousResponseId: input.previousOpenaiResponseId ?? null,
-      // B0-519 — no model call happens on this path, so the chain is never touched either way;
-      // still recorded for consistency with the answered path's same field.
+      // B0-519 — no model call happens on this path; still recorded for consistency with the
+      // answered path's same field.
       historyCapApplied,
       // B0-491 — no model call happens on this path either; explicit null with a reason rather
       // than an absent field, same rule as every other run-config field on this branch.
@@ -3567,17 +3602,10 @@ export async function runProductSupportWorkflow(input: {
     status: 'running',
     input: jsonContent({
       model,
-      // B0-519 — reflects the EFFECTIVE decision (post-cap), not the raw input: once
-      // `historyCapApplied` breaks the chain, this turn has no previous response regardless of
-      // what the caller passed in.
-      hasPreviousResponse: Boolean(effectivePreviousResponseId),
       historyCapApplied,
       /**
-       * B0-389 — captured here, ABOVE the `useAiSdkGeneration` fork below, so both generation
-       * runtimes inherit the same record. `runtime` is derived from the very flag that picks the
-       * branch: the same prompt on a different runtime is a different experiment, because the two
-       * runtimes assemble the model input differently (replayed `priorMessages` vs. a server-side
-       * `previous_response_id` chain).
+       * B0-389 — the prompt record for this call. `runtime` is always `ai-sdk` since B0-914;
+       * older runs keep their recorded `responses` value.
        */
       ...recordPrompt({
         stage: 'openai_responses_agent',
@@ -4130,50 +4158,26 @@ export async function runProductSupportWorkflow(input: {
           })
       : undefined;
 
-    // Generation runtime: AI SDK (`streamText`) for every Anthropic model and for OpenAI models
-    // when BEX_AI_SDK_GENERATION_ENABLED, else the OpenAI Responses tool loop (B0-908 — see
-    // `useAiSdkGeneration` at the top). Both return the same { assistantText, finalResponseId,
-    // toolTrace, responseIds } shape consumed below.
-    const agentResult = useAiSdkGeneration
-      ? await runAiSdkWithToolLoop({
-          modelTag: input.modelTag,
-          instructions,
-          // B0-519 — capped tail, not the raw list; see `capConversationHistory`.
-          history: cappedHistory,
-          userMessage: input.userMessage,
-          tools: routeTools,
-          toolChoice,
-          promptCacheKey,
-          preloadedEvidence,
-          maxOutputTokens,
-          onAssistantDelta: confidenceStreamFilter?.onDelta,
-          observeAssistantDelta,
-          requireFactTool: factToolRequirementCheck,
-          onFactToolEnforced,
-          executeTool: executeToolForGeneration,
-        })
-      : await runResponsesWithToolLoop({
-          client,
-          model,
-          instructions,
-          tools: routeTools,
-          userMessage: input.userMessage,
-          // B0-519 — null once `historyCapApplied` breaks the chain; `history` then supplies the
-          // capped tail as explicit messages so this call still opens with recent context instead
-          // of none, same as a stateless AI SDK call would. B0-908 — the same replay when the
-          // stored id is a synthetic `ai_sdk:` marker from a prior Claude / AI SDK turn.
-          previousResponseId: effectivePreviousResponseId,
-          history: responsesChainBroken ? cappedHistory : undefined,
-          toolChoice,
-          promptCacheKey,
-          preloadedEvidence,
-          maxOutputTokens,
-          onAssistantDelta: confidenceStreamFilter?.onDelta,
-          observeAssistantDelta,
-          requireFactTool: factToolRequirementCheck,
-          onFactToolEnforced,
-          executeTool: executeToolForGeneration,
-        });
+    // Generation: the AI SDK (`streamText`) tool loop for every model, OpenAI and Anthropic alike
+    // (B0-914). Returns { assistantText, finalResponseId, toolTrace, responseIds } consumed below;
+    // `finalResponseId` is the synthetic `ai_sdk:<runId>` marker.
+    const agentResult = await runAiSdkWithToolLoop({
+      modelTag: input.modelTag,
+      instructions,
+      // B0-519 — capped tail, not the raw list; see `capConversationHistory`.
+      history: cappedHistory,
+      userMessage: input.userMessage,
+      tools: routeTools,
+      toolChoice,
+      promptCacheKey,
+      preloadedEvidence,
+      maxOutputTokens,
+      onAssistantDelta: confidenceStreamFilter?.onDelta,
+      observeAssistantDelta,
+      requireFactTool: factToolRequirementCheck,
+      onFactToolEnforced,
+      executeTool: executeToolForGeneration,
+    });
 
     // B0-491 — flush whatever the filter was still holding back as a cautious lookahead (never
     // actually part of a marker); if a marker opened but never closed, this drops it silently.
@@ -5513,11 +5517,35 @@ export async function runProductSupportWorkflow(input: {
             .map((c) => c.document_id)
         : [],
     );
+    const productLineKeyByDocumentId = new Map<string, string>();
+    for (const chunk of retrieved_document_chunks) {
+      if (chunk.product_line_key && !productLineKeyByDocumentId.has(chunk.document_id)) {
+        productLineKeyByDocumentId.set(chunk.document_id, chunk.product_line_key);
+      }
+    }
     const regulatedClaimGroundingSources = sourceMeta.map((s) => ({
       documentId: s.documentId,
       title: s.title,
       documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
       isLockedProductLineSource: lockedProductLineDocumentIds.has(s.documentId),
+      // B0-1131 — lets attribution recognise a product's own label / efficacy / SDS by the name it prints.
+      documentKind: s.documentKind,
+      // B0-1143 — groups a product's profile, label and SDS for per-product contact-time grounding.
+      productLineKey: productLineKeyByDocumentId.get(s.documentId) ?? null,
+      // B0-1131 — the stitched chunks, so each grounded claim can be bound to its evidence chunk.
+      chunks: fullDocumentBodies.get(s.documentId)?.chunks,
+    }));
+    /**
+     * B0-1144 — the exact pool the guardrail judged this turn against, persisted on every
+     * `regulated_claim_guardrail` gate record. The answer's own `sources` deliberately omits
+     * unendorsed speculative hits (B0-635: never CITE a guess), but the guardrail grounds against
+     * everything retrieved, so `sources` alone cannot show what a verdict was based on.
+     */
+    const regulatedClaimGroundingPool = regulatedClaimGroundingSources.map((s) => ({
+      documentId: s.documentId,
+      title: s.title,
+      documentKind: s.documentKind ?? null,
+      isLockedProductLineSource: s.isLockedProductLineSource,
     }));
     // B0-997 — same "did this turn resolve a named Betco product" signal `requireFactToolForDraft`
     // already gates `compatibility` enforcement on (`speculativeProductLineLock !== null`), read here
@@ -5609,6 +5637,9 @@ export async function runProductSupportWorkflow(input: {
             categoriesDetected: regulatedClaimGrounding.categoriesDetected,
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+            groundedSourceCount: regulatedClaimGroundingPool.length,
+            groundingSources: regulatedClaimGroundingPool,
+            groundedBindings: regulatedClaimGrounding.groundedBindings,
           },
           thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
           verdict: 'bypassed',
@@ -5661,6 +5692,9 @@ export async function runProductSupportWorkflow(input: {
             // B0-871 — `token_redaction` | `sentence_redaction` | `decline` (+ why, for decline).
             outcome: regulatedClaimRedactionPlan.mode,
             ...(redactionDeclineReason ? { declineReason: redactionDeclineReason } : {}),
+            ...(regulatedClaimRedactionPlan.mode !== 'decline'
+              ? { withheldSpans: regulatedClaimRedactionPlan.withheldSpans }
+              : {}),
           },
           { ...wfCtx, stepId: validationStep.id },
         );
@@ -5682,6 +5716,14 @@ export async function runProductSupportWorkflow(input: {
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             redactionMode: regulatedClaimRedactionPlan.mode,
+            // B0-1131 — the pool this verdict was judged against, every span removed with why, and
+            // what each KEPT claim was bound to (document, chunk, grounding path, matched strings).
+            groundedSourceCount: regulatedClaimGroundingPool.length,
+            groundingSources: regulatedClaimGroundingPool,
+            groundedBindings: regulatedClaimGrounding.groundedBindings,
+            ...(regulatedClaimRedactionPlan.mode !== 'decline'
+              ? { withheldSpans: regulatedClaimRedactionPlan.withheldSpans }
+              : {}),
             // B0-888 — 'key_term' when at least one OTHER (still-grounded) compatibility/
             // efficacy_claim sentence on this draft was saved by the key-term/adjacent-quote
             // fallback rather than a plain verbatim match; 'verbatim' otherwise. Distinguishes the
@@ -5724,7 +5766,9 @@ export async function runProductSupportWorkflow(input: {
           // The SERVED (pre-revision) draft's own grounding result.
           categoriesDetected: regulatedClaimGrounding.categoriesDetected,
           ungroundedCategories: [],
-          groundedSourceCount: sourceMeta.length,
+          groundedSourceCount: regulatedClaimGroundingPool.length,
+          groundingSources: regulatedClaimGroundingPool,
+          groundedBindings: regulatedClaimGrounding.groundedBindings,
           groundingMode:
             regulatedClaimGrounding.keyTermGroundedCategories.length > 0 ? 'key_term' : 'verbatim',
           // What the guardrail rejected on the REVISED draft, i.e. what our own revision pass
@@ -5756,7 +5800,10 @@ export async function runProductSupportWorkflow(input: {
         inputs: {
           categoriesDetected: regulatedClaimGrounding.categoriesDetected,
           ungroundedCategories: [],
-          groundedSourceCount: sourceMeta.length,
+          groundedSourceCount: regulatedClaimGroundingPool.length,
+          groundingSources: regulatedClaimGroundingPool,
+          // B0-1131 — what each claim was bound to (document, chunk, grounding path, matched strings).
+          groundedBindings: regulatedClaimGrounding.groundedBindings,
           // B0-888 — 'key_term' when at least one compatibility/efficacy_claim sentence on this
           // draft was grounded via the key-term/adjacent-quote fallback rather than a plain
           // verbatim match; 'verbatim' otherwise (including when nothing regulated was detected).
@@ -6242,7 +6289,8 @@ export async function runProductSupportWorkflow(input: {
            * answer (no locked product line, or knowledge-kind sources dominate), with substantive
            * content left. Each ungrounded sentence was replaced VERBATIM by
            * `regulatedClaimWithheldMarker` — the removed sentence is never rephrased, summarised
-           * or hinted at. `hazard` / `first_aid` never take this path (see the planner).
+           * or hinted at. `hazard` / `first_aid` take this path only on a non-safety question
+           * (B0-1131, see the planner).
            *
            * PROPOSED RULE IMPLEMENTED, PENDING TOM'S CONFIRMATION — see
            * `REDACTABLE_SENTENCE_REGULATED_CATEGORIES` and `src/docs/generation-runtimes.md`.
@@ -6252,6 +6300,11 @@ export async function runProductSupportWorkflow(input: {
             '',
             buildRegulatedClaimSentenceRedactionFooter(flagged),
             ...(compatibilityCaveat ? ['', compatibilityCaveat] : []),
+            // B0-1131 — a withheld hazard / first-aid sentence still points at SDS Section 2 / 4
+            // (and poison control for first aid), so the safety direction is never just dropped.
+            ...plan.withheldCategories
+              .filter((c) => SAFETY_SENTENCE_REGULATED_CATEGORIES.has(c))
+              .flatMap((c) => ['', REGULATED_CLAIM_GOVERNING_RULES[c]]),
           ].join('\n');
           answerProvenance = 'regulated_claim_partial_redaction';
         } else {
@@ -6501,7 +6554,6 @@ export async function runProductSupportWorkflow(input: {
        * panel showing only them would imply the model saw less than it did.
        */
       priorMessageCount: input.priorMessages?.length ?? 0,
-      previousResponseId: input.previousOpenaiResponseId ?? null,
       // B0-519 — whether this turn's history exceeded the cap; see `capConversationHistory`.
       historyCapApplied,
       // B0-349 — the answer as composed before validator/revision/gate mutation; see the

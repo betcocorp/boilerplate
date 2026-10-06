@@ -2,13 +2,20 @@
 
 import { Download, Star } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 
 import { CreateTestFromPromptsDialog } from '~/components/admin/tests/CreateTestFromPromptsDialog';
 import { DeleteTestPromptDialog } from '~/components/admin/tests/DeleteTestPromptDialog';
 import { EditTestItemDialog } from '~/components/admin/tests/EditTestItemDialog';
 import { ExpectedSourcesDialog } from '~/components/admin/tests/ExpectedSourcesDialog';
 import type { TestItemSuggestionLists } from '~/components/admin/tests/TestItemFields';
+import { ITEM_ANCHOR_PREFIX, itemAnchorId } from '~/lib/tests/item-anchor';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Checkbox } from '~/components/ui/checkbox';
@@ -59,6 +66,11 @@ export type TestPromptRow = {
 
 /** The importer splits phrase cells on `|`, so display and export both join on it (B0-933). */
 const PHRASE_DELIMITER = ' | ';
+
+function subscribeToHashChange(onChange: () => void): () => void {
+  window.addEventListener('hashchange', onChange);
+  return () => window.removeEventListener('hashchange', onChange);
+}
 
 /**
  * Regulated free text: phrases are joined structurally and never reformatted — no rounding,
@@ -310,6 +322,27 @@ export function TestPromptsSection({
 }: TestPromptsSectionProps) {
   const [query, setQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+
+  // B0-1145 — `/admin/tests/[testId]#item-<id>` links from the prompt search dialog. The admin
+  // layout scrolls inside a nested div (not the window) and client-side `pushState` navigation
+  // never updates `:target`, so the browser's own fragment handling can't land on the row.
+  const hash = useSyncExternalStore(
+    subscribeToHashChange,
+    () => window.location.hash,
+    () => '',
+  );
+  const highlightedItemId = hash.startsWith(ITEM_ANCHOR_PREFIX)
+    ? hash.slice(ITEM_ANCHOR_PREFIX.length)
+    : null;
+
+  useEffect(() => {
+    if (!highlightedItemId) {
+      return;
+    }
+    document
+      .getElementById(itemAnchorId(highlightedItemId))
+      ?.scrollIntoView({ block: 'center' });
+  }, [highlightedItemId]);
 
   const filtered = useMemo(
     () => items.filter((item) => rowMatchesQuery(item, query, documentTitlesById)),
@@ -618,7 +651,13 @@ export function TestPromptsSection({
                 return (
                   <TableRow
                     key={item.id}
+                    className={
+                      highlightedItemId === item.id
+                        ? 'bg-sky-50 ring-1 ring-sky-200 ring-inset'
+                        : undefined
+                    }
                     data-state={isSelected ? 'selected' : undefined}
+                    id={itemAnchorId(item.id)}
                   >
                     <TableCell>
                       <Checkbox

@@ -62,6 +62,10 @@ import {
 import { extractMultiTurnResult } from '~/lib/tests/multi-turn-result';
 import { getRagEvaluation } from '~/lib/tests/rag-evaluation/persistence';
 import {
+  resolveReportCategory,
+  UNCATEGORIZED_CATEGORY,
+} from '~/lib/tests/report/report-category';
+import {
   completedPassCount,
   parseReportState,
   totalPassCount,
@@ -247,6 +251,10 @@ export default async function AdminTestRunDetailsPage({
   );
   const priorityByItemId = new Map(
     testItems.map((item) => [item.id, item.priority]),
+  );
+  // B0-853 — the category of record for the full export, identical to the run report's.
+  const categoryByItemId = new Map(
+    testItems.map((item) => [item.id, resolveReportCategory(item)]),
   );
   const idealResponseByItemId = new Map(
     testItems.map((item) => [item.id, item.ideal_response]),
@@ -664,6 +672,7 @@ export default async function AdminTestRunDetailsPage({
             test_item_id: row.test_item_id,
             prompt: promptByItemId.get(row.test_item_id) ?? '',
             priority: priorityByItemId.get(row.test_item_id) ?? null,
+            category: categoryByItemId.get(row.test_item_id) ?? UNCATEGORIZED_CATEGORY,
             passed: row.passed,
             status: row.status,
             similarity: extractItemSimilarityScore(row.response_payload),
@@ -738,8 +747,8 @@ export default async function AdminTestRunDetailsPage({
                     summary={promptBundleVersionSummary}
                   />
                   <RuntimeConfigBadge
-                    // B0-912 — the run-level loop, so a claude-* run reads as the AI SDK loop and a
-                    // gpt-* run with the flag off reads as the Responses loop.
+                    // B0-912 — the run-level loop. Every run since B0-914 is the AI SDK loop; older
+                    // gpt-* runs may read as the retired Responses loop.
                     generationRuntime={extractGenerationRuntimeFromSummary(
                       result.summary,
                     )}

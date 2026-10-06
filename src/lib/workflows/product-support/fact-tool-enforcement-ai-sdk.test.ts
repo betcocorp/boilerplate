@@ -252,4 +252,47 @@ describe('runAiSdkWithToolLoop — fact-tool enforcement (B0-948)', () => {
     expect(seen).toHaveLength(1);
     expect(result.assistantText).toBe(COMPAT_SENTENCE);
   });
+  it('reports the forced call as failed when the tool errored, and still returns an answer', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    modelRef.current = recordingModel(
+      [
+        answerChunks(COMPAT_SENTENCE),
+        toolCallChunks('list_allowed_surfaces', 'forced_1'),
+        answerChunks('The approved-surface list is not on file for this product.'),
+      ],
+      seen,
+    );
+    const onFactToolEnforced = vi.fn();
+
+    const result = await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'Can this go on linoleum?',
+      tools: offeredTools,
+      requireFactTool: requireFactToolForDraft,
+      onFactToolEnforced,
+      executeTool: async ({ name }: { name: string }) => ({
+        output: '{"ok":false}',
+        trace: {
+          toolName: name,
+          callId: `call_${name}`,
+          argumentsPreview: '',
+          outputPreview: '',
+          ok: false,
+          durationMs: 0,
+        } as ToolTraceEntry,
+      }),
+    });
+
+    expect(onFactToolEnforced.mock.calls[0]?.[0]).toEqual({
+      requiredTool: 'list_allowed_surfaces',
+      enforced: true,
+      toolSucceeded: false,
+      // B0-984 — the first draft travels with the outcome so the run report can diff it.
+      preEnforcementDraft: COMPAT_SENTENCE,
+    });
+    expect(result.assistantText).toBe(
+      'The approved-surface list is not on file for this product.',
+    );
+  });
 });

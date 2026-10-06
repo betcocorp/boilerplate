@@ -1,6 +1,11 @@
 'use client';
 
-import { Loader2Icon, SearchIcon } from 'lucide-react';
+import {
+  ActivityIcon,
+  ListChecksIcon,
+  Loader2Icon,
+  SearchIcon,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
@@ -16,6 +21,12 @@ import {
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Switch } from '~/components/ui/switch';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '~/components/ui/tooltip';
+import { testItemHref } from '~/lib/tests/item-anchor';
 
 /** Below this the type-ahead stays idle, matching `DocumentPickerField`'s threshold. */
 const MIN_QUERY_LENGTH = 2;
@@ -149,12 +160,10 @@ export function PromptSearchDialog() {
     }
   }
 
-  function handleResultClick(result: PromptSearchResult) {
-    if (!result.latestRunId) {
-      return;
-    }
-    setOpen(false);
-    router.push(`/admin/observability/${result.latestRunId}`);
+  /** Close the dialog first so its close-reset doesn't race the route change. */
+  function navigateTo(href: string) {
+    handleOpenChange(false);
+    router.push(href);
   }
 
   const trimmedQuery = query.trim();
@@ -177,7 +186,8 @@ export function PromptSearchDialog() {
         <DialogHeader>
           <DialogTitle>Search prompts</DialogTitle>
           <DialogDescription>
-            Search every prompt ever entered into the system and jump straight to its latest trace.
+            Search every prompt ever entered into the system, then open its latest trace or the
+            test set it belongs to.
           </DialogDescription>
           <form className="flex items-center gap-2 pt-2" onSubmit={handleSubmit}>
             <Input
@@ -239,18 +249,13 @@ export function PromptSearchDialog() {
             <ul className="flex flex-col gap-1.5 py-1">
               {results.map((result) => {
                 const hasRun = Boolean(result.latestRunId);
+                const testSetHref = testItemHref(result.testId, result.testItemId);
                 return (
-                  <li key={result.testItemId}>
-                    <button
-                      className={
-                        hasRun
-                          ? 'w-full rounded-2xl border border-transparent bg-muted/40 px-3 py-2 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/30'
-                          : 'w-full cursor-not-allowed rounded-2xl border border-transparent bg-muted/20 px-3 py-2 text-left opacity-60'
-                      }
-                      disabled={!hasRun}
-                      onClick={() => handleResultClick(result)}
-                      type="button"
-                    >
+                  <li
+                    className="flex items-center gap-2 rounded-2xl bg-muted/40 px-3 py-2"
+                    key={result.testItemId}
+                  >
+                    <div className="min-w-0 flex-1">
                       <p className="line-clamp-2 text-sm text-foreground">
                         {result.prompt}
                       </p>
@@ -259,7 +264,51 @@ export function PromptSearchDialog() {
                         {result.isGolden ? ' · Golden' : ''}
                         {!hasRun ? ' · No trace yet' : ''}
                       </p>
-                    </button>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          {/* Disabled buttons don't fire pointer events, so the span carries the tooltip. */}
+                          <span>
+                            <Button
+                              aria-label={
+                                hasRun
+                                  ? 'Open latest trace'
+                                  : 'No trace yet for this prompt'
+                              }
+                              disabled={!hasRun}
+                              onClick={() =>
+                                navigateTo(
+                                  `/admin/observability/${result.latestRunId}`,
+                                )
+                              }
+                              size="icon-sm"
+                              type="button"
+                              variant="ghost"
+                            >
+                              <ActivityIcon className="size-4" />
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {hasRun ? 'Open latest trace' : 'No trace yet'}
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            aria-label={`Open test set ${result.testName}`}
+                            onClick={() => navigateTo(testSetHref)}
+                            size="icon-sm"
+                            type="button"
+                            variant="ghost"
+                          >
+                            <ListChecksIcon className="size-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Open in test set</TooltipContent>
+                      </Tooltip>
+                    </div>
                   </li>
                 );
               })}

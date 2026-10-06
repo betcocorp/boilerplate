@@ -2,8 +2,8 @@ import { after } from 'next/server';
 
 import { modelProviderFor } from '~/lib/constants/models';
 import {
+  CURRENT_GENERATION_RUNTIME,
   isGenerationRuntime,
-  selectGenerationRuntime,
 } from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { logError, logWarn } from '~/lib/observability/logger';
@@ -13,7 +13,6 @@ import {
   type SemanticRouteDecision,
 } from '~/lib/orchestrator/semantic-router';
 import { routeUserMessageToSme, type SmeRouteDecision } from '~/lib/orchestrator/sme-routing';
-import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 import {
   countPassedAndFailedByResultId,
@@ -374,26 +373,14 @@ export async function executeTestRun(
   const resolvedProvider = modelProviderFor(resolvedModel);
 
   /**
-   * B0-912 — WHICH GENERATION LOOP served this run. On 2026-09-08 a paired OpenAI-vs-Anthropic
-   * comparison was read as a vendor verdict, when the Anthropic arm had in fact run on the AI SDK
-   * `streamText` loop (forced: the OpenAI Responses loop rejects a `claude-*` id by design) and the
-   * OpenAI arm on the canonical Responses loop (`BEX_AI_SDK_GENERATION_ENABLED` defaults false) —
-   * two different runtimes, and no report said so.
-   *
-   * Persisted in `summary`, the SAME jsonb blob (and the same write) that already carries
-   * `resolvedModel`/`resolvedProvider` (B0-757/B0-905), rather than `run_options`: `run_options` is
-   * written by `runTestAction` when the row is created and is immutable by design, but a queued run
-   * can execute much later, and the runtime depends on a settings row that may move in between —
-   * writing it there would record an intention, not a fact. Resolved through the very same
-   * `selectGenerationRuntime` seam the workflow uses per turn, so the label cannot disagree with
-   * the loop that ran. Preserved across a resume for the same reason `resolvedModel` is.
+   * B0-912 — WHICH GENERATION LOOP served this run, persisted in `summary` beside
+   * `resolvedModel`/`resolvedProvider`. Since B0-914 every run is the AI SDK loop, so a fresh run
+   * records `CURRENT_GENERATION_RUNTIME`; a resumed run keeps whatever it already recorded (which
+   * may be `responses` for a run started before the cutover).
    */
   const generationRuntime =
     (isGenerationRuntime(currentSummary.generationRuntime) && currentSummary.generationRuntime) ||
-    selectGenerationRuntime({
-      model: resolvedModel,
-      aiSdkGenerationSetting: await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false),
-    });
+    CURRENT_GENERATION_RUNTIME;
 
   await updateTestResult(testResult.id, {
     status: 'running',

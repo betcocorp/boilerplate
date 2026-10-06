@@ -1245,6 +1245,66 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
   });
 });
 
+/**
+ * B0-853 — the category of record is the dataset's human-authored `question_category` (stored by
+ * the CSV importer under `input_payload`), not the keyword classifier's `prompt_category` slug.
+ * The same fixture ids as above, so the persisted `CASE_SCORES` still apply.
+ */
+describe('assembleReportData → category of record (B0-853)', () => {
+  const CATEGORY_ITEMS: TestItemRecord[] = [
+    // question_category present: wins over the classifier slug.
+    item({
+      ...ITEMS[0],
+      input_payload: { question_category: 'Dilution and Directions' },
+      prompt_category: 'dilution',
+    }),
+    // Absent: falls back to prompt_category.
+    item({ ...ITEMS[1], input_payload: {}, prompt_category: 'recommendation' }),
+    // Both absent: Uncategorized.
+    item({ ...ITEMS[2], input_payload: {}, prompt_category: null }),
+    // Whitespace-only question_category: treated as absent, falls back.
+    item({
+      ...ITEMS[3],
+      input_payload: { question_category: '   ' },
+      prompt_category: 'pathogen-specific',
+    }),
+  ];
+
+  function assemble() {
+    return assembleReportData({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: CATEGORY_ITEMS,
+      resultItems: RESULT_ITEMS,
+      caseScores: CASE_SCORES,
+      expectedSourceIndex: EXPECTED_SOURCE_INDEX,
+      synthesis: SYNTHESIS,
+      generatedAt: RUN_RECORD.report_generated_at!,
+      config: CONFIG,
+    });
+  }
+
+  it('reads question_category first, prompt_category second, else Uncategorized', () => {
+    const { cases } = assemble();
+    const byId = new Map(cases.map((c) => [c.id, c.category]));
+    expect(byId.get(CASE_A)).toBe('Dilution and Directions');
+    expect(byId.get(CASE_B)).toBe('recommendation');
+    expect(byId.get(CASE_C)).toBe('Uncategorized');
+    expect(byId.get(CASE_D)).toBe('pathogen-specific');
+  });
+
+  it('groups the category table by the same resolved label the case record prints', () => {
+    const { metrics, cases } = assemble();
+    const evaluatedIds = new Set(metrics.perCase.map((c) => c.id));
+    const expectedNames = new Set(
+      cases.filter((c) => evaluatedIds.has(c.id)).map((c) => c.category),
+    );
+    expect(new Set(metrics.categories.map(([name]) => name))).toEqual(expectedNames);
+    // The classifier slug of a case that carries a question_category never reaches the table.
+    expect(metrics.categories.map(([name]) => name)).not.toContain('dilution');
+  });
+});
+
 describe('assembleReportCases → multi-pass consolidation and consistency (B0-719/720/721)', () => {
   /**
    * Three independent passes per case, as `report_state.casePassScores` persists them. CASE_A's

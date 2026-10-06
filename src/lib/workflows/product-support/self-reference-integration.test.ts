@@ -116,24 +116,14 @@ vi.mock('~/lib/openai/client', () => ({
   resolveResponsesModel: () => 'gpt-test',
 }));
 
-const runResponsesWithToolLoopMock = vi.fn();
+const runGenerationLoopMock = vi.fn();
 const executeProductToolMock = vi.fn();
 const lookupCrossReferenceMock = vi.fn();
 const runCrossReferenceRecommendationMock = vi.fn();
 const resolveProductEntityByNameMock = vi.fn();
 
-vi.mock('~/lib/openai/responses-runtime', () => ({
-  runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
-  usageFromResponse: () => ({
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    cachedPromptTokens: 0,
-  }),
-}));
-
 vi.mock('~/lib/bex/ai-sdk-runtime', () => ({
-  runAiSdkWithToolLoop: vi.fn(),
+  runAiSdkWithToolLoop: (...args: unknown[]) => runGenerationLoopMock(...args),
 }));
 
 vi.mock('~/lib/tools/product-tools', () => ({
@@ -293,7 +283,7 @@ function extractionCallCount(): number {
 }
 
 function firstToolChoice(): unknown {
-  const [opts] = runResponsesWithToolLoopMock.mock.calls[0] as [{ toolChoice: unknown }];
+  const [opts] = runGenerationLoopMock.mock.calls[0] as [{ toolChoice: unknown }];
   return opts.toolChoice;
 }
 
@@ -316,14 +306,13 @@ beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
   settingOverrides.clear();
-  settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
   // The check sits downstream of the LIVE classifier, so the router is on and shadow mode is off.
   settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
   settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
   settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', false);
   resetIntentClassifierCache();
 
-  runResponsesWithToolLoopMock.mockImplementation(
+  runGenerationLoopMock.mockImplementation(
     generationCalling([
       {
         name: 'search_product_docs',
@@ -482,7 +471,7 @@ describe('competitor self-reference check (B0-751)', () => {
       }),
       extraction: { brand: 'Spartan', product: 'Xtreme Blue' },
     });
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',
@@ -515,7 +504,7 @@ describe('competitor self-reference check (B0-751)', () => {
       classifier: classifierPayload('cross_reference'),
       extraction: { brand: 'BNC', product: 'BNC-15' },
     });
-    runResponsesWithToolLoopMock.mockImplementation(
+    runGenerationLoopMock.mockImplementation(
       generationCalling([
         {
           name: 'lookup_cross_reference',

@@ -289,6 +289,19 @@ export async function getProductLineLockThresholds(): Promise<{
   return { minLockSimilarity, minLockMargin, highConfidenceAbsolute };
 }
 
+/**
+ * B0-528 — whether the `escalation_specialist` tool is live (`BEX_ESCALATION_TOOL_ENABLED`).
+ *
+ * `false` for every failure mode (missing row, DB error) and the seeded default: the tool writes
+ * durable `public.escalations` rows, and eval/harness runs go through the same workflow, so it
+ * must stay off until deliberately enabled on /admin/settings. Read in two places that must agree:
+ * `runProductSupportWorkflow` (withholds the tool from the model's tool list) and the executor in
+ * `~/lib/escalations/escalation-tool.ts` (returns a structured "disabled" result instead of inserting).
+ */
+export async function isEscalationToolEnabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_ESCALATION_TOOL_ENABLED', false);
+}
+
 /** Test seam: clears the per-key value cache so a test can change the mocked DB response. */
 export function resetSettingsCacheForTest(): void {
   cache.clear();

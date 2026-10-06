@@ -24,7 +24,7 @@ import {
   TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
   TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
   UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
-} from '~/lib/openai/responses-runtime';
+} from '~/lib/llm/generation-shared';
 import type {
   ExecuteToolFn,
   FactToolEnforcementOutcome,
@@ -32,13 +32,19 @@ import type {
   LlmTokenUsage,
   PreloadedEvidence,
   ReplayedHistoryMessage,
-  ResponsesRuntimeResult,
-} from '~/lib/openai/responses-runtime';
+} from '~/lib/llm/generation-shared';
 import {
   classifyTransportError,
+  resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
   type TransportRetryTuning,
 } from '~/lib/openai/transport-retry';
+import {
+  DEFAULT_GENERATION_TEMPERATURE,
+  isTemperatureUnsupportedError,
+  recordTemperatureRejection,
+  samplingParamsFor,
+} from '~/lib/openai/model-capabilities';
 import { logError, logWarn } from '~/lib/observability/logger';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { getErrorMessage } from '~/lib/utils';
@@ -137,14 +143,16 @@ export type AiSdkRuntimeOptions = {
 };
 
 /**
- * Same fields the workflow consumes from `runResponsesWithToolLoop`, minus the OpenAI-specific
- * `lastResponse`. `finalResponseId` is null because the AI SDK has no OpenAI response id — the
- * workflow substitutes a synthetic marker.
+ * What the workflow consumes from the generation loop. `finalResponseId` is null because the AI SDK
+ * has no provider response id — the workflow substitutes the synthetic `ai_sdk:<runId>` marker.
  */
-export type AiSdkRuntimeResult = Pick<
-  ResponsesRuntimeResult,
-  'assistantText' | 'toolTrace' | 'responseIds' | 'usage' | 'usageByCall'
-> & {
+export type AiSdkRuntimeResult = {
+  assistantText: string;
+  toolTrace: ToolTraceEntry[];
+  responseIds: string[];
+  usage: LlmTokenUsage;
+  /** B0-324 — per-model-call usage, in call order, so prompt-cache reuse per round is verifiable. */
+  usageByCall: LlmTokenUsage[];
   finalResponseId: null;
 };
 
@@ -174,8 +182,8 @@ function newRetrievalProductivityState(): RetrievalProductivityState {
 }
 
 /**
- * B0-901 / B0-635 — scores one retrieval call exactly as the Responses loop does
- * (`responses-runtime.ts`, "productivity of THIS retrieval call"): reads the FULL tool payload, not
+ * B0-901 / B0-635 — scores the productivity of ONE retrieval call (the logic first written for the
+ * retired Responses loop): reads the FULL tool payload, not
  * the slimmed `modelOutput` the model sees, because the projection drops
  * `documentBodyChunkIds` when it truncates a body and this decision must be made on what was
  * actually retrieved. Ids are added to the run-wide set as each call is scored, so within a
@@ -346,16 +354,79 @@ async function startModelStreamOrThrow(result: ModelStreamResult): Promise<Model
  */
 function createTransportRetryMiddleware(
   tuning: TransportRetryTuning | undefined,
+  requestTimeoutMs?: number,
 ): LanguageModelMiddleware {
   return {
     specificationVersion: 'v3',
-    wrapStream: async ({ doStream }) =>
-      retryTransportFaults(async () => startModelStreamOrThrow(await doStream()), {
-        runtime: 'ai_sdk',
-        label: 'streamText.doStream',
-        ...tuning,
-      }),
+    wrapStream: async ({ params, model }) => {
+      const open = (callParams: typeof params) =>
+        retryTransportFaults(
+          async () =>
+            requestTimeoutMs
+              ? startModelStreamWithTimeout(model, callParams, requestTimeoutMs)
+              : startModelStreamOrThrow(await model.doStream(callParams)),
+          {
+            runtime: 'ai_sdk',
+            label: 'streamText.doStream',
+            ...tuning,
+          },
+        );
+      /**
+       * B0-606 safety net, same contract as the Responses loop: a model whose sampling support we
+       * do not know yet may reject `temperature`. Remember it for the process and replay once
+       * without it. A deterministic 4xx, so deliberately outside `retryTransportFaults`;
+       * `recordTemperatureRejection` returning false once known is what bounds this to one replay.
+       */
+      try {
+        return await open(params);
+      } catch (err) {
+        if (
+          params.temperature === undefined ||
+          !isTemperatureUnsupportedError(err) ||
+          !recordTemperatureRejection(model.modelId)
+        ) {
+          throw err;
+        }
+        return open({ ...params, temperature: undefined });
+      }
+    },
   };
+}
+
+/**
+ * B0-550 parity — per-ATTEMPT bound on "request sent -> first chunk received", the AI SDK
+ * equivalent of the Responses loop's `timeout: resolveOpenAiRequestTimeoutMs()`. Without it a hung
+ * request has no bound short of the platform's own limit. The timer is cleared as soon as the first
+ * chunk is in hand, so a long answer is never cut off mid-stream. A timeout throws a
+ * `TimeoutError`, which `classifyTransportError` already treats as a retryable `timeout` fault, so
+ * it flows through the same bounded retry as every other transport fault.
+ *
+ * Caller aborts still win: a user abort is re-thrown untouched and is never classified as a timeout.
+ */
+async function startModelStreamWithTimeout(
+  model: Parameters<NonNullable<LanguageModelMiddleware['wrapStream']>>[0]['model'],
+  params: Parameters<NonNullable<LanguageModelMiddleware['wrapStream']>>[0]['params'],
+  timeoutMs: number,
+): Promise<ModelStreamResult> {
+  const attempt = new AbortController();
+  const timeoutError = Object.assign(
+    new Error(`Model request timed out after ${timeoutMs}ms before the first chunk`),
+    { name: 'TimeoutError' },
+  );
+  const timer = setTimeout(() => attempt.abort(timeoutError), timeoutMs);
+  try {
+    const abortSignal = params.abortSignal
+      ? AbortSignal.any([params.abortSignal, attempt.signal])
+      : attempt.signal;
+    return await startModelStreamOrThrow(await model.doStream({ ...params, abortSignal }));
+  } catch (err) {
+    if (attempt.signal.aborted && !params.abortSignal?.aborted) {
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<ToolSet> {
@@ -369,8 +440,8 @@ function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<
 }
 
 /**
- * AI SDK generation runtime — a drop-in alternative to `runResponsesWithToolLoop`
- * (`~/lib/openai/responses-runtime`). Bounded automatic tool roundtrips come from
+ * The generation runtime: the one tool loop every model on every provider runs on (B0-914).
+ * Bounded automatic tool roundtrips come from
  * `stopWhen: stepCountIs(maxToolRounds)`; token deltas are surfaced via `onAssistantDelta`.
  */
 export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<AiSdkRuntimeResult> {
@@ -491,7 +562,12 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
   const sharedRequest = {
     model: wrapLanguageModel({
       model: languageModel,
-      middleware: createTransportRetryMiddleware(opts.retry),
+      middleware: createTransportRetryMiddleware(
+        opts.retry,
+        // B0-550 parity — OpenAI only: a Claude model's adaptive thinking can legitimately run past
+        // this bound before its first token, and B0-550 was an OpenAI stall.
+        provider === 'openai' ? resolveOpenAiRequestTimeoutMs() : undefined,
+      ),
     }),
     /**
      * B0-913 — the instructions, carrying an EXPLICIT Anthropic cache breakpoint when caching is on.
@@ -533,6 +609,11 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     // B0-459 — see `ResponsesRuntimeOptions.maxOutputTokens`; omitted (rather than `undefined`) so a
     // caller that does not pass one gets the AI SDK/provider default, matching the Responses runtime.
     ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+    // B0-1138 — same default and same capability gate as the Responses loop. Without it OpenAI fell
+    // back to its own default (1.0) here, so the same model drafted more freely on this loop and the
+    // regulated-claim guardrail fired more often. `samplingParamsFor` returns nothing for every
+    // `claude-*` id and every model verified to reject it.
+    ...samplingParamsFor(languageModel.modelId, { temperature: DEFAULT_GENERATION_TEMPERATURE }),
     // B0-324 — pin every step of the loop to the same prompt cache pool so the stable
     // system + tool-schema prefix is read from cache on the 2nd+ step. Provider-specific (B0-908 /
     // B0-900): OpenAI takes the key itself; Anthropic has no key, so the key's presence enables the
