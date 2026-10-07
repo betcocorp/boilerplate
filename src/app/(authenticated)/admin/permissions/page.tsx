@@ -16,7 +16,7 @@ import {
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata: Metadata = {
-  title: 'Permissions | Betco BEX Admin',
+  title: 'Permissions | Admin',
   description: 'Manage users, permission groups, and permission selectors.',
 };
 

@@ -1,14 +1,10 @@
 'use client';
 
 import {
-  BanknoteArrowDown,
-  BookOpen,
   ChartNoAxesCombined,
   EllipsisVertical,
-  KeyRound,
   LogOut,
   ShieldCheck,
-  Sliders,
 } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 import Link from 'next/link';
@@ -22,9 +18,6 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
 import { PERMISSIONS } from '~/lib/permissions/constants';
@@ -81,7 +74,7 @@ AccountTrigger.displayName = 'AccountTrigger';
 
 /**
  * Exact-or-wildcard match against a flat permission list (e.g. "navigation.*" matches
- * "navigation.sidebar.user.api_access"). Mirrors permissions-server's hasPermission(), duplicated
+ * "navigation.sidebar.user.analytics"). Mirrors permissions-server's hasPermission(), duplicated
  * here because that helper is server-only and this is a client component receiving a plain array.
  */
 function hasPermission(permissions: string[], permission: string): boolean {
@@ -109,32 +102,13 @@ export function AdminAccountMenu({
     () => false,
   );
 
-  // B0-761 — application usage dashboard (`event_logging` analytics).
   const showAnalytics = hasPermission(
     permissions,
     PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
   );
-  const showApiAccess = hasPermission(
-    permissions,
-    PERMISSIONS.NAVIGATION_SIDEBAR_USER_API_ACCESS,
-  );
   const showAccessControl = hasPermission(
     permissions,
     PERMISSIONS.ADMIN_CARD_PERMISSIONS,
-  );
-  const showChangelog = hasPermission(
-    permissions,
-    PERMISSIONS.NAVIGATION_SIDEBAR_USER_CHANGELOG,
-  );
-
-  const showCostMonitoring = hasPermission(
-    permissions,
-    PERMISSIONS.NAVIGATION_SIDEBAR_COST,
-  );
-
-  const showSettings = hasPermission(
-    permissions,
-    PERMISSIONS.NAVIGATION_SIDEBAR_USER_SETTINGS,
   );
 
   if (!mounted) {
@@ -162,20 +136,9 @@ export function AdminAccountMenu({
             </div>
           </div>
         </DropdownMenuGroup>
-        {showAnalytics ||
-        showApiAccess ||
-        showAccessControl ||
-        showChangelog ||
-        showSettings ||
-        showCostMonitoring ? (
-          <DropdownMenuSeparator />
-        ) : null}
-        {showAnalytics ||
-        showApiAccess ||
-        showAccessControl ||
-        showSettings ||
-        showCostMonitoring ? (
+        {showAnalytics || showAccessControl ? (
           <>
+            <DropdownMenuSeparator />
             <DropdownMenuGroup>
               {showAnalytics ? (
                 <DropdownMenuItem asChild>
@@ -185,22 +148,6 @@ export function AdminAccountMenu({
                   </Link>
                 </DropdownMenuItem>
               ) : null}
-              {showApiAccess ? (
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
-                    <KeyRound className="size-4" />
-                    API access
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem asChild>
-                      <Link href="/admin/projects">Projects</Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild>
-                      <Link href="/admin/projects/analytics">Analytics</Link>
-                    </DropdownMenuItem>
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              ) : null}
               {showAccessControl ? (
                 <DropdownMenuItem asChild>
                   <Link href="/admin/permissions">
@@ -209,37 +156,8 @@ export function AdminAccountMenu({
                   </Link>
                 </DropdownMenuItem>
               ) : null}
-
-              {showCostMonitoring && (
-                <DropdownMenuItem asChild>
-                  <Link href="/admin/cost">
-                    <BanknoteArrowDown className="size-4" />
-                    Cost monitoring
-                  </Link>
-                </DropdownMenuItem>
-              )}
-
-              {showSettings && (
-                <DropdownMenuItem asChild>
-                  <Link href="/admin/settings">
-                    <Sliders className="size-4" />
-                    Settings
-                  </Link>
-                </DropdownMenuItem>
-              )}
             </DropdownMenuGroup>
-            {showChangelog ? <DropdownMenuSeparator /> : null}
           </>
-        ) : null}
-        {showChangelog ? (
-          <DropdownMenuGroup>
-            <DropdownMenuItem asChild>
-              <Link href="/admin/changelog">
-                <BookOpen className="size-4" />
-                Changelog
-              </Link>
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
         ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem

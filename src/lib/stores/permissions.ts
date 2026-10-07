@@ -33,7 +33,7 @@ export const usePermissionsStore = create<MeState>((set, get) => ({
 
   /**
    * Check if the user has a permission (exact or wildcard).
-   * Supports wildcards: e.g. "navigation.*" matches "navigation.sidebar.bex".
+   * Supports wildcards: e.g. "navigation.*" matches "navigation.sidebar.example".
    * Must stay in sync with the server-side hasPermission in ~/lib/permissions/permissions-server.
    */
   hasPermission: (permission: string) => {

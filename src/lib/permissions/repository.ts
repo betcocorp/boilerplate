@@ -160,7 +160,7 @@ function optionalText(value: unknown): string | null {
 /**
  * All users, for dropdowns. Port of c360 `getUsers()` (GET /dropdown/allusers ->
  * `userController.getUsers`). c360 derives IS_SALESPERSON from a join on CRM_APP.USER_SLSPERID;
- * bex stores it directly on `app_user`.
+ * this app stores it directly on `app_user`.
  */
 export async function getUsers(): Promise<{ data: User[] }> {
   try {

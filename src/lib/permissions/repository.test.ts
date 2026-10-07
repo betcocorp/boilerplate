@@ -239,8 +239,8 @@ describe('getPermissionsList', () => {
       data: [
         {
           permission_id: 'p1',
-          selector: 'navigation.sidebar.bex',
-          description: 'See the Bex nav item',
+          selector: 'navigation.sidebar.example',
+          description: 'See the example nav item',
           created_at: '2026-08-01T00:00:00Z',
           updated_at: '2026-08-02T00:00:00Z',
           deleted_at: null,
@@ -254,8 +254,8 @@ describe('getPermissionsList', () => {
       data: [
         {
           PERMISSION_ID: 'p1',
-          SELECTOR: 'navigation.sidebar.bex',
-          DESCRIPTION: 'See the Bex nav item',
+          SELECTOR: 'navigation.sidebar.example',
+          DESCRIPTION: 'See the example nav item',
           CREATED_AT: '2026-08-01T00:00:00Z',
           UPDATED_AT: '2026-08-02T00:00:00Z',
           DELETED_AT: null,

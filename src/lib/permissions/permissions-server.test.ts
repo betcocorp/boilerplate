@@ -61,7 +61,7 @@ describe('getCurrentUserPermissionGroups', () => {
     getUserOrDefault.mockResolvedValue({ USER_ID: 'u3' });
     getCachedPermissionGroups.mockResolvedValue([]);
     getPermissionsForUser.mockResolvedValue({
-      permissions: ['navigation.sidebar.bex'],
+      permissions: ['navigation.sidebar.example'],
       permission_groups: ['sales'],
     });
 
@@ -70,7 +70,7 @@ describe('getCurrentUserPermissionGroups', () => {
     expect(groups).toEqual(['sales']);
     expect(setCachedPermissions).toHaveBeenCalledWith(
       'u3',
-      ['navigation.sidebar.bex'],
+      ['navigation.sidebar.example'],
       ['sales'],
     );
   });

@@ -11,7 +11,7 @@
 import { useMemo } from 'react';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
-import { formatInt } from '~/components/admin/projects/format';
+import { formatInt } from '~/components/admin/analytics/format';
 import {
   ChartContainer,
   ChartLegend,

@@ -89,7 +89,7 @@ export async function getCurrentUserPermissionGroups(): Promise<string[]> {
 
 /**
  * Check if a permission array grants access (exact or wildcard).
- * Mirrors client hasPermission logic: e.g. "navigation.*" matches "navigation.sidebar.bex".
+ * Mirrors client hasPermission logic: e.g. "navigation.*" matches "navigation.sidebar.example".
  */
 export function hasPermission(
   permissions: string[],

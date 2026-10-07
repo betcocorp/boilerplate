@@ -2,7 +2,7 @@
  * B0-409 (epic B0-401): shared plumbing for the `/api/admin/permissions/**` mutation handlers.
  *
  * In c360 these mutations were client `fetch('/api/proxy/permissions/...')` calls through an
- * unauthenticated catch-all proxy (CCA-833). bex has no proxy: each handler is a dedicated route
+ * unauthenticated catch-all proxy (CCA-833). this app has no proxy: each handler is a dedicated route
  * that authenticates the browser session and checks the permission itself, then calls
  * `~/lib/permissions/repository`.
  *
@@ -14,7 +14,7 @@ import { NextResponse } from 'next/server';
 import type { ZodType } from 'zod';
 import { z } from 'zod';
 
-import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { hasSession } from '~/lib/api/session-auth';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
 
@@ -25,17 +25,17 @@ import { gateRoute } from '~/lib/permissions/route-gate';
  *
  * The two axes fail differently and deliberately so:
  *
- * - **Session** (`hasBexSession`) is absolute. No NextAuth session -> 401, always, on every method
+ * - **Session** (`hasSession`) is absolute. No NextAuth session -> 401, always, on every method
  *   and path here, independent of any feature flag.
  * - **Permission** (`gateRoute` -> `requirePermission`) is subject to shadow mode (B0-408). While
- *   `BEX_PERMISSIONS_ENFORCED` is off, the verdict is evaluated, logged and audited but never
+ *   `PERMISSIONS_ENFORCED` is off, the verdict is evaluated, logged and audited but never
  *   returned as a response, so a signed-in user without `admin.card.permissions` gets through. That
  *   is the point of shadow mode; this call site does not change when the flag flips.
  */
 export async function guardPermissionsAdmin(
   route: string,
 ): Promise<NextResponse | null> {
-  if (!(await hasBexSession())) {
+  if (!(await hasSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   return gateRoute(PERMISSIONS.ADMIN_CARD_PERMISSIONS, route);

@@ -21,30 +21,6 @@ export type {
   SearchSubmitArgs,
 } from '~/lib/event-logging/search-events';
 export {
-  BEX_CHAT_CONVERSATION_CREATED_EVENT,
-  BEX_CHAT_CONVERSATION_DELETED_EVENT,
-  BEX_CHAT_CONVERSATION_EXPORTED_EVENT,
-  BEX_CHAT_FEEDBACK_SUBMITTED_EVENT,
-  BEX_CHAT_MESSAGE_SENT_EVENT,
-  buildBexChatConversationCreatedEvent,
-  buildBexChatConversationDeletedEvent,
-  buildBexChatConversationExportedEvent,
-  buildBexChatFeedbackSubmittedEvent,
-  buildBexChatMessageSentEvent,
-  logBexChatConversationCreated,
-  logBexChatConversationDeleted,
-  logBexChatConversationExported,
-  logBexChatFeedbackSubmitted,
-  logBexChatMessageSent,
-} from '~/lib/event-logging/bex-events';
-export type {
-  BexChatConversationArgs,
-  BexChatConversationExportArgs,
-  BexChatFeedbackArgs,
-  BexChatMessageSentArgs,
-  BexFeedbackRating,
-} from '~/lib/event-logging/bex-events';
-export {
   normalizeAnalyticsEventName,
   PAGE_VIEW_EVENT_PREFIX,
 } from '~/lib/event-logging/normalize-event-name';

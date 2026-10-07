@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { hasSession } from '~/lib/api/session-auth';
 import { getUserOrDefault } from '~/lib/cookies-server';
 import {
   getCachedPermissionBundle,
@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic';
  * refetches from the permissions repository (Supabase).
  */
 export async function GET() {
-  if (!(await hasBexSession())) {
+  if (!(await hasSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

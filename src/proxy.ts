@@ -16,7 +16,7 @@ import {
  * we bounce through `/api/auth/rebuild-user`, which refreshes the cookie from the live session and
  * forwards the user on — no re-authentication.
  *
- * Deliberately flag-free: `BEX_PERMISSIONS_ENFORCED` is read inside the rebuild route (a Node
+ * Deliberately flag-free: `PERMISSIONS_ENFORCED` is read inside the rebuild route (a Node
  * handler), not here. That keeps this Edge bundle free of the Supabase/audit imports and means the
  * proxy itself can never sign anyone out.
  *

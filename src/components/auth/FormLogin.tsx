@@ -24,7 +24,7 @@ export default function FormLogin({
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/20 px-6">
       <div className="w-full max-w-sm rounded-2xl border bg-card p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold text-foreground">Betco BEX</h1>
+        <h1 className="text-2xl font-semibold text-foreground">Betco App</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Sign in to continue to the admin workspace.
         </p>

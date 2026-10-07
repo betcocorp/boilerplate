@@ -1,15 +1,6 @@
 'use client';
 
-import {
-  ChartScatter,
-  ChevronRight,
-  FileText,
-  LayoutDashboard,
-  Library,
-  MessageSquare,
-  Route,
-  Search,
-} from 'lucide-react';
+import { ChevronRight, LayoutDashboard } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
@@ -25,7 +16,6 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from '~/components/ui/sidebar';
-import { PERMISSIONS } from '~/lib/permissions/constants';
 import { cn } from '~/lib/utils';
 
 type NavItem = {
@@ -57,10 +47,12 @@ type NavSectionModel = {
 };
 
 /**
- * The permission catalog is per **surface**, not per visible link, so several sub-links can share a
- * selector (Test runner + Failure Queue + Routing comparison all share `navigation.sidebar.tests`).
- * Dashboard and Bex chat are deliberately ungated — deny-by-default (B0-560) means an admin surface
- * with no `permission` field here is unconditionally visible.
+ * Add your app's navigation here. An entry with no `permission` is always visible; one with a
+ * `permission` selector (see `~/lib/permissions/constants`) is hidden when that selector is denied.
+ * Groups collapse and are dropped entirely when all of their items are hidden. A group looks like:
+ *
+ *   { type: 'group', label: 'Reports', icon: FileText,
+ *     items: [{ label: 'Monthly', href: '/admin/reports/monthly', permission: PERMISSIONS.X }] }
  */
 const sidebarSections: NavSectionModel[] = [
   {
@@ -72,194 +64,13 @@ const sidebarSections: NavSectionModel[] = [
         href: '/admin',
         icon: LayoutDashboard,
       },
-      {
-        type: 'link',
-        label: 'Bex',
-        href: '/admin/bex',
-        icon: MessageSquare,
-      },
-      {
-        type: 'group',
-        label: 'Observability',
-        icon: ChartScatter,
-        items: [
-          {
-            label: 'Bex health',
-            href: '/admin/bex/health',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
-          },
-          {
-            label: 'Test runner',
-            href: '/admin/tests',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
-          {
-            // B0-762 — cross-set item browser; same surface family as Test runner.
-            label: 'All test items',
-            href: '/admin/tests/items',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
-          {
-            // B0-687 — same surface family as the other test links, so it reuses
-            // `navigation.sidebar.tests` rather than minting a selector that would need its own
-            // row + role grants to ever appear (B0-643).
-            label: 'Reports',
-            href: '/admin/tests/reports',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
-          {
-            label: 'Prompt observability',
-            href: '/admin/observability',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
-          },
-          {
-            label: 'Scheduled',
-            href: '/admin/scheduled',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
-          },
-          {
-            // B0-528 — escalation records written by the escalation_specialist tool.
-            label: 'Escalations',
-            href: '/admin/escalations',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
-          },
-          {
-            // B0-533 — turn-by-turn viewer over other users' chats, so it is gated on the same
-            // selector the pages enforce (bex.chat.view-all), not a sidebar-only one.
-            label: 'Conversations',
-            href: '/admin/bex/conversations',
-            permission: PERMISSIONS.BEX_CHAT_VIEW_ALL,
-          },
-          {
-            label: 'Compare conversations',
-            href: '/admin/bex/compare',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_COMPARE,
-          },
-          {
-            label: 'Failure Queue',
-            href: '/admin/tests/failure-queue',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Routing',
-        icon: Route,
-        items: [
-          {
-            // B0-658 — same surface family as the other test links, so it reuses
-            // `navigation.sidebar.tests` rather than minting a permission selector that would need
-            // its own row + role grants to ever appear (B0-643).
-            label: 'Routing test',
-            href: '/admin/routing-test',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
-          {
-            label: 'Routing comparison',
-            href: '/admin/tests/routing-comparison',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Tools',
-        icon: Search,
-        items: [
-          {
-            label: 'Tools home',
-            href: '/admin/tools',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
-          },
-          {
-            label: 'Cross-reference',
-            href: '/admin/tools/cross-reference',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
-          },
-          {
-            label: 'Aliases',
-            href: '/admin/tools/aliases',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
-          },
-          {
-            label: 'Web Search',
-            href: '/admin/tools/web-search',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
-          },
-          {
-            label: 'RAG semantic search',
-            href: '/admin/products/rag',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
-          },
-        ],
-      },
-    ],
-  },
-  {
-    title: 'Document Corpus',
-    items: [
-      {
-        type: 'group',
-        label: 'Products',
-        icon: Library,
-        items: [
-          {
-            label: 'RAG corpus quality',
-            href: '/admin/products/rag/chunking',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
-          },
-          {
-            label: 'Orphan Monitor',
-            href: '/admin/products/orphans',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
-          },
-          {
-            label: 'Legacy products',
-            href: '/admin/products/legacy',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
-          },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Ingestion',
-        icon: FileText,
-        items: [
-          {
-            label: 'Products',
-            href: '/admin/products/rag/generate',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_INGESTION_PRODUCTS,
-          },
-          {
-            label: 'SDS',
-            href: '/admin/sds',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
-          },
-          {
-            label: 'Efficacy',
-            href: '/admin/efficacy',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_EFFICACY,
-          },
-          {
-            label: 'Knowledge',
-            href: '/admin/knowledge',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_KNOWLEDGE,
-          },
-          {
-            label: 'Labels',
-            href: '/admin/labels',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
-          },
-        ],
-      },
     ],
   },
 ];
 
 /**
  * Drops links whose selector is denied, then groups and sections left empty. `hiddenSelectors` is
- * always empty while `BEX_PERMISSIONS_ENFORCED` is off, so shadow mode hides nothing.
+ * always empty while `PERMISSIONS_ENFORCED` is off, so shadow mode hides nothing.
  */
 function visibleSections(hiddenSelectors: string[]): NavSectionModel[] {
   if (hiddenSelectors.length === 0) return sidebarSections;
@@ -283,35 +94,9 @@ function visibleSections(hiddenSelectors: string[]): NavSectionModel[] {
     .filter((section) => section.items.length > 0);
 }
 
-const UUID_SEGMENT =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function isActivePath(pathname: string, href: string) {
   if (href === '/admin') {
     return pathname === '/admin';
-  }
-
-  // "Bex chat" links to `/admin/bex`; without this carve-out it would also light up for the
-  // `/admin/bex/health` dashboard, which has its own sidebar entry. B0-533 — same for the
-  // `/admin/bex/conversations` turn-by-turn viewer.
-  if (href === '/admin/bex') {
-    return (
-      pathname === '/admin/bex' ||
-      (pathname.startsWith('/admin/bex/') &&
-        !pathname.startsWith('/admin/bex/health') &&
-        !pathname.startsWith('/admin/bex/conversations'))
-    );
-  }
-
-  if (href === '/admin/tests') {
-    if (pathname === '/admin/tests') {
-      return true;
-    }
-    const rest = pathname.startsWith('/admin/tests/')
-      ? pathname.slice('/admin/tests/'.length)
-      : '';
-    const firstSegment = rest.split('/')[0] ?? '';
-    return UUID_SEGMENT.test(firstSegment);
   }
 
   return pathname === href || pathname.startsWith(`${href}/`);

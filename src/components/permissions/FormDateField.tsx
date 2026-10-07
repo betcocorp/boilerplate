@@ -17,7 +17,7 @@ import { Input } from '~/components/ui/input';
  * `POST /api/admin/permissions/groups` expects for `startAt` / `endAt`.
  *
  * Deliberate difference from c360's `components/custom/FormDateField`: c360 rendered a read-only
- * text input over a Radix Popover containing a `react-day-picker` `Calendar`. bex has neither
+ * text input over a Radix Popover containing a `react-day-picker` `Calendar`. this app has neither
  * `react-day-picker` nor a `Calendar` primitive, and this ticket may not add dependencies, so the
  * control is a native `<input type="date">`. It emits exactly the same `yyyy-MM-dd` value, is
  * keyboard- and screen-reader-accessible for free, and drops the popover's hydration caveats.

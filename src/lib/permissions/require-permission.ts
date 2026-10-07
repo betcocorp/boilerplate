@@ -3,7 +3,7 @@
  * Validates from Redis when configured; falls back to the permissions repository when Redis is not set up.
  *
  * Every verdict is recorded (structured log, plus a de-duplicated `audit_logs` row on denials) and
- * gated by `BEX_PERMISSIONS_ENFORCED` (B0-408). While the flag is off (shadow mode) an authorization
+ * gated by `PERMISSIONS_ENFORCED` (B0-408). While the flag is off (shadow mode) an authorization
  * failure is turned into an allow with `shadowAllowed: true` — callers keep working exactly as they
  * do today, and `errorResponse` is only ever set when enforcement is on.
  *
@@ -57,13 +57,13 @@ export interface PermissionResult {
   userId?: string;
   permissions?: string[];
   errorResponse?: NextResponse;
-  /** Set when shadow mode (`BEX_PERMISSIONS_ENFORCED` off) turned a denial into an allow. */
+  /** Set when shadow mode (`PERMISSIONS_ENFORCED` off) turned a denial into an allow. */
   shadowAllowed?: boolean;
 }
 
 /** Optional context so verdict logs can name the route they guarded. */
 export interface PermissionCheckOptions {
-  /** e.g. `GET /api/bex/conversations` — recorded on the verdict. */
+  /** e.g. `GET /api/example` — recorded on the verdict. */
   route?: string;
 }
 
@@ -114,7 +114,7 @@ async function resolveVerdict(params: {
 
 /**
  * Check if the current user has the required permission (from Redis).
- * Use in API routes: const result = await requirePermission('navigation.sidebar.bex');
+ * Use in API routes: const result = await requirePermission('navigation.sidebar.example');
  * if (!result.allowed) return result.errorResponse;
  */
 export async function requirePermission(

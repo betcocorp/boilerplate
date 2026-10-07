@@ -20,7 +20,7 @@ function sanitizeString(value: unknown): string | null {
  *
  * That matters most exactly where c360 logs from the server: the sign-in callbacks, which run
  * before any session cookie exists at all. c360 gets away with the HTTP hop because its route has
- * no auth gate; bex's does (deliberately — machine callers must not be able to manufacture user
+ * no auth gate; this app's does (deliberately — machine callers must not be able to manufacture user
  * analytics), so server callers write straight to the table instead.
  *
  * The caller supplies actor identity explicitly here. There is no cookie-based enrichment to fall

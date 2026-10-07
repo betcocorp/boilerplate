@@ -14,7 +14,7 @@
  * depends on a server-only event.
  */
 
-export const ANALYTICS_SESSION_STORAGE_KEY = 'bex.analytics.sessionId';
+export const ANALYTICS_SESSION_STORAGE_KEY = 'analytics.sessionId';
 
 function generateSessionId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {

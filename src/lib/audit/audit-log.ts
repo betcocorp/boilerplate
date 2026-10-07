@@ -21,7 +21,7 @@ export type AuditContext = {
    */
   specialistId?: string | null;
   /**
-   * B0-528 — the run's entry point (`workflow_runs.source`: harness | bex_chat | orchestrator_api),
+   * B0-528 — the run's entry point (`workflow_runs.source`: harness | chat | orchestrator_api),
    * carried the same way as `specialistId` so the `escalation_specialist` executor can stamp
    * `escalations.source` without a second plumbing path. Never persisted to `audit_logs` itself
    * (`buildAuditLogRow` picks its fields explicitly).

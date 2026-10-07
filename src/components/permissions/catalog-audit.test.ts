@@ -5,23 +5,23 @@ import { summarizePermissionCatalog } from '~/components/permissions/catalog-aud
 describe('summarizePermissionCatalog', () => {
   it('splits the catalog into deployed and missing, and reports coverage', () => {
     const audit = summarizePermissionCatalog(
-      ['admin.card.permissions', 'bex.chat.use', 'navigation.sidebar.bex'],
-      ['admin.card.permissions', 'bex.chat.use'],
+      ['admin.card.permissions', 'example.resource.use', 'navigation.sidebar.example'],
+      ['admin.card.permissions', 'example.resource.use'],
     );
 
     expect(audit.catalogSelectors).toHaveLength(3);
     expect(audit.deployedSelectors).toEqual([
       'admin.card.permissions',
-      'bex.chat.use',
+      'example.resource.use',
     ]);
-    expect(audit.missingInDb).toEqual(['navigation.sidebar.bex']);
+    expect(audit.missingInDb).toEqual(['navigation.sidebar.example']);
     expect(audit.unusedInCode).toEqual([]);
     expect(audit.coveragePercent).toBe(67);
   });
 
   it('treats a wildcard row as covering every catalog selector beneath it', () => {
     const audit = summarizePermissionCatalog(
-      ['navigation.sidebar.bex', 'navigation.sidebar.tests'],
+      ['navigation.sidebar.example', 'navigation.sidebar.tests'],
       ['navigation.sidebar.*'],
     );
 
@@ -31,7 +31,7 @@ describe('summarizePermissionCatalog', () => {
   });
 
   it('never reports `*` as unused, and covers everything with it', () => {
-    const audit = summarizePermissionCatalog(['bex.chat.use'], ['*']);
+    const audit = summarizePermissionCatalog(['example.resource.use'], ['*']);
 
     expect(audit.missingInDb).toEqual([]);
     expect(audit.unusedInCode).toEqual([]);
@@ -40,8 +40,8 @@ describe('summarizePermissionCatalog', () => {
 
   it('flags a deployed row that no catalog selector checks', () => {
     const audit = summarizePermissionCatalog(
-      ['bex.chat.use'],
-      ['bex.chat.use', 'legacy.thing.gone', 'legacy.other.*'],
+      ['example.resource.use'],
+      ['example.resource.use', 'legacy.thing.gone', 'legacy.other.*'],
     );
 
     expect(audit.unusedInCode).toEqual(['legacy.other.*', 'legacy.thing.gone']);

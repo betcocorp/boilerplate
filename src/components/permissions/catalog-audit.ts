@@ -4,7 +4,7 @@
  *
  * Adapted, not ported. c360's `lib/permissions-audit.ts` derived "selectors used in code" by
  * walking `app/`, `components/` and `lib/` with `fs` at request time and regex-matching quoted
- * strings on any line mentioning "permission". bex does not need that guesswork: every selector it
+ * strings on any line mentioning "permission". this app does not need that guesswork: every selector it
  * checks is declared in `~/lib/permissions/constants.PERMISSIONS` (B0-405), so the catalog *is* the
  * code-side set. That also means no filesystem reads on a request path, which would not survive a
  * serverless deploy anyway.

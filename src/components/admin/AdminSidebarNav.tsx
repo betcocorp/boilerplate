@@ -26,7 +26,7 @@ const NAV_SELECTORS: string[] = [
  * once per render, records one aggregated verdict for the nav surface, and hands the client
  * component the selectors to hide.
  *
- * Hiding is unconditional here — it does not defer to `BEX_PERMISSIONS_ENFORCED` shadow mode.
+ * Hiding is unconditional here — it does not defer to `PERMISSIONS_ENFORCED` shadow mode.
  * Nav visibility is a UI concern, not an authorization boundary; API routes and the sign-in gate
  * remain shadow-mode-gated separately.
  */

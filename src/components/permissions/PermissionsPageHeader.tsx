@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 /**
  * Header block for the four `/admin/permissions` pages.
  *
- * Stands in for c360's `components/custom/PageHeader`, which bex has no equivalent of: the bex admin
+ * Stands in for c360's `components/custom/PageHeader`, which this app has no equivalent of: the this app admin
  * pages each inline an eyebrow + `h1` + description (see `/admin/tools`, `/admin/projects`). This
  * keeps that markup in one place so the four route files stay thin and the pages stay consistent
  * with the rest of the admin area.

@@ -5,7 +5,7 @@
  * than widening the page.
  */
 
-import { formatInt } from '~/components/admin/projects/format';
+import { formatInt } from '~/components/admin/analytics/format';
 import {
   Table,
   TableBody,

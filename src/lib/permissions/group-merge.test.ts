@@ -70,7 +70,7 @@ describe('validateGroupId', () => {
 });
 
 describe('audit event types', () => {
-  it('are the bex audit_logs event_type values the Postgres functions insert', () => {
+  it('are the this app audit_logs event_type values the Postgres functions insert', () => {
     expect(PERMISSION_GROUP_MERGED_EVENT).toBe('permission_group.merged');
     expect(PERMISSION_GROUP_DELETED_EVENT).toBe('permission_group.deleted');
   });

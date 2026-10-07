@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The sign-in gate (B0-406) under both states of `BEX_PERMISSIONS_ENFORCED` (B0-408). Shadow mode
- * must never keep an Azure-AD-authenticated user out of bex, because the `app_user` seed only
+ * The sign-in gate (B0-406) under both states of `PERMISSIONS_ENFORCED` (B0-408). Shadow mode
+ * must never keep an Azure-AD-authenticated user out of this app, because the `app_user` seed only
  * covers 130 CRM users.
  */
 

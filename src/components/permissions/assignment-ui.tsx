@@ -5,7 +5,7 @@
  * `UserPermissionsEditor`).
  *
  * **Deliberate deviation from c360.** Both editors there were `@dnd-kit/core` drag-and-drop boards:
- * a `DndContext` with three `useDroppable` columns, `useDraggable` rows and a `DragOverlay`. bex has
+ * a `DndContext` with three `useDroppable` columns, `useDraggable` rows and a `DragOverlay`. this app has
  * no `@dnd-kit` dependency and this ticket may not add one, so the same three-column model is driven
  * by explicit add/remove buttons instead. Everything else is preserved — the columns, filters,
  * counts, per-row expansion, the local-until-saved edit model, and the exact `PUT` payloads.

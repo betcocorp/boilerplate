@@ -7,8 +7,8 @@ import {
 
 describe('normalizeAnalyticsEventName', () => {
   it('prefixes a bare event name with "analytics."', () => {
-    expect(normalizeAnalyticsEventName('bex.chat.message.sent')).toBe(
-      'analytics.bex.chat.message.sent',
+    expect(normalizeAnalyticsEventName('app.chat.message.sent')).toBe(
+      'analytics.app.chat.message.sent',
     );
   });
 
@@ -19,15 +19,15 @@ describe('normalizeAnalyticsEventName', () => {
   });
 
   it('leaves page-view names under the shared prefix unchanged', () => {
-    const name = `${PAGE_VIEW_EVENT_PREFIX}.bex.chat`;
+    const name = `${PAGE_VIEW_EVENT_PREFIX}.app.chat`;
     expect(normalizeAnalyticsEventName(name)).toBe(name);
     expect(PAGE_VIEW_EVENT_PREFIX).toBe('analytics.page.view');
   });
 
   it('trims surrounding whitespace before deciding', () => {
-    expect(normalizeAnalyticsEventName('  bex.chat  ')).toBe('analytics.bex.chat');
-    expect(normalizeAnalyticsEventName('  analytics.bex.chat  ')).toBe(
-      'analytics.bex.chat',
+    expect(normalizeAnalyticsEventName('  app.chat  ')).toBe('analytics.app.chat');
+    expect(normalizeAnalyticsEventName('  analytics.app.chat  ')).toBe(
+      'analytics.app.chat',
     );
   });
 
@@ -38,8 +38,8 @@ describe('normalizeAnalyticsEventName', () => {
   });
 
   it('does not treat a name merely containing "analytics." as prefixed', () => {
-    expect(normalizeAnalyticsEventName('bex.analytics.thing')).toBe(
-      'analytics.bex.analytics.thing',
+    expect(normalizeAnalyticsEventName('app.analytics.thing')).toBe(
+      'analytics.app.analytics.thing',
     );
   });
 });

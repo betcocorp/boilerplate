@@ -5,7 +5,7 @@
  * dash plus an explanatory line rather than a blank card.
  */
 
-import { formatInt } from '~/components/admin/projects/format';
+import { formatInt } from '~/components/admin/analytics/format';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card';
 import type { EventAnalyticsSummary } from '~/lib/event-logging/analytics-repository';
 

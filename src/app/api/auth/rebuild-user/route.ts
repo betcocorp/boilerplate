@@ -87,9 +87,9 @@ function forwardWithoutRebuild(
  * (B0-406). Re-fetches the `app_user` row, re-sets the cookie (with `GROUPS`), warms the Redis
  * permission bundle, and forwards the user to their original destination — no re-authentication.
  *
- * On failure the behaviour depends on `BEX_PERMISSIONS_ENFORCED`: enforced signs the user out;
+ * On failure the behaviour depends on `PERMISSIONS_ENFORCED`: enforced signs the user out;
  * shadow mode forwards them anyway with the loop-breaker cookie, so a user who is missing from the
- * `app_user` seed can never be locked out of bex.
+ * `app_user` seed can never be locked out.
  */
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const callbackUrl = resolveCallbackUrl(

@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
-import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { hasSession } from '~/lib/api/session-auth';
 import {
   AUTH_USER_DETAILS_COOKIE,
   COOKIE_OPTIONS,
@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic';
  * Call this after saving permission assignments so the UI sees new permissions without re-login.
  */
 export async function POST() {
-  if (!(await hasBexSession())) {
+  if (!(await hasSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

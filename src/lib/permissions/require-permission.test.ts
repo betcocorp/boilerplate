@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The single most important behaviour in epic B0-401: with `BEX_PERMISSIONS_ENFORCED` off, a user
+ * The single most important behaviour in epic B0-401: with `PERMISSIONS_ENFORCED` off, a user
  * who lacks the selector is allowed through and the would-be denial is recorded; with it on, the
  * same user gets a 403. Everything below the flag (session, cookie, Redis, repository) is mocked —
  * what is under test is the verdict + flag wiring.
@@ -57,7 +57,7 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   getServerSession.mockReset().mockResolvedValue(SIGNED_IN);
   getUserOrDefault.mockReset().mockResolvedValue({ USER_ID: 'user-1' });
-  getCachedPermissions.mockReset().mockResolvedValue(['navigation.sidebar.bex']);
+  getCachedPermissions.mockReset().mockResolvedValue(['navigation.sidebar.example']);
   setCachedPermissions.mockReset();
   getPermissionsForUser
     .mockReset()
@@ -68,9 +68,9 @@ beforeEach(() => {
   enforce(false);
 });
 
-describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', () => {
+describe('requirePermission — shadow mode (PERMISSIONS_ENFORCED unset)', () => {
   it('allows a user who lacks the selector, and records the would-be denial', async () => {
-    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_SDS, {
+    const result = await requirePermission(PERMISSIONS.ADMIN_CARD_PERMISSIONS, {
       route: 'GET /api/admin/sds',
     });
 
@@ -85,7 +85,7 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
       level: 'warn',
       event: 'permission.verdict',
       surface: 'api',
-      selector: PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
+      selector: PERMISSIONS.ADMIN_CARD_PERMISSIONS,
       allowed: false,
       reason: 'missing-permission',
       route: 'GET /api/admin/sds',
@@ -101,7 +101,7 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
     const [eventType, payload, ctx] = writeAuditLog.mock.calls[0];
     expect(eventType).toBe('permission.shadow_verdict');
     expect(payload).toMatchObject({
-      selector: PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
+      selector: PERMISSIONS.ADMIN_CARD_PERMISSIONS,
       route: 'GET /api/admin/sds',
       userId: 'user-1',
       allowed: false,
@@ -110,10 +110,10 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
     expect(ctx).toMatchObject({ traceId: expect.any(String) });
   });
 
-  it('allows when the user record is missing (unseeded bex user)', async () => {
+  it('allows when the user record is missing (unseeded this app user)', async () => {
     getUserOrDefault.mockResolvedValue(null);
 
-    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS);
 
     expect(result.allowed).toBe(true);
     expect(result.shadowAllowed).toBe(true);
@@ -128,7 +128,7 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
     getCachedPermissions.mockResolvedValue(null);
     // Default mock already resolves { permissions: [] } — a successful read of an empty grant set.
 
-    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS);
 
     expect(result.allowed).toBe(true);
     expect(result.shadowAllowed).toBe(true);
@@ -147,7 +147,7 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
     getCachedPermissions.mockResolvedValue(null);
     getPermissionsForUser.mockRejectedValue(new Error('redis down'));
 
-    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS);
 
     expect(result.permissions).toEqual([]);
     expect(writeAuditLog.mock.calls[0][1]).toMatchObject({
@@ -158,7 +158,7 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
   it('still refuses an unauthenticated caller with 401 — shadow mode relaxes authorization, not authentication', async () => {
     getServerSession.mockResolvedValue(null);
 
-    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS);
 
     expect(result.allowed).toBe(false);
     expect(result.errorResponse?.status).toBe(401);
@@ -167,9 +167,9 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
 
   it('allows a signed-in session that carries no email (the NoIdentity case), rather than 401-ing', async () => {
     getServerSession.mockResolvedValue({ user: { name: 'No Email' } });
-    getCachedPermissions.mockResolvedValue([PERMISSIONS.BEX_CHAT_USE]);
+    getCachedPermissions.mockResolvedValue([PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS]);
 
-    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS);
 
     expect(result.allowed).toBe(true);
     expect(result.errorResponse).toBeUndefined();
@@ -178,17 +178,17 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
   it('shadow-allows while the `settings` row resolves to not-enforced', async () => {
     enforce(false);
     resetPermissionVerdictDedupe();
-    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_SDS);
+    const result = await requirePermission(PERMISSIONS.ADMIN_CARD_PERMISSIONS);
     expect(result.allowed).toBe(true);
     expect(result.shadowAllowed).toBe(true);
   });
 });
 
-describe('requirePermission — enforced mode (BEX_PERMISSIONS_ENFORCED=true)', () => {
+describe('requirePermission — enforced mode (PERMISSIONS_ENFORCED=true)', () => {
   beforeEach(() => enforce(true));
 
   it('denies a user who lacks the selector with a 403', async () => {
-    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_SDS, {
+    const result = await requirePermission(PERMISSIONS.ADMIN_CARD_PERMISSIONS, {
       route: 'GET /api/admin/sds',
     });
 
@@ -211,7 +211,7 @@ describe('requirePermission — enforced mode (BEX_PERMISSIONS_ENFORCED=true)', 
   it('denies with 403 "User not found" when the user record is missing', async () => {
     getUserOrDefault.mockResolvedValue(null);
 
-    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS);
 
     expect(result.allowed).toBe(false);
     expect(result.errorResponse?.status).toBe(403);
@@ -221,9 +221,9 @@ describe('requirePermission — enforced mode (BEX_PERMISSIONS_ENFORCED=true)', 
   });
 
   it('allows a user who holds the selector, with no audit row', async () => {
-    getCachedPermissions.mockResolvedValue([PERMISSIONS.BEX_CHAT_USE]);
+    getCachedPermissions.mockResolvedValue([PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS]);
 
-    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS);
 
     expect(result.allowed).toBe(true);
     expect(result.errorResponse).toBeUndefined();
@@ -235,7 +235,7 @@ describe('requirePermission — enforced mode (BEX_PERMISSIONS_ENFORCED=true)', 
   it('honours the grant-side wildcard (it-admin `*`)', async () => {
     getCachedPermissions.mockResolvedValue(['*']);
 
-    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_SDS);
+    const result = await requirePermission(PERMISSIONS.ADMIN_CARD_PERMISSIONS);
 
     expect(result.allowed).toBe(true);
     expect(writeAuditLog).not.toHaveBeenCalled();
@@ -246,8 +246,8 @@ describe('requireAnyPermission', () => {
   it('shadow-allows when none of the selectors are held', async () => {
     const result = await requireAnyPermission(
       [
-        PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
-        PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
+        PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+        PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
       ],
       { route: 'GET /api/admin/labels' },
     );
@@ -256,8 +256,8 @@ describe('requireAnyPermission', () => {
     expect(result.shadowAllowed).toBe(true);
     expect(writeAuditLog.mock.calls[0][1]).toMatchObject({
       selector: [
-        PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
-        PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
+        PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+        PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
       ],
     });
   });
@@ -266,8 +266,8 @@ describe('requireAnyPermission', () => {
     enforce(true);
 
     const result = await requireAnyPermission([
-      PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
-      PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
+      PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+      PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
     ]);
 
     expect(result.allowed).toBe(false);
@@ -277,12 +277,12 @@ describe('requireAnyPermission', () => {
   it('allows when one of the selectors is held', async () => {
     enforce(true);
     getCachedPermissions.mockResolvedValue([
-      PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
+      PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
     ]);
 
     const result = await requireAnyPermission([
-      PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
-      PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
+      PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+      PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
     ]);
 
     expect(result.allowed).toBe(true);

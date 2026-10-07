@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { hasSession } from '~/lib/api/session-auth';
 import { getUserOrDefault } from '~/lib/cookies-server';
 import { normalizeAnalyticsEventName } from '~/lib/event-logging/normalize-event-name';
 import { eventLogRequestBodySchema } from '~/lib/event-logging/types';
@@ -30,9 +30,9 @@ function sanitizeString(value: unknown): string | null {
 }
 
 /**
- * B0-761 — analytics ingest for the bex UI.
+ * B0-761 — analytics ingest for the this app UI.
  *
- * In c360 the browser posts here and this route forwards to the Express `/events/log` service; bex
+ * In c360 the browser posts here and this route forwards to the Express `/events/log` service; this app
  * is a single full-stack app, so that hop collapses and the row is written straight to Supabase
  * with the service-role client (`public.event_logging` is RLS-enabled with no policies).
  *
@@ -40,7 +40,7 @@ function sanitizeString(value: unknown): string | null {
  * service-token path, so machine callers cannot manufacture user analytics.
  */
 export async function POST(request: Request) {
-  if (!(await hasBexSession())) {
+  if (!(await hasSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

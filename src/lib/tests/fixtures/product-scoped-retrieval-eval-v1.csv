@@ -1,9 +1,0 @@
-question,should_answer,expected_result_type,question_category,source_style,product_mention,notes
-"What are the approved uses and directions for product SKU 79504-00?",yes,,sku-resolution,fact,79504-00,b0-251-sku-resolves-to-product-advanced-alcohol-foaming-hand-sanitizer
-"What surfaces can Kling SKU 07512-00 be used on?",yes,,sku-resolution,fact,07512-00,b0-251-sku-resolves-to-product-kling
-"What are the hazards and signal word for Kling SKU 07512?",yes,,product-scoped,fact,Kling,b0-251-product-scoped-label-doc-tagged-to-this-sku-should-surface
-"What is the alcohol percentage in SKU 79504-00 hand sanitizer?",yes,,product-scoped,fact,79504-00,b0-251-product-scoped-query-should-anchor-on-the-resolved-product-key
-"What is the mix ratio for Bonnet Shampoo?",yes,,line-scoped,fact,Bonnet Shampoo,b0-251-line-only-query-regression-unchanged-by-b0-250-existing-pattern-from-dilution-efficacy-eval-v1-verified-unambiguous-title-match
-"How many ounces per gallon should I use for Wood Cleaner?",yes,,line-scoped,fact,Wood Cleaner,b0-251-line-only-query-regression-unchanged-by-b0-250-existing-pattern-from-dilution-efficacy-eval-v1
-"What variant and SKU information is available for Trash Foam Concentrate?",yes,,thin-coverage-fallback,fact,Trash Foam Concentrate,b0-251-product-line-has-only-1-indexed-chunk-must-still-surface-content-not-error
-"What is the technical spec for product SKU ZZZ-NONEXISTENT-999?",no,decline,sku-resolution-negative,fact,ZZZ-NONEXISTENT-999,b0-251-unresolvable-sku-most-common-observed-behavior-is-a-clean-decline-occasionally-the-model-instead-explains-the-sku-is-unrecognized-which-will-show-as-a-clear-labeled-failure-not-a-silent-one

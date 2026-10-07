@@ -31,26 +31,26 @@ const PARITY_CASES: Array<{
 }> = [
   {
     name: 'exact match',
-    permissions: ['navigation.sidebar.bex', 'admin.products.view'],
-    permission: 'navigation.sidebar.bex',
+    permissions: ['navigation.sidebar.example', 'admin.products.view'],
+    permission: 'navigation.sidebar.example',
     expected: true,
   },
   {
     name: 'no match',
-    permissions: ['navigation.sidebar.bex'],
+    permissions: ['navigation.sidebar.example'],
     permission: 'admin.products.view',
     expected: false,
   },
   {
     name: 'dot wildcard one level up',
     permissions: ['navigation.sidebar.*'],
-    permission: 'navigation.sidebar.bex',
+    permission: 'navigation.sidebar.example',
     expected: true,
   },
   {
     name: 'dot wildcard several levels up',
     permissions: ['navigation.*'],
-    permission: 'navigation.sidebar.bex',
+    permission: 'navigation.sidebar.example',
     expected: true,
   },
   {
@@ -62,7 +62,7 @@ const PARITY_CASES: Array<{
   {
     name: 'bare * matches a nested selector',
     permissions: ['*'],
-    permission: 'navigation.sidebar.bex',
+    permission: 'navigation.sidebar.example',
     expected: true,
   },
   {
@@ -80,7 +80,7 @@ const PARITY_CASES: Array<{
   {
     name: 'empty permission set matches nothing',
     permissions: [],
-    permission: 'navigation.sidebar.bex',
+    permission: 'navigation.sidebar.example',
     expected: false,
   },
 ];
@@ -124,7 +124,7 @@ describe('usePermissionsStore', () => {
       ok: true,
       json: async () => ({
         user: { USER_ID: 'u1', EMAIL: 'tbird@betco.com', NAME: 'Tom Bird' },
-        permissions: ['navigation.sidebar.bex'],
+        permissions: ['navigation.sidebar.example'],
         permission_groups: ['it-admin'],
       }),
     });
@@ -142,8 +142,8 @@ describe('usePermissionsStore', () => {
       EMAIL: 'tbird@betco.com',
       NAME: 'Tom Bird',
     });
-    expect(state.permissions).toEqual(['navigation.sidebar.bex']);
-    expect(state.hasPermission('navigation.sidebar.bex')).toBe(true);
+    expect(state.permissions).toEqual(['navigation.sidebar.example']);
+    expect(state.hasPermission('navigation.sidebar.example')).toBe(true);
   });
 
   it('load() marks itself loaded with no permissions when /api/me fails', async () => {
@@ -156,7 +156,7 @@ describe('usePermissionsStore', () => {
     const state = usePermissionsStore.getState();
     expect(state.loaded).toBe(true);
     expect(state.permissions).toEqual([]);
-    expect(state.hasPermission('navigation.sidebar.bex')).toBe(false);
+    expect(state.hasPermission('navigation.sidebar.example')).toBe(false);
   });
 
   it('clear() resets the store', () => {

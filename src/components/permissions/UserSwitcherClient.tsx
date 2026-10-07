@@ -38,7 +38,7 @@ export type UserSwitcherClientProps = {
  *
  * Port of c360's `components/custom/UserSwitcherClient`, with two changes: the `isAuthUserViewAll`
  * prop is gone (the server half already renders nothing for users without `HAS_USER_SWITCHER`, so the
- * false branch was unreachable), and with it c360's `LogoutButton` fallback — bex logs out through
+ * false branch was unreachable), and with it c360's `LogoutButton` fallback — this app logs out through
  * `AdminAccountMenu`.
  */
 export function UserSwitcherClient({

@@ -10,7 +10,7 @@
 import { useMemo } from 'react';
 import { Cell, Pie, PieChart } from 'recharts';
 
-import { formatInt } from '~/components/admin/projects/format';
+import { formatInt } from '~/components/admin/analytics/format';
 import { ChartContainer, ChartTooltip, type ChartConfig } from '~/components/ui/chart';
 import type { EventAnalyticsSummary } from '~/lib/event-logging/analytics-repository';
 

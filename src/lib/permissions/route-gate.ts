@@ -2,12 +2,12 @@
  * One-liner permission gate for API route handlers (B0-408).
  *
  * ```ts
- * const denied = await gateRoute(PERMISSIONS.BEX_CHAT_USE, 'GET /api/bex/conversations');
+ * const denied = await gateRoute(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS, 'GET /api/example');
  * if (denied) return denied;
  * ```
  *
  * Returns the response to send when the request must be refused, or `null` to continue. While
- * `BEX_PERMISSIONS_ENFORCED` is off this always returns `null` for authorization failures — the
+ * `PERMISSIONS_ENFORCED` is off this always returns `null` for authorization failures — the
  * verdict is still logged (and audited) by `requirePermission`, so phase 1 can see what would break.
  * Authentication is untouched: a request with no NextAuth session still gets a 401, exactly as the
  * handlers' own session checks already do.

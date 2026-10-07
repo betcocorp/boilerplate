@@ -71,11 +71,11 @@ beforeEach(() => {
 
 describe('rebuild-user — happy path', () => {
   it('re-sets the auth-user cookie with GROUPS, warms Redis, and forwards to callbackUrl', async () => {
-    const response = await GET(request('/admin/bex?tab=history'));
+    const response = await GET(request('/admin/analytics?tab=history'));
 
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe(
-      'http://localhost:3000/admin/bex?tab=history',
+      'http://localhost:3000/admin/analytics?tab=history',
     );
     expect(setCachedPermissions).toHaveBeenCalledWith(
       APP_USER.USER_ID,
@@ -94,7 +94,7 @@ describe('rebuild-user — happy path', () => {
   });
 
   it.each([
-    ['/api/bex/conversations', 'an /api target'],
+    ['/api/example', 'an /api target'],
     ['//evil.example.com', 'a protocol-relative target'],
     ['https://evil.example.com/x', 'an absolute target'],
     [null, 'a missing param'],

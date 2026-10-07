@@ -6,7 +6,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
  * B0-761 — server-side read model for the event analytics dashboard.
  *
  * Ported from c360, where the browser → Next.js route → Express `/events/summary` hop fanned out
- * into a dozen Snowflake queries. Bex is a single full-stack app, so the whole rollup lives in one
+ * into a dozen Snowflake queries. This is a single full-stack app, so the whole rollup lives in one
  * Postgres function (`public.event_analytics_summary`) and this module is just the typed,
  * validated door to it plus the pure shaping helpers the charts need.
  *
@@ -193,7 +193,7 @@ export function parseGroupFilter(raw: string | string[] | undefined): string[] {
  *
  * EST rather than local time: the RPC buckets with `date_trunc('day', created_at)` in the database
  * session's timezone (EST), so densifying on local days would misalign the join near midnight.
- * bex has no `date-fns`, and plain `Date` arithmetic on EST midnights is exact — no DST drift.
+ * this app has no `date-fns`, and plain `Date` arithmetic on EST midnights is exact — no DST drift.
  */
 function buildDayKeys(dayCount: number, now: Date): string[] {
   const count = Math.max(0, Math.trunc(dayCount));

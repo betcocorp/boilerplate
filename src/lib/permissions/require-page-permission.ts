@@ -10,7 +10,7 @@ import { requirePermission } from '~/lib/permissions/require-permission';
  * Deliberately not a shared `admin/layout.tsx` check — Next.js Layouts don't re-render on
  * sibling-route client-side navigation (Partial Rendering), so a single layout-level check would
  * go stale when navigating between sibling admin sections. Reuses `requirePermission` as-is
- * (Redis cache, `BEX_PERMISSIONS_ENFORCED` shadow-mode semantics, audit logging) rather than
+ * (Redis cache, `PERMISSIONS_ENFORCED` shadow-mode semantics, audit logging) rather than
  * duplicating permission-resolution logic.
  */
 export async function requirePagePermission(

@@ -1,9 +1,0 @@
-{
-  "format": 1,
-  "examplesVersion": "PENDING-B0-680-GENERATION",
-  "embeddingModel": "PENDING-B0-680-GENERATION",
-  "dimensions": 0,
-  "generatedAt": "PENDING-B0-680-GENERATION",
-  "routes": {},
-  "_comment": "NOT REAL DATA. B0-680 could not generate the real pre-computed embeddings in this environment because the only available OPENAI_API_KEY returned 401 invalid_organization on every OpenAI endpoint (confirmed via /v1/models, not embeddings-specific) -- see the ticket handoff notes. This placeholder is intentionally invalid: semantic-router.ts's runInit() will reject it (examplesVersion/embeddingModel/dimensions all mismatch), so the router degrades to path:'fallback' / route:'ambiguous' for every call, exactly like the old 'OpenAI unreachable at init' degrade path -- it does NOT silently route on fake vectors. To generate the real file, provide a valid OPENAI_API_KEY in .env.local and run from the repo root: npx tsx --env-file=.env.local scripts/generate-semantic-router-embeddings.ts -- that overwrites this file with real vectors computed from the live OpenAI embeddings API."
-}

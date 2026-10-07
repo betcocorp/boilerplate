@@ -56,7 +56,7 @@ describe('recordPermissionVerdict', () => {
 
     await recordPermissionVerdict({
       surface: 'api',
-      selector: 'bex.chat.use',
+      selector: 'example.resource.use',
       allowed: true,
       reason: 'granted',
       userId: 'u1',

@@ -66,7 +66,7 @@ function RelatedListCard({
 }
 
 export type PermissionDetailClientProps = {
-  /** Mirrors `BEX_PERMISSIONS_ENFORCED`; gates the Danger zone once enforcement is on. */
+  /** Mirrors `PERMISSIONS_ENFORCED`; gates the Danger zone once enforcement is on. */
   enforced?: boolean;
   groups: PermissionGroup[];
   permission: Permission;
@@ -210,7 +210,7 @@ export function PermissionDetailClient({
                 <Input
                   id="perm-selector"
                   onChange={(event) => setSelector(event.target.value)}
-                  placeholder="e.g. navigation.sidebar.bex"
+                  placeholder="e.g. navigation.sidebar.example"
                   value={selector}
                 />
               </div>

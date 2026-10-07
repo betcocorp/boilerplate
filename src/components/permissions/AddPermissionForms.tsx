@@ -26,7 +26,7 @@ import { Label } from '~/components/ui/label';
 
 /**
  * Collapsible "Add …" card shared by the three creation forms. Same shape as c360's, restyled to the
- * bex admin card conventions (`rounded-3xl border border-border/60 shadow-none`).
+ * this app admin card conventions (`rounded-3xl border border-border/60 shadow-none`).
  */
 function AddFormCard({
   children,
@@ -325,7 +325,7 @@ export function AddPermissionForm() {
             <Input
               id="permission-selector"
               onChange={(event) => setSelector(event.target.value)}
-              placeholder="e.g. navigation.sidebar.bex"
+              placeholder="e.g. navigation.sidebar.example"
               required
               value={selector}
             />

@@ -1,5 +1,5 @@
 /**
- * `BEX_PERMISSIONS_ENFORCED` — the single switch for the ported permission system (epic B0-401).
+ * `PERMISSIONS_ENFORCED` — the single switch for the ported permission system (epic B0-401).
  *
  * Phase 1 ships in **shadow mode**: every enforcement site (API route gates, the admin sidebar,
  * the NextAuth sign-in gate, the auth-user cookie check) computes its verdict and records it, but
@@ -10,7 +10,7 @@
  * | unset / anything but `'true'`    | shadow — evaluate + record, always allow            |
  * | `'true'`                         | enforce — deny (403 / sign-in redirect / hidden nav)|
  *
- * B0-638 — moved from the `BEX_PERMISSIONS_ENFORCED` env var to the `settings` table, read at call
+ * B0-638 — moved from the `PERMISSIONS_ENFORCED` env var to the `settings` table, read at call
  * time (never cached beyond the shared 30s `settings-service` TTL) so an admin toggle takes effect
  * without a deploy. This makes `isPermissionsEnforced` a DB read, so — same as before the move —
  * do not import this module from `src/proxy.ts`: it and `recordPermissionVerdict` both need the
@@ -24,7 +24,7 @@ import { logInfo, logWarn } from '~/lib/observability/logger';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 /** Name of the single env var that governs enforcement (for docs/log payloads). */
-export const PERMISSIONS_ENFORCED_ENV_VAR = 'BEX_PERMISSIONS_ENFORCED';
+export const PERMISSIONS_ENFORCED_ENV_VAR = 'PERMISSIONS_ENFORCED';
 
 /** Structured log event emitted for every verdict, allowed or not. */
 export const PERMISSION_VERDICT_LOG_EVENT = 'permission.verdict';
@@ -36,11 +36,11 @@ export const PERMISSION_SHADOW_VERDICT_EVENT = 'permission.shadow_verdict';
 export const PERMISSION_DENIED_EVENT = 'permission.denied';
 
 /**
- * True only when `BEX_PERMISSIONS_ENFORCED` is exactly `'true'`. Everything else — unset, `'1'`,
+ * True only when `PERMISSIONS_ENFORCED` is exactly `'true'`. Everything else — unset, `'1'`,
  * `'TRUE'`, `''` — means shadow mode, so a typo can never lock users out.
  */
 export async function isPermissionsEnforced(): Promise<boolean> {
-  return getBooleanSetting('BEX_PERMISSIONS_ENFORCED', false);
+  return getBooleanSetting('PERMISSIONS_ENFORCED', false);
 }
 
 /** Which enforcement site produced the verdict. */
@@ -70,7 +70,7 @@ export type PermissionVerdict = {
   selector: string | string[];
   allowed: boolean;
   reason: PermissionVerdictReason;
-  /** Route or surface the check guarded, e.g. `GET /api/bex/conversations`. */
+  /** Route or surface the check guarded, e.g. `GET /api/example`. */
   route?: string;
   /** Effective user (selected user when acting-as, else the auth user). */
   userId?: string | null;

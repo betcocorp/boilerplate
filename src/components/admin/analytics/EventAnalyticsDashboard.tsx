@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * B0-761 — composition root for `/admin/analytics`, the Bex port of c360's event-analytics
+ * B0-761 — composition root for `/admin/analytics`, the port of c360's event-analytics
  * dashboard. c360's original is one 983-line client file; here the filter bar and every panel is
  * its own sibling component and this file only arranges them.
  *

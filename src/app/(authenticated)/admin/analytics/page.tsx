@@ -1,7 +1,7 @@
 /**
- * B0-761 — `/admin/analytics`, the Bex port of c360's event-analytics dashboard.
+ * B0-761 — `/admin/analytics`, the port of c360's event-analytics dashboard.
  *
- * Thin by convention, in the shape of `/admin/bex/health`: `searchParams` fully determine the view
+ * Thin by convention, in the shape of `/admin/analytics`: `searchParams` fully determine the view
  * (`?days=`, `?groups=`) so the page is linkable and bookmarkable, and every piece of feature UI
  * lives under `~/components/admin/analytics/*`. `clampDays` / `parseGroupFilter` are the single
  * readers of those params — the dashboard's filter bar writes them back through the router, and the
@@ -21,7 +21,7 @@ import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
-  title: 'Analytics | Betco BEX',
+  title: 'Analytics | Betco App',
   description: 'Event volumes, sign-ins, page views, and recent activity from the event log.',
 };
 
@@ -45,7 +45,7 @@ export default async function AdminAnalyticsPage({ searchParams }: PageProps) {
         <p className="text-sm text-muted-foreground">Product</p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">Analytics</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          What people are doing in Bex — event volumes, sign-ins, page views, and the busiest hours
+          What people are doing in the app — event volumes, sign-ins, page views, and the busiest hours
           over the last {days} days.
         </p>
       </div>

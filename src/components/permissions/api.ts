@@ -2,7 +2,7 @@
  * Base path every permissions editor mutates through (B0-410, pairs with B0-409).
  *
  * c360's components fetched `/api/proxy/permissions/...` — an unauthenticated catch-all proxy in
- * front of the Express API. bex has no proxy: the handlers under
+ * front of the Express API. this app has no proxy: the handlers under
  * `src/app/api/admin/permissions/**` authenticate the browser session and check
  * `admin.card.permissions` themselves. The sub-paths and request bodies are otherwise unchanged,
  * so this constant is the whole of the rewrite.

@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('~/lib/api/bex-api-auth', () => ({ hasBexSession: vi.fn() }));
+vi.mock('~/lib/api/session-auth', () => ({ hasSession: vi.fn() }));
 vi.mock('~/lib/permissions/route-gate', () => ({ gateRoute: vi.fn() }));
 vi.mock('~/lib/permissions/repository', () => ({
   postPermission: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock('~/lib/permissions/repository', () => ({
   postPermissionsBulkAssign: vi.fn(),
 }));
 
-import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { hasSession } from '~/lib/api/session-auth';
 import * as repository from '~/lib/permissions/repository';
 import { gateRoute } from '~/lib/permissions/route-gate';
 
@@ -47,7 +47,7 @@ import { PUT as putUserRoute } from './users/[userId]/route';
 import { PUT as putUserAssignmentsRoute } from './users/[userId]/assignments/route';
 import { POST as postBulkAssignRoute } from './users/bulk-assign/route';
 
-const mockedSession = vi.mocked(hasBexSession);
+const mockedSession = vi.mocked(hasSession);
 const mockedGateRoute = vi.mocked(gateRoute);
 const repo = vi.mocked(repository);
 
@@ -76,7 +76,7 @@ function params<T extends Record<string, string>>(value: T) {
 
 /**
  * Signed in and permitted — the state every non-auth assertion below runs in. `gateRoute` returning
- * `null` is also what shadow mode (`BEX_PERMISSIONS_ENFORCED` off) produces for a *denied* verdict,
+ * `null` is also what shadow mode (`PERMISSIONS_ENFORCED` off) produces for a *denied* verdict,
  * so these assertions hold in both modes.
  */
 function allowAdmin() {
@@ -228,7 +228,7 @@ describe('permissions admin route gating', () => {
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'Unauthorized' });
     // The session gate short-circuits before the permission gate and the repository. This half of
-    // the AC is flag-independent: `BEX_PERMISSIONS_ENFORCED` never relaxes authentication.
+    // the AC is flag-independent: `PERMISSIONS_ENFORCED` never relaxes authentication.
     expect(mockedGateRoute).not.toHaveBeenCalled();
   });
 
@@ -241,7 +241,7 @@ describe('permissions admin route gating', () => {
       );
       const res = await call();
       expect(res.status).toBe(403);
-      // `gateRoute` only ever returns a response when BEX_PERMISSIONS_ENFORCED is on; in shadow
+      // `gateRoute` only ever returns a response when PERMISSIONS_ENFORCED is on; in shadow
       // mode it resolves to null and the request proceeds.
       expect(mockedGateRoute).toHaveBeenCalledWith(
         'admin.card.permissions',

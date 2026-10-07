@@ -1,4 +1,4 @@
-import { Rocket, Search } from 'lucide-react';
+import { Rocket } from 'lucide-react';
 import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { Suspense, type ReactNode } from 'react';
@@ -7,10 +7,8 @@ import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { AdminNavAutoClose } from '~/components/admin/AdminNavAutoClose';
 import { AdminScrollableMain } from '~/components/admin/AdminScrollableMain';
 import { AdminSidebarNav } from '~/components/admin/AdminSidebarNav';
-import { EventCountdown } from '~/components/admin/EventCountdown';
 import { PageViewLogger } from '~/components/analytics/PageViewLogger';
 import UserSwitcher from '~/components/permissions/UserSwitcher';
-import { Button } from '~/components/ui/button';
 import {
   Sidebar,
   SidebarContent,
@@ -39,7 +37,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
 
   const permissions = await getCurrentUserPermissions();
   const hasSwitcher = await userHasSwitcher();
-  // B0-842 — act-as-aware (effective) user, so the sidebar reflects the acted-as identity.
+  // Act-as-aware (effective) user, so the sidebar reflects the acted-as identity.
   const effectiveUser = await getUserOrDefault();
 
   return (
@@ -47,7 +45,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
       className="h-svh overflow-hidden bg-muted/40"
       defaultOpen={defaultOpen}
     >
-      {/* B0-761 — page-view analytics. Suspense-wrapped because it reads useSearchParams. */}
+      {/* Page-view analytics. Suspense-wrapped because it reads useSearchParams. */}
       <Suspense fallback={null}>
         <PageViewLogger />
       </Suspense>
@@ -62,7 +60,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 <Rocket className="size-4" />
               </div>
               <span className="group-data-[collapsible=icon]:hidden">
-                Bex Mission Control
+                Betco App
               </span>
             </Link>
           </SidebarHeader>
@@ -98,16 +96,6 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
               </div>
               <div className="flex items-center gap-3">
                 {hasSwitcher && <UserSwitcher />}
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/admin/products/rag">
-                    <Search className="size-4" />
-                    <span className="hidden md:block">Search</span>
-                  </Link>
-                </Button>
-                <EventCountdown
-                  title="ISSA: "
-                  targetDate={new Date('2026-11-17')}
-                />
               </div>
             </div>
           </header>

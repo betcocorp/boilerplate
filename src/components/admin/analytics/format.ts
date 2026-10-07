@@ -1,9 +1,7 @@
 /**
  * B0-761 — pure formatters for the event-analytics dashboard (no JSX, no deps — unit-testable).
  *
- * Anything already covered by `~/components/admin/projects/format` (`formatInt`, `formatPercent`,
- * `formatDate`) is imported from there instead; only the hour/day-axis and event-name helpers that
- * are specific to this dashboard live here. This repo has no `date-fns`, so day strings are parsed
+ * Hour/day-axis and event-name helpers specific to this dashboard (plus `formatInt`). This repo has no `date-fns`, so day strings are parsed
  * as literal `YYYY-MM-DD` text rather than through `Date` — that also keeps a EST calendar day from
  * sliding a day backwards when the viewer sits west of EST.
  */
@@ -93,4 +91,8 @@ export function formatEventTimestamp(iso: string, timeZone?: string): string {
     month: 'short',
     timeZone,
   }).format(parsed);
+}
+
+export function formatInt(n: number): string {
+  return n.toLocaleString('en-US');
 }

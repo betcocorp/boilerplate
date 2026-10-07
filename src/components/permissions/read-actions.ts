@@ -12,7 +12,7 @@
  * Same gate as the mutation handlers (`guardPermissionsAdmin`): a server action is a publicly
  * reachable endpoint, so authentication and `admin.card.permissions` are checked here and not left to
  * the caller. `requirePermission` covers both — no session yields `allowed: false` outright, while an
- * authorization failure is shadow-allowed until `BEX_PERMISSIONS_ENFORCED` flips (B0-408).
+ * authorization failure is shadow-allowed until `PERMISSIONS_ENFORCED` flips (B0-408).
  *
  * A refused or failed read returns the same empty-but-valid envelope the repository uses, so the UI
  * shows "nothing assigned" instead of throwing inside a collapsible.

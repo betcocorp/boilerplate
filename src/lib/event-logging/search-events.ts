@@ -17,7 +17,7 @@ import { logEvent } from '~/lib/event-logging/log-event';
 export const SEARCH_SUBMIT_EVENT = 'analytics.search.submit';
 export const SEARCH_RESULT_CLICK_EVENT = 'analytics.search.result.click';
 
-/** Domains a bex search surface can target. */
+/** Domains a this app search surface can target. */
 export type SearchEntityType =
   | 'product'
   | 'document'

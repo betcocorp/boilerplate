@@ -16,7 +16,7 @@ import { getPermissionsForUser, getUser } from "~/lib/permissions/repository";
 import type User from "~/types/User";
 
 /**
- * Sign-in outcome for an Azure-AD-authenticated identity that failed the bex `app_user` gate.
+ * Sign-in outcome for an Azure-AD-authenticated identity that failed the this app `app_user` gate.
  * The value is the `?error=` code the sign-in page renders (see `src/app/page.tsx`).
  */
 type SignInRejection =
@@ -26,9 +26,9 @@ type SignInRejection =
   | "/?error=AccessDenied";
 
 /**
- * Records the rejection and applies `BEX_PERMISSIONS_ENFORCED` (B0-408): while the flag is off the
+ * Records the rejection and applies `PERMISSIONS_ENFORCED` (B0-408): while the flag is off the
  * user signs in anyway with a warning, which is today's behaviour for every Azure-AD identity. The
- * `app_user` seed only covers 130 CRM users, so shadow mode is what keeps real bex users working.
+ * `app_user` seed only covers 130 CRM users, so shadow mode is what keeps real this app users working.
  */
 async function gateSignIn(params: {
   rejection: SignInRejection;
@@ -56,7 +56,7 @@ async function gateSignIn(params: {
     Sentry.captureException(error, { extra: fields });
   } else {
     logWarn("auth.login.failure", fields);
-    Sentry.captureMessage(`bex sign-in rejected: ${reason}`, {
+    Sentry.captureMessage(`this app sign-in rejected: ${reason}`, {
       level: enforced ? "warning" : "info",
       extra: fields,
     });
@@ -111,8 +111,8 @@ export const authOptions: NextAuthOptions = {
   },
   callbacks: {
     /**
-     * bex-side gate: the identity provider says who you are, `public.app_user` says whether you
-     * belong here. Enforced only when `BEX_PERMISSIONS_ENFORCED=true`.
+     * app-side gate: the identity provider says who you are, `public.app_user` says whether you
+     * belong here. Enforced only when `PERMISSIONS_ENFORCED=true`.
      */
     async signIn({ user, account, profile }) {
       const provider = account?.provider ?? null;
