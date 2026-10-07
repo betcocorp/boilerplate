@@ -16,6 +16,19 @@ describe('resolvePassageIntent', () => {
     });
   });
 
+  it('includes fungicidal dilution alongside directions and efficacy claims', () => {
+    expect(
+      resolvePassageIntent(
+        "Which disinfectants kill the fungus that causes athlete's foot?",
+        'fungistatic',
+      ),
+    ).toEqual({
+      key: 'fungistatic',
+      sdsSectionTypes: ['fungistatic'],
+      labelSectionTypes: ['directions', 'dilution', 'epa_claims'],
+    });
+  });
+
   it('combines label directions and hazards for PPE intent', () => {
     expect(resolvePassageIntent('What PPE do I need?', 'exposure_ppe')).toEqual({
       key: 'exposure_ppe',

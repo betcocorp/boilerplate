@@ -226,6 +226,7 @@ import {
   extractVerifiedFactsCitationKeys,
   isOnlyRegulatedClaimIssues,
   isRevisionSkipForRegulatedClaimOnlyEnabled,
+  REGULATED_CLAIM_GROUNDING_VERSION,
   REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE,
   resolveRevisionModel,
   resolveValidatorModel,
@@ -4984,6 +4985,7 @@ export async function runProductSupportWorkflow(input: {
             conflictingAssertionIds: answerCoverage.conflictingAssertionIds,
             revised: Boolean(coverageRevision.text.trim()),
             adopted: revisionSelection.adopted,
+            revisionStrategy: revisionSelection.strategy,
             usage: coverageRevision.usage,
           }),
         });
@@ -5635,6 +5637,7 @@ export async function runProductSupportWorkflow(input: {
           gate: 'regulated_claim_guardrail',
           inputs: {
             categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+            groundingRuleVersion: REGULATED_CLAIM_GROUNDING_VERSION,
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             groundedSourceCount: regulatedClaimGroundingPool.length,
@@ -5687,6 +5690,7 @@ export async function runProductSupportWorkflow(input: {
           'regulated_claim_guardrail_rejected',
           {
             categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+            groundingRuleVersion: REGULATED_CLAIM_GROUNDING_VERSION,
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             // B0-871 — `token_redaction` | `sentence_redaction` | `decline` (+ why, for decline).
@@ -5713,6 +5717,7 @@ export async function runProductSupportWorkflow(input: {
           gate: 'regulated_claim_guardrail',
           inputs: {
             categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+            groundingRuleVersion: REGULATED_CLAIM_GROUNDING_VERSION,
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             redactionMode: regulatedClaimRedactionPlan.mode,

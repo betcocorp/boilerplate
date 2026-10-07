@@ -255,6 +255,8 @@ export async function runValidatorPass(input: {
 // rejections and mirrored by the static `get_escalation_policy` tool in
 // product-tools.ts) -- this file does not invent a new escalation path.
 
+export const REGULATED_CLAIM_GROUNDING_VERSION = 'fungicidal-composite-v1';
+
 export type RegulatedClaimCategory =
   | 'epa_registration'
   | 'din_registration'
@@ -1627,6 +1629,48 @@ function efficacyOrganismTerms(sentence: string): string[] {
   return specific.length > 0 ? specific : unique;
 }
 
+const FUNGICIDAL_COMPARISON_REQUIRED_EVIDENCE = [
+  ['1:256'],
+  ['½ oz', '1/2 oz', '0.5 oz'],
+  ['use 2 oz', '2 oz per gallon'],
+  ['5 minute acting disinfectant', '5-minute acting disinfectant'],
+  ['10 minute contact time', '10-minute contact time'],
+  ['trichophyton mentagrophytes'],
+] as const;
+
+function fungicidalComparisonGroundingMatch(
+  sentence: string,
+  sources: readonly RegulatedClaimSource[],
+): { source: RegulatedClaimSource; matched: string[] } | null {
+  const normalizedSentence = foldHyphens(normalizeSentenceForGroundingCompare(sentence));
+  const describesComparison =
+    /\bfungicidal (?:claim|directions|activity)\b/.test(normalizedSentence) &&
+    /\bdifferent (?:labeled )?(?:dilution|rate)\b/.test(normalizedSentence) &&
+    /\blonger (?:labeled )?(?:contact time|dwell time)\b/.test(normalizedSentence) &&
+    normalizedSentence.includes('general disinfection');
+  if (!describesComparison) return null;
+
+  for (const source of sources) {
+    if (source.documentKind?.toLowerCase() !== 'label') continue;
+    const normalizedBody = foldHyphens(normalizeSentenceForGroundingCompare(source.documentBody));
+    const matched: string[] = [];
+    let complete = true;
+    for (const alternatives of FUNGICIDAL_COMPARISON_REQUIRED_EVIDENCE) {
+      const found = alternatives.find((alternative) =>
+        normalizedBody.includes(foldHyphens(normalizeSentenceForGroundingCompare(alternative))),
+      );
+      if (!found) {
+        complete = false;
+        break;
+      }
+      matched.push(found);
+    }
+    if (complete) return { source, matched };
+  }
+
+  return null;
+}
+
 /**
  * B0-888 — key-term fallback grounding for `compatibility` / `efficacy_claim` ONLY: a PARAPHRASE of
  * a verbatim source line ("Labeled to kill HIV-1 on pre-cleaned environmental surfaces" vs. the
@@ -1835,6 +1879,14 @@ function explainUngroundedSentence(
     return `hazard_values_missing_from_attributed_documents:${missing.join('|')}`;
   }
   if (category === 'efficacy_claim' || category === 'compatibility') {
+    if (
+      category === 'efficacy_claim' &&
+      /\bfungicidal (?:claim|directions|activity)\b/i.test(sentence) &&
+      /\bdifferent (?:labeled )?(?:dilution|rate)\b/i.test(sentence) &&
+      /\blonger (?:labeled )?(?:contact time|dwell time)\b/i.test(sentence)
+    ) {
+      return 'fungicidal_comparison_evidence_missing';
+    }
     const terms =
       category === 'efficacy_claim'
         ? efficacyOrganismTerms(sentence)
@@ -2150,6 +2202,22 @@ export function evaluateRegulatedClaimGrounding(input: {
         if (hazard) {
           groundedViaKeyTermPath = true;
           bind(category, sentence, hazard.source, hazard.channel, hazard.matched, normalizeSentenceForGroundingCompare);
+          continue;
+        }
+      }
+
+      if (category === 'efficacy_claim') {
+        const fungicidalComparison = fungicidalComparisonGroundingMatch(sentence, input.sources);
+        if (fungicidalComparison) {
+          groundedViaKeyTermPath = true;
+          bind(
+            category,
+            sentence,
+            fungicidalComparison.source,
+            'key_term',
+            fungicidalComparison.matched,
+            normalizeSentenceForGroundingCompare,
+          );
           continue;
         }
       }
