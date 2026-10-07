@@ -41,7 +41,7 @@ export const ANSWER_COVERAGE_REVISION_SYSTEM_PROMPT = [
   'You are repairing a product-support answer that omitted or contradicted decisive facts already present in the exact evidence supplied below.',
   'Return the complete user-facing answer only. Preserve correct content needed to answer the question, add every missing required assertion, replace every conflicting lower-authority value, and remove optional claims that are not needed for the requested answer.',
   'Use the authoritative printed label value for dilution and use directions, and the current SDS for hazard classification and PPE.',
-  'Do not add claims outside the supplied requirements and evidence. For a contact_time requirement, state only the contact duration and general-use condition; do not add organism, kill, or efficacy claims unless they are separately required. For signal-word, hazard-classification, organism-scope, HIV-cleanup PPE, and food-contact label-direction requirements, copy each evidence line verbatim as its own complete quoted statement. Put each quotation in a separate Markdown bullet, end that bullet immediately after its [doc:uuid] citation, and never place two quotations in the same bullet, sentence, or paragraph. Never open a quote before one sentence and close it after another. Do not add a heading, preamble, or meta-commentary.',
+  'Do not add claims outside the supplied requirements and evidence. For a contact_time requirement, state only the contact duration and general-use condition; do not add organism, kill, or efficacy claims unless they are separately required. For signal-word, hazard-classification, organism-scope, HIV-cleanup PPE, and food-contact label-direction requirements, copy each evidence line verbatim as its own complete quoted statement. Put each quotation in a separate Markdown bullet, end that bullet immediately after its [doc:uuid] citation, and never place two quotations in the same bullet, sentence, or paragraph. Never open a quote before one sentence and close it after another. State every supplied workflow-policy requirement directly, including claim-specific versus general directions, chemical-mixing emergency referral, and use of a separate disinfectant at its own labeled dilution and contact time. Do not add a heading, preamble, or meta-commentary.',
   'Keep each regulated value attributed to its product label or SDS using the existing [doc:uuid] citation style.',
 ].join('\n');
 
@@ -52,10 +52,20 @@ const DISINFECTANT_QUERY = /\b(disinfect\w*|germicid\w*|contact\s*time|dwell\s*t
 const PPE_QUERY = /\b(ppe|personal\s+protective|gloves?|goggles?|eye\s+(?:or\s+face\s+)?protection|protective\s+clothing)\b/i;
 const HIV_CLEANUP_QUERY =
   /\b(hiv(?:-?1)?|aids(?:\s+virus)?|blood[-\s]?borne\s+pathogens?|blood\s*\/\s*body\s+fluids?)\b/i;
+const FUNGICIDAL_QUERY =
+  /\b(fung(?:us|i|al|icide)|athlete(?:'s|’s)?\s+foot|ringworm|trichophyton(?:\s+(?:mentagrophytes|interdigitale))?)\b/i;
+const ATHLETES_FOOT_AND_RINGWORM_QUERY =
+  /\bathlete(?:'s|’s)?\s+foot\b[\s\S]*\bringworm\b|\bringworm\b[\s\S]*\bathlete(?:'s|’s)?\s+foot\b/i;
 const FOOD_CONTACT_RINSE_QUERY =
   /(?:\bfood[-\s]?contact\b[\s\S]{0,120}\b(?:rins\w*|no[-\s]?rinse)\b|\b(?:rins\w*|no[-\s]?rinse)\b[\s\S]{0,120}\bfood[-\s]?contact\b)/i;
 const SOFT_SURFACE_QUERY =
   /\b(soft[-\s]+surfaces?|upholster(?:y|ed)?|curtains?|wrestling\s+mats?)\b/i;
+const CHEMICAL_MIXING_QUERY =
+  /(?:\b(?:mix|combine|add)\w*\b[\s\S]{0,120}\b(?:bleach|ammonia|ammoniated|acid)\b|\b(?:bleach|ammonia|ammoniated|acid)\b[\s\S]{0,120}\b(?:mix|combine|add)\w*\b)/i;
+const DISINFECTION_CAPABILITY_QUERY =
+  /(?:\b(?:does|can|will|is)\b[\s\S]{0,80}\bdisinfect\w*\b|\bdisinfect\w*\b[\s\S]{0,80}\b(?:does|can|will|is)\b)/i;
+const SARS_COV_2_QUERY = /\b(?:sars[-\s]?cov[-\s]?2|covid(?:-?19)?)\b/i;
+const CONTACT_TIME_QUERY = /\b(?:contact\s*time|dwell\s*time|how\s+long|minutes?|seconds?)\b/i;
 
 function sourceChunkIds(source: CoverageSource): string[] {
   if (source.documentBodyChunkIds?.length) return source.documentBodyChunkIds;
@@ -98,6 +108,7 @@ function policyAssertion(input: {
   id: string;
   category: DecisiveAssertionCategory;
   matchGroups: string[][];
+  conflictPatterns?: string[];
 }): DecisiveAssertion {
   return {
     id: input.id,
@@ -108,6 +119,7 @@ function policyAssertion(input: {
     selectedSectionTypes: [],
     evidenceQuote: null,
     matchGroups: input.matchGroups,
+    ...(input.conflictPatterns ? { conflictPatterns: input.conflictPatterns } : {}),
     authority: 'workflow_policy',
   };
 }
@@ -271,6 +283,7 @@ function extractDilutionAssertions(query: string, sources: CoverageSource[]): De
             'do not mix stronger',
             'do not use a stronger',
             'do not exceed the label',
+            'do not exceed the dilution rate',
             'not go stronger',
             'no stronger than',
           ],
@@ -392,6 +405,102 @@ function extractPpeAssertions(query: string, sources: CoverageSource[]): Decisiv
   return assertions;
 }
 
+function extractFungicidalAssertions(
+  query: string,
+  sources: CoverageSource[],
+): DecisiveAssertion[] {
+  if (!FUNGICIDAL_QUERY.test(query)) return [];
+
+  for (const source of labelSources(sources)) {
+    const body = source.documentBody;
+    const generalContact = exactQuote(body, /5\s+minute\s+acting\s+disinfectant\.?/i);
+    const fungicidalContact = exactQuote(
+      body,
+      /10\s+MINUTE\s+CONTACT\s+TIME:\s*Trichophyton\s+mentagrophytes\s*\(athlete[’']s\s+foot\s+fungus\)\.?/i,
+    );
+    const generalDilution = exactQuote(
+      body,
+      /Dilution:\s*Disinfection\s*\(1:256\)\s*(?:½|1\s*\/\s*2|0\.5)\s*oz\.?(?:\s+per|\s*\/)\s*gallon\s+of\s+water\.?/i,
+    );
+    const fungicidalDilution = exactQuote(
+      body,
+      /Use\s+2\s+oz\.?\s+per\s+gallon\s+of\s+water\s+to\s+kill\s+Trichophyton\s+mentagrophytes\s*\(athlete[’']s\s+foot\s+fungus\)\.?/i,
+    );
+    if (!generalContact || !fungicidalContact || !generalDilution || !fungicidalDilution) {
+      continue;
+    }
+
+    return [
+      evidenceAssertion({
+        id: `fungicidal-claim:${source.documentId}:general-dilution`,
+        category: 'dilution_rate',
+        source,
+        quote: generalDilution,
+        matchGroups: [['1:256'], ['½ oz', '1/2 oz', '0.5 oz', 'half ounce']],
+        authority: 'label',
+      }),
+      evidenceAssertion({
+        id: `fungicidal-claim:${source.documentId}:fungicidal-dilution`,
+        category: 'dilution_rate',
+        source,
+        quote: fungicidalDilution,
+        matchGroups: [['2 oz', '2 ounces'], ['trichophyton', "athlete's foot", 'athlete’s foot']],
+        authority: 'label',
+      }),
+      evidenceAssertion({
+        id: `fungicidal-claim:${source.documentId}:general-contact`,
+        category: 'contact_time',
+        source,
+        quote: generalContact,
+        matchGroups: [['5 minute', '5-minute', 'five minute', 'five-minute']],
+        authority: 'label',
+      }),
+      evidenceAssertion({
+        id: `fungicidal-claim:${source.documentId}:fungicidal-contact`,
+        category: 'contact_time',
+        source,
+        quote: fungicidalContact,
+        matchGroups: [
+          ['10 minute', '10-minute', 'ten minute', 'ten-minute'],
+          ['trichophyton', "athlete's foot", 'athlete’s foot'],
+        ],
+        authority: 'label',
+      }),
+      policyAssertion({
+        id: 'policy:fungicidal-directions-can-differ',
+        category: 'claim_scope',
+        matchGroups: [
+          ['fungicidal claim', 'fungicidal directions', 'fungicidal activity'],
+          ['different dilution', 'different labeled dilution', 'different rate'],
+          ['longer contact time', 'longer labeled contact time', 'longer dwell time'],
+          ['general disinfection', 'general-disinfection', 'disinfection claim'],
+        ],
+        conflictPatterns: [
+          '3-minute contact time for general disinfection, but specifically states a 10-minute contact time for fungicidal activity',
+        ],
+      }),
+      ...(ATHLETES_FOOT_AND_RINGWORM_QUERY.test(query)
+        ? [
+            policyAssertion({
+              id: 'policy:trichophyton-causes-athletes-foot-and-ringworm',
+              category: 'claim_scope',
+              matchGroups: [
+                [
+                  "athlete's foot and ringworm are caused by trichophyton mentagrophytes",
+                  'athlete’s foot and ringworm are caused by trichophyton mentagrophytes',
+                  "trichophyton mentagrophytes is a cause of athlete's foot and ringworm",
+                  'trichophyton mentagrophytes is a cause of athlete’s foot and ringworm',
+                ],
+              ],
+            }),
+          ]
+        : []),
+    ];
+  }
+
+  return [];
+}
+
 function extractHivCleanupAssertions(
   query: string,
   sources: CoverageSource[],
@@ -399,25 +508,173 @@ function extractHivCleanupAssertions(
   if (!HIV_CLEANUP_QUERY.test(query)) return [];
 
   for (const source of labelSources(sources)) {
-    const quote = exactQuote(
+    const cleanupPpe = exactQuote(
       source.documentBody,
       /(?:Clean[-\s]?up|Cleanup)\s+(?:must|should)\s+(?:-\s*)?always\s+be\s+done\s+wearing\s+protective\s+(?:latex\s+)?gloves,\s*gowns,\s*masks\s+and\s+eye\s+protection\.?/i,
     );
-    if (!quote) continue;
+    const claimSpecificDirections = exactQuote(
+      source.documentBody,
+      /1\s+minute\s+using\s+a\s+24\s+mL\s*\/\s*Litre\s+use-solution\.\s*Use\s+a\s+ten\s+minute\s+contact\s+time\s+for\s+disinfection\s+against\s+all\s+other\s+bacteria\s+claimed\s+on\s+label\.?/i,
+    );
+    if (!cleanupPpe && !claimSpecificDirections) continue;
+
+    const assertions: DecisiveAssertion[] = [];
+    if (claimSpecificDirections) {
+      assertions.push(
+        evidenceAssertion({
+          id: `hiv-claim:${source.documentId}:specific-directions`,
+          category: 'claim_scope',
+          source,
+          quote: claimSpecificDirections,
+          matchGroups: [
+            ['24 ml/litre', '24 ml/l', '24 ml per litre'],
+            ['1 minute', 'one minute'],
+            ['10 minute', 'ten minute'],
+          ],
+          authority: 'label',
+        }),
+        policyAssertion({
+          id: 'policy:hiv-claim-directions-are-separate',
+          category: 'claim_scope',
+          matchGroups: [
+            ['hiv-1', 'hiv 1'],
+            ['its own labeled dilution', 'its own dilution', 'hiv-1-specific dilution', 'claim-specific dilution'],
+            [
+              'its own labeled contact time',
+              'its own contact time',
+              'hiv-1-specific contact time',
+              'claim-specific contact time',
+            ],
+            ['separately from', 'separate from', 'different from'],
+            ['general disinfection', 'general-disinfection'],
+          ],
+        }),
+      );
+    }
+    if (cleanupPpe) {
+      assertions.push(
+        evidenceAssertion({
+          id: `hiv-cleanup:${source.documentId}:ppe`,
+          category: 'ppe',
+          source,
+          quote: cleanupPpe,
+          matchGroups: [
+            ['protective gloves', 'protective latex gloves'],
+            ['gowns'],
+            ['masks'],
+            ['eye protection', 'eye coverings'],
+          ],
+          authority: 'label',
+        }),
+      );
+    }
+    return assertions;
+  }
+
+  return [];
+}
+
+function extractChemicalMixingAssertions(query: string): DecisiveAssertion[] {
+  if (!CHEMICAL_MIXING_QUERY.test(query)) return [];
+  return [
+    policyAssertion({
+      id: 'policy:chemical-mixing-emergency-referral',
+      category: 'use_constraint',
+      matchGroups: [
+        ['seek medical attention in an emergency', 'get medical attention in an emergency'],
+        ['bex cannot provide medical advice'],
+        ['product label', "products' labels", 'label directions'],
+        ['sds', 'safety data sheet'],
+        ['poison control', '1-800-222-1222'],
+      ],
+    }),
+  ];
+}
+
+function extractDisinfectionCapabilityAssertions(
+  query: string,
+  sources: CoverageSource[],
+): DecisiveAssertion[] {
+  if (!DISINFECTION_CAPABILITY_QUERY.test(query)) return [];
+
+  for (const source of labelSources(sources)) {
+    const incompatibility = exactQuote(
+      source.documentBody,
+      /NOTE:\s*Do\s+not\s+subject\s+this\s+product\s+to\s+disinfectants,\s*boiling\s+water\s+or\s+chlorinated\s+products\.?/i,
+    );
+    if (!incompatibility) continue;
 
     return [
       evidenceAssertion({
-        id: `hiv-cleanup:${source.documentId}:ppe`,
-        category: 'ppe',
+        id: `disinfection-capability:${source.documentId}:incompatibility`,
+        category: 'use_constraint',
         source,
-        quote,
+        quote: incompatibility,
         matchGroups: [
-          ['protective gloves', 'protective latex gloves'],
-          ['gowns'],
-          ['masks'],
-          ['eye protection', 'eye coverings'],
+          ['do not subject this product to disinfectants', 'must not be subjected to disinfectants'],
+          ['boiling water'],
+          ['chlorinated products'],
+        ],
+        conflictPatterns: ['mix it with disinfectant', 'combine it with disinfectant'],
+        authority: 'label',
+      }),
+      policyAssertion({
+        id: 'policy:use-separate-labeled-disinfectant',
+        category: 'use_constraint',
+        matchGroups: [
+          ['separate epa-registered disinfectant', 'separate epa registered disinfectant'],
+          ['separate step', 'second step', 'clean with push, then disinfect'],
+          [
+            'own labeled dilution',
+            "product's own labeled dilution",
+            'dilution from that product\'s own current label',
+          ],
+          ['contact time', 'dwell time'],
+        ],
+      }),
+    ];
+  }
+
+  return [];
+}
+
+function extractSarsCov2ContactAssertions(
+  query: string,
+  sources: CoverageSource[],
+): DecisiveAssertion[] {
+  if (!SARS_COV_2_QUERY.test(query) || !CONTACT_TIME_QUERY.test(query)) return [];
+
+  for (const source of labelSources(sources)) {
+    const pairedTimes = exactQuote(
+      source.documentBody,
+      /Effective\s+against\s+SARS-Related\s+Coronavirus\s+2(?:4)?\s*\(SARS-CoV-2\)\s+in\s+1\s+minute\.\s*5\s+minute\s+acting\s+disinfectant\.?/i,
+    );
+    if (!pairedTimes) continue;
+
+    return [
+      evidenceAssertion({
+        id: `sars-cov-2:${source.documentId}:claim-vs-general-time`,
+        category: 'claim_scope',
+        source,
+        quote: pairedTimes,
+        matchGroups: [
+          ['sars-cov-2', 'sars-related coronavirus 2', 'covid-19', 'covid 19'],
+          ['1 minute', '1-minute', '60 seconds'],
+          ['5 minute', '5-minute', 'five minute', 'five-minute'],
         ],
         authority: 'label',
+      }),
+      policyAssertion({
+        id: 'policy:sars-cov-2-time-is-claim-specific',
+        category: 'claim_scope',
+        matchGroups: [
+          [
+            'not the product\'s general contact time',
+            'does not mean the general disinfection time',
+            'claim-specific, not the general',
+            'claim-specific and is not',
+          ],
+        ],
       }),
     ];
   }
@@ -561,7 +818,11 @@ export function buildDecisiveAssertions(input: {
   const assertions = [
     ...extractDilutionAssertions(input.query, input.sources),
     ...extractPpeAssertions(input.query, input.sources),
+    ...extractFungicidalAssertions(input.query, input.sources),
     ...extractHivCleanupAssertions(input.query, input.sources),
+    ...extractChemicalMixingAssertions(input.query),
+    ...extractDisinfectionCapabilityAssertions(input.query, input.sources),
+    ...extractSarsCov2ContactAssertions(input.query, input.sources),
     ...extractFoodContactRinseAssertions(input.query, input.sources),
     ...extractSoftSurfaceAssertions(input.query, input.sources),
   ];
@@ -622,26 +883,51 @@ export function evaluateAnswerCoverage(input: {
 
 const CURRENT_PRODUCT_DOCUMENT_POLICY_SENTENCE =
   'PPE requirements are product-specific and must come from the current label and SDS for the product in hand.';
+const DO_NOT_EXCEED_LABELED_RATE_POLICY_SENTENCE =
+  'Do not exceed the dilution rate printed on the current product label.';
+const DO_NOT_TRANSFER_BETWEEN_VARIANTS_POLICY_SENTENCE =
+  'Treat each named product variant as a separate product; do not transfer a dilution or contact time to another variant unless that variant\'s current label was retrieved.';
+const FUNGICIDAL_DIRECTIONS_POLICY_SENTENCE =
+  'A fungicidal claim can require a different labeled dilution and a longer labeled contact time than general disinfection; follow the fungicidal directions on the current product label.';
+// General organism taxonomy, not a transferable product claim; the efficacy corpus prints
+// “Trichophyton mentagrophytes (a cause of ringworm)” and labels identify it as athlete’s-foot fungus.
+const TRICHOPHYTON_RINGWORM_POLICY_SENTENCE =
+  'Trichophyton mentagrophytes is a cause of athlete\'s foot and ringworm.';
+const HIV_CLAIM_DIRECTIONS_POLICY_SENTENCE =
+  'Treat each HIV-1 claim as claim-specific: use its own labeled dilution and its own labeled contact time, separately from the product\'s general-disinfection dilution and contact time.';
+const CHEMICAL_MIXING_EMERGENCY_POLICY_SENTENCE =
+  'If chemicals may already have been mixed or exposure is suspected, seek medical attention in an emergency and call Poison Control (1-800-222-1222 in the US) or emergency services immediately. BEX cannot provide medical advice; follow the product label and SDS and have both available for the responder.';
+const SEPARATE_DISINFECTANT_POLICY_SENTENCE =
+  'If disinfection is required, use a separate EPA-registered disinfectant as a separate step, at that product\'s own labeled dilution and contact time; do not combine it with this cleaner.';
+const SARS_COV_2_CLAIM_TIME_POLICY_SENTENCE =
+  'The 1-minute SARS-CoV-2 claim is claim-specific and is not the product\'s general contact time.';
+
+const COVERAGE_POLICY_BACKSTOPS = new Map<string, string>([
+  ['policy:use-current-product-document', CURRENT_PRODUCT_DOCUMENT_POLICY_SENTENCE],
+  ['policy:do-not-exceed-labeled-rate', DO_NOT_EXCEED_LABELED_RATE_POLICY_SENTENCE],
+  ['policy:do-not-transfer-between-variants', DO_NOT_TRANSFER_BETWEEN_VARIANTS_POLICY_SENTENCE],
+  ['policy:fungicidal-directions-can-differ', FUNGICIDAL_DIRECTIONS_POLICY_SENTENCE],
+  [
+    'policy:trichophyton-causes-athletes-foot-and-ringworm',
+    TRICHOPHYTON_RINGWORM_POLICY_SENTENCE,
+  ],
+  ['policy:hiv-claim-directions-are-separate', HIV_CLAIM_DIRECTIONS_POLICY_SENTENCE],
+  ['policy:chemical-mixing-emergency-referral', CHEMICAL_MIXING_EMERGENCY_POLICY_SENTENCE],
+  ['policy:use-separate-labeled-disinfectant', SEPARATE_DISINFECTANT_POLICY_SENTENCE],
+  ['policy:sars-cov-2-time-is-claim-specific', SARS_COV_2_CLAIM_TIME_POLICY_SENTENCE],
+]);
 
 function applyCoveragePolicyBackstops(
   draftAnswer: string,
   requirements: DecisiveAssertion[],
 ): string {
-  const requiresCurrentProductDocument = requirements.some(
-    (requirement) => requirement.id === 'policy:use-current-product-document',
-  );
-  if (!requiresCurrentProductDocument) return draftAnswer;
-
-  const policyRequirement = requirements.find(
-    (requirement) => requirement.id === 'policy:use-current-product-document',
-  );
-  if (
-    policyRequirement?.matchGroups.every((group) => groupCovered(draftAnswer, group))
-  ) {
-    return draftAnswer;
+  let repaired = draftAnswer.trim();
+  for (const requirement of requirements) {
+    const backstop = COVERAGE_POLICY_BACKSTOPS.get(requirement.id);
+    if (!backstop || requirementCovered(repaired, requirement)) continue;
+    repaired = `${repaired}\n\n${backstop}`;
   }
-
-  return `${draftAnswer}\n\n${CURRENT_PRODUCT_DOCUMENT_POLICY_SENTENCE}`.trim();
+  return repaired;
 }
 
 const NO_RINSE_PRODUCT_LABEL_POLICY_SENTENCE =
@@ -660,6 +946,20 @@ function applyGroundedAdditiveRepair(
   let repaired = originalDraft.trim();
   let changed = false;
 
+  const fungicidalRequirements = requirements.filter((requirement) =>
+    requirement.id.startsWith('fungicidal-claim:'),
+  );
+  if (fungicidalRequirements.length > 0) {
+    const withoutUnsupportedTriforceComparison = repaired.replace(
+      /^.*3-minute contact time for general (?:disinfection|fungi), but (?:the label )?specifically states a 10-minute contact time for fungicidal activity\.\s*$/gim,
+      '',
+    );
+    if (withoutUnsupportedTriforceComparison !== repaired) {
+      repaired = withoutUnsupportedTriforceComparison.trim();
+      changed = true;
+    }
+  }
+
   const appendEvidenceQuote = (requirement: DecisiveAssertion | undefined) => {
     if (
       !requirement ||
@@ -673,8 +973,18 @@ function applyGroundedAdditiveRepair(
     changed = true;
   };
 
+  for (const requirement of fungicidalRequirements) appendEvidenceQuote(requirement);
+  appendEvidenceQuote(
+    requirements.find((requirement) => requirement.id.startsWith('hiv-claim:')),
+  );
   appendEvidenceQuote(
     requirements.find((requirement) => requirement.id.startsWith('hiv-cleanup:')),
+  );
+  appendEvidenceQuote(
+    requirements.find((requirement) => requirement.id.startsWith('disinfection-capability:')),
+  );
+  appendEvidenceQuote(
+    requirements.find((requirement) => requirement.id.startsWith('sars-cov-2:')),
   );
   const foodContactRequirement = requirements.find((requirement) =>
     requirement.id.startsWith('food-contact:'),
@@ -700,6 +1010,12 @@ function applyGroundedAdditiveRepair(
     }
   }
 
+  const withPolicyBackstops = applyCoveragePolicyBackstops(repaired, requirements);
+  if (withPolicyBackstops !== repaired) {
+    repaired = withPolicyBackstops;
+    changed = true;
+  }
+
   return changed ? repaired : null;
 }
 
@@ -707,12 +1023,28 @@ export function selectCoverageRevision(input: {
   originalDraft: string;
   revisionCandidate: string;
   requirements: DecisiveAssertion[];
-}): { draftAnswer: string; coverage: AnswerCoverageResult; adopted: boolean } {
+}): {
+  draftAnswer: string;
+  coverage: AnswerCoverageResult;
+  adopted: boolean;
+  strategy: 'grounded_additive' | 'model_revision' | 'rejected';
+} {
   const groundedAdditiveRepair = applyGroundedAdditiveRepair(
     input.originalDraft,
     input.requirements,
   );
-  const rawRevisionCandidate = groundedAdditiveRepair ?? input.revisionCandidate.trim();
+  const groundedAdditiveCoverage = groundedAdditiveRepair
+    ? evaluateAnswerCoverage({
+        draftAnswer: groundedAdditiveRepair,
+        requirements: input.requirements,
+        afterRevision: true,
+      })
+    : null;
+  const useGroundedAdditiveRepair =
+    Boolean(groundedAdditiveRepair) && groundedAdditiveCoverage?.status === 'complete';
+  const rawRevisionCandidate = useGroundedAdditiveRepair
+    ? (groundedAdditiveRepair ?? '')
+    : input.revisionCandidate.trim();
   const revisionCandidate = rawRevisionCandidate
     ? applyCoveragePolicyBackstops(rawRevisionCandidate, input.requirements)
     : '';
@@ -721,20 +1053,16 @@ export function selectCoverageRevision(input: {
     requirements: input.requirements,
     afterRevision: true,
   });
-  const requirementsById = new Map(
-    input.requirements.map((requirement) => [requirement.id, requirement]),
-  );
-  const missingRetrievedEvidence = coverage.missingAssertionIds.some(
-    (id) => requirementsById.get(id)?.origin === 'retrieved_evidence',
-  );
-  const adopted =
-    Boolean(revisionCandidate) &&
-    coverage.conflictingAssertionIds.length === 0 &&
-    !missingRetrievedEvidence;
+  const adopted = Boolean(revisionCandidate) && coverage.status === 'complete';
   return {
     draftAnswer: adopted ? revisionCandidate : input.originalDraft,
     coverage,
     adopted,
+    strategy: adopted
+      ? useGroundedAdditiveRepair
+        ? 'grounded_additive'
+        : 'model_revision'
+      : 'rejected',
   };
 }
 
@@ -785,15 +1113,8 @@ export function coverageEvidenceSummary(requirements: DecisiveAssertion[]): stri
       if (requirement.evidenceQuote) {
         return `${requirement.id}${citation}: ${requirement.evidenceQuote}`;
       }
-      if (requirement.id === 'policy:do-not-exceed-labeled-rate') {
-        return `${requirement.id}: Do not recommend a concentration stronger than the current product label supports.`;
-      }
-      if (requirement.id === 'policy:do-not-transfer-between-variants') {
-        return `${requirement.id}: Treat each named product variant as a separate product; do not transfer a dilution or contact time to another variant unless that variant's current label was retrieved.`;
-      }
-      if (requirement.id === 'policy:use-current-product-document') {
-        return `${requirement.id}: PPE requirements are product-specific and must come from the current label and SDS for the product in hand.`;
-      }
+      const policyBackstop = COVERAGE_POLICY_BACKSTOPS.get(requirement.id);
+      if (policyBackstop) return `${requirement.id}: ${policyBackstop}`;
       if (requirement.id === 'policy:no-rinse-claim-must-be-on-specific-product-label') {
         return `${requirement.id}: ${NO_RINSE_PRODUCT_LABEL_POLICY_SENTENCE}`;
       }

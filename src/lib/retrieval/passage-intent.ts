@@ -11,7 +11,7 @@ const SDS_SECTION_TYPES_BY_INTENT: Record<string, string[]> = {
 const LABEL_SECTION_TYPES_BY_SDS_SECTION: Record<string, string[]> = {
   organism_contact_time: ['directions', 'dilution', 'epa_claims'],
   virucidal_activity: ['directions', 'epa_claims'],
-  fungistatic: ['directions', 'epa_claims'],
+  fungistatic: ['directions', 'dilution', 'epa_claims'],
   bactericidal_efficacy: ['directions', 'epa_claims'],
   first_aid: ['first_aid'],
   hazard: ['hazards', 'directions'],
