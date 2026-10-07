@@ -1,3 +1,56 @@
+# [8.0.0](https://github.com/betcocorp/bex2.0/compare/v7.1.0...v8.0.0) (2026-10-07)
+
+
+* feat(B0-914)!: run every model on the AI SDK loop and remove the Responses loop and its flag ([b29321b](https://github.com/betcocorp/bex2.0/commit/b29321bd4cec3466b36634fe8dadce7f23d6d9d3))
+
+
+### Bug Fixes
+
+* **B0-1118:** price gpt-5.6-sol/gpt-5.6 at the live standard rate and seed gpt-5.4-nano ([3c891ec](https://github.com/betcocorp/bex2.0/commit/3c891ece71010ada9b5d74d10533de81a4f78979))
+* **B0-1128:** compare mandatory_subset_of_expected under normConcept identity ([3fc01c2](https://github.com/betcocorp/bex2.0/commit/3fc01c22f07339007bb3d505073593074ab32b1d))
+* **B0-1129:** show prompt text instead of GUID in cases needing attention ([ec2880c](https://github.com/betcocorp/bex2.0/commit/ec2880cd1ea94db7d92d5607fd82dd7b52fea2f7))
+* **B0-1131:** attribute efficacy claims through hyphens, headings and a single citation ([51744d1](https://github.com/betcocorp/bex2.0/commit/51744d1094022005c85c34dce3a0617cf2e67629))
+* **B0-1131:** bind each kept claim to its evidence and judge repeated bullets under their own heading ([e7fb936](https://github.com/betcocorp/bex2.0/commit/e7fb9360149f93ede2c6b9d3b6e2fa42199cf6dc))
+* **B0-1131:** keep supported content when one safety or efficacy claim fails ([5457981](https://github.com/betcocorp/bex2.0/commit/54579817e47b2d4e70b1eae884de09f787d582b9))
+* **B0-1131:** keep supported list entries and record why each span is removed ([284263a](https://github.com/betcocorp/bex2.0/commit/284263acd20a06e4acd8b00534fca10d63af1184))
+* **B0-1138:** send the Responses-loop default temperature on the AI SDK loop ([0c67309](https://github.com/betcocorp/bex2.0/commit/0c67309bc1f8e8bf6c460c5d871b78bb3d690c24))
+* **B0-1142:** tolerate noise words/acronyms in MRID organism matching ([e25b766](https://github.com/betcocorp/bex2.0/commit/e25b766821fb7a1bd43a7612d5e246b87be01e02))
+* **B0-1143:** ground contact times in the claimed product's own documents ([455ee65](https://github.com/betcocorp/bex2.0/commit/455ee6505d488571f63e0df1a5bd08665ece39e4))
+* **B0-1144:** persist the regulated-claim guardrail's source pool on its gate record ([f6ad5f3](https://github.com/betcocorp/bex2.0/commit/f6ad5f39b17afaa850aa431e810c1fa1c0b6f633))
+* **B0-895:** enable RLS and revoke anon grants on exposed public tables and cost views ([accd129](https://github.com/betcocorp/bex2.0/commit/accd1299d3468d243ef29d49b52ffab537161744))
+* **B0-923:** attribute hazard values by title and across the locked line ([458ad63](https://github.com/betcocorp/bex2.0/commit/458ad63953f0f0d73a5275dbff040596c4b263f0))
+* **B0-923:** ground hazard claims on their value terms, not Bex's framing ([8506531](https://github.com/betcocorp/bex2.0/commit/850653167d12d467a739fbc7ce55898c619958dc))
+* **product-support:** preserve decisive evidence coverage ([ebeb6b8](https://github.com/betcocorp/bex2.0/commit/ebeb6b86ea1bedc5bf09c0fde287fb9a75e216d7))
+
+
+### Features
+
+* **B0-1118:** add gpt-5.6-sol/-terra/-luna and gpt-5.4-nano as first-class model tags ([2060396](https://github.com/betcocorp/bex2.0/commit/20603966f80ebe4c3eb6c4787e1edb6c41a9ff87))
+* **B0-1119:** add model/router/validator overrides to the golden sweep dispatcher ([01cb2c3](https://github.com/betcocorp/bex2.0/commit/01cb2c308bfb52b6b898fce2ad8c37f82f78b367))
+* **B0-1127:** add sticky section-nav sidebar to /admin/settings ([5f60334](https://github.com/betcocorp/bex2.0/commit/5f603344a2b415f74a85bd7e4bdd71ffbcb208c1))
+* **B0-1137:** bound AI SDK first-chunk latency on OpenAI and record Responses-loop behaviour audit ([8928f3a](https://github.com/betcocorp/bex2.0/commit/8928f3a5e7fb09e6584f8b23667db87d03cf51cd))
+* **B0-1142:** import Knowtify EPA MRID citations into rag.product_efficacy ([f507a9c](https://github.com/betcocorp/bex2.0/commit/f507a9ced86265cf2577f77505aa3910902eb144))
+* **B0-1145:** add trace and test-set icon buttons to prompt search results ([4133bad](https://github.com/betcocorp/bex2.0/commit/4133bade607fe2eeff380812a0ed8f1f1629f922))
+* **B0-1146:** add a Trace button beside Copy on Bex assistant messages ([dde5e98](https://github.com/betcocorp/bex2.0/commit/dde5e988f62cf4e328dc9e5ebdc1b8027f6afb1f))
+* **B0-528:** add the escalation_specialist tool backed by a durable escalations table ([1f497d8](https://github.com/betcocorp/bex2.0/commit/1f497d827a1b96bffc84a9ac9ba97598887b0ebc))
+* **B0-533:** add a turn-by-turn conversation viewer under /admin/bex/conversations ([21ad8ef](https://github.com/betcocorp/bex2.0/commit/21ad8efc6f2932a3e7ebb1922c105a40878f1902))
+* **B0-762:** add a cross-set test item browser at /admin/tests/items ([ce96edc](https://github.com/betcocorp/bex2.0/commit/ce96edcca620e88a670af9b0277f472176e47398))
+* **B0-853:** group run reports and grader context by the dataset's question_category ([8971281](https://github.com/betcocorp/bex2.0/commit/89712818fbd398779cc92a6554a6dd3bfba2f818))
+* **B0-854:** re-grade a run with Bex's grader prompt one case per call for parity studies ([2d9ecd3](https://github.com/betcocorp/bex2.0/commit/2d9ecd37d5ff5dc37ee175e629d1a12f4dad2254))
+* **product-support:** enforce decisive answer coverage ([ded70cb](https://github.com/betcocorp/bex2.0/commit/ded70cbf2eb9c1950409392235d0d59b95cbf265))
+* **rag:** complete passage hydration ([79b6d3e](https://github.com/betcocorp/bex2.0/commit/79b6d3ee74ff1c76bb313dbe9aa25bfd1497fb9b))
+* **rag:** select SDS chunks by inferred section ([1136d26](https://github.com/betcocorp/bex2.0/commit/1136d26f49d543acbfb7e1f0ae9c34920464e4e0))
+* **sds:** add hybrid markdown ingestion pipeline ([5c586dc](https://github.com/betcocorp/bex2.0/commit/5c586dc32346cc92af1256960c8ffa43ab7b272a))
+
+
+### BREAKING CHANGES
+
+* BEX_AI_SDK_GENERATION_ENABLED no longer exists and the
+Responses loop is removed. There is no flag to flip back; rollback is a code
+revert. latest_openai_response_id is kept and always holds ai_sdk:<runId>.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
 # [7.1.0](https://github.com/betcocorp/bex2.0/compare/v7.0.0...v7.1.0) (2026-09-30)
 
 
