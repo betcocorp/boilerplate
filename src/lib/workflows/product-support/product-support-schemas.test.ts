@@ -1,0 +1,285 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  answerProvenanceSchema,
+  gateActivationRecordSchema,
+  gateRecordSchema,
+  productSupportFinalOutputSchema,
+  productSupportStepInputSchema,
+  productSupportStepOutputSchema,
+  promptRecordSchema,
+  readStepGateRecords,
+} from '~/lib/workflows/product-support/product-support-schemas';
+
+/** A `workflow_run.final_output` payload as written before B0-388 existed. */
+const legacyFinalOutput = {
+  answerText: 'Use 2 oz/gal of warm water.',
+  sources: [{ documentId: 'doc-1', title: 'Label', snippet: '2 oz/gal' }],
+  retrieved_document_chunks: [{ document_id: 'doc-1', chunk_id: 'chunk-1' }],
+  confidence: 0.82,
+  workflowRunId: '11111111-1111-4111-8111-111111111111',
+  latestOpenaiResponseId: 'resp_abc',
+  validation: {
+    approved: true,
+    confidence: 0.82,
+    issues: [],
+    requires_human_review: false,
+  },
+  routingDecision: 'product',
+  timingBreakdown: { toolRounds: 2, cacheSource: null, searchMs: 120 },
+  usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 },
+};
+
+describe('productSupportFinalOutputSchema — B0-388 additions are backward compatible', () => {
+  it('still parses a pre-B0-388 payload that has none of the new fields', () => {
+    const parsed = productSupportFinalOutputSchema.safeParse(legacyFinalOutput);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.promptVersion).toBeUndefined();
+    expect(parsed.success && parsed.data.answerProvenance).toBeUndefined();
+    expect(parsed.success && parsed.data.priorMessageCount).toBeUndefined();
+    expect(parsed.success && parsed.data.previousResponseId).toBeUndefined();
+  });
+
+  it('parses a payload carrying the new prompt, provenance and chat-context fields', () => {
+    const parsed = productSupportFinalOutputSchema.safeParse({
+      ...legacyFinalOutput,
+      promptVersion: 'sha256:prompt',
+      promptBundleVersion: 'sha256:bundle',
+      answerProvenance: 'cross_reference_composed',
+      priorMessageCount: 4,
+      previousResponseId: 'resp_prev',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts a null previousResponseId (first turn of a conversation)', () => {
+    expect(
+      productSupportFinalOutputSchema.safeParse({
+        ...legacyFinalOutput,
+        previousResponseId: null,
+        priorMessageCount: 0,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects an unknown answerProvenance value', () => {
+    expect(
+      productSupportFinalOutputSchema.safeParse({
+        ...legacyFinalOutput,
+        answerProvenance: 'made_up',
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('answerProvenanceSchema', () => {
+  // B0-356 added `recommendation_engine_decline` (the recommendation engine's own decline, which is
+  // NOT this workflow's validator fallback).
+  it('covers exactly the sixteen answer branches', () => {
+    expect(answerProvenanceSchema.options).toEqual([
+      'model_generated',
+      'template_override',
+      'cross_reference_composed',
+      'decline_gate',
+      'usage_safety_fallback',
+      'validator_fallback',
+      'revision_pass',
+      'validator_rejected_draft_retained',
+      'recommendation_engine_decline',
+      // B0-779 — the unresolved-competitor-identity guard's own provenance value.
+      'competitor_identity_unresolved_decline',
+      // B0-700 follow-up — the deterministic fuzzy-alias disclosure prepend's own provenance value.
+      'alias_fuzzy_disclosure_prepended',
+      // B0-1033 — the deterministic "finish dries top-down" rationale append on a floor-route
+      // recoat-timing answer.
+      'floor_recoat_rationale_appended',
+      // B0-875 — the generic-chemistry clarifying question's own provenance value.
+      'generic_chemistry_clarification',
+      // B0-829 — the regulated-claim guardrail's surgical partial-redaction provenance value.
+      'regulated_claim_partial_redaction',
+      // B0-886 — the revised (not original) draft retained after a second-pass rejection.
+      'revised_answer_retained',
+      // B0-923 — the guardrail rejected the revised draft, the pre-revision draft was clean, and
+      // the pre-revision draft (the text the guardrail verified) was served instead of the decline.
+      'pre_revision_draft_restored',
+    ]);
+  });
+});
+
+describe('gateActivationRecordSchema', () => {
+  it('B0-871: accepts the regulated-claim guardrail\'s "redacted" verdict alongside "rejected"', () => {
+    for (const verdict of ['passed', 'rejected', 'redacted', 'capped']) {
+      expect(gateActivationRecordSchema.safeParse({ state: 'ran', verdict }).success).toBe(true);
+    }
+  });
+
+  it('B0-872: accepts a not_applicable record carrying the no_product_subject reason', () => {
+    expect(
+      gateActivationRecordSchema.safeParse({
+        state: 'not_applicable',
+        reason: 'no_product_subject',
+      }).success,
+    ).toBe(true);
+    // The plain form (no reason) still parses — it is what every other not_applicable gate writes.
+    expect(gateActivationRecordSchema.safeParse({ state: 'not_applicable' }).success).toBe(true);
+  });
+});
+
+describe('promptRecordSchema', () => {
+  it('accepts each LLM boundary and both runtimes', () => {
+    for (const stage of ['openai_responses_agent', 'validator', 'revision'] as const) {
+      for (const runtime of ['responses', 'ai-sdk'] as const) {
+        expect(
+          promptRecordSchema.safeParse({
+            stage,
+            instructions: 'You are a Betco product-support specialist.',
+            model: 'gpt-5',
+            runtime,
+          }).success,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('rejects an unknown stage or runtime', () => {
+    const base = { instructions: 'x', model: 'gpt-5', runtime: 'responses' };
+    expect(promptRecordSchema.safeParse({ ...base, stage: 'planner' }).success).toBe(false);
+    expect(
+      promptRecordSchema.safeParse({ ...base, stage: 'validator', runtime: 'ai_sdk' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('gateRecordSchema', () => {
+  it('accommodates all four gates despite their differing input shapes', () => {
+    const records = [
+      {
+        gate: 'keyword_routing' as const,
+        inputs: { product: 3, bathroom: 0, dilution: 1, floor: 0, recommendations: 0 },
+        thresholds: { minScore: 1 },
+        verdict: 'routed',
+        effect: 'Routed to the product SME.',
+      },
+      {
+        gate: 'early_decline_gate' as const,
+        inputs: { reason: 'chemical_mixing_or_safety' },
+        thresholds: {},
+        verdict: 'applied',
+        effect: 'Declined before any model call.',
+      },
+      {
+        gate: 'usage_safety_coverage' as const,
+        inputs: { hasUsageEvidence: true, hasSafetyEvidence: false },
+        thresholds: { cap: 0.55 },
+        verdict: 'capped',
+        effect: 'Confidence capped at 0.55; insufficient_safety_evidence added.',
+      },
+      {
+        gate: 'recommendation_confidence' as const,
+        inputs: { overallConfidence: 0.74 },
+        thresholds: { minConfidence: 0.8 },
+        verdict: 'declined',
+        effect: 'Cross-reference recommendation withheld.',
+      },
+    ];
+
+    for (const record of records) {
+      expect(gateRecordSchema.safeParse(record).success).toBe(true);
+    }
+  });
+
+  it('rejects an unknown gate id', () => {
+    expect(
+      gateRecordSchema.safeParse({
+        gate: 'made_up_gate_id',
+        inputs: {},
+        thresholds: {},
+        verdict: 'applied',
+        effect: '',
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('persisted workflow-step payload schemas', () => {
+  it('keeps existing step-specific keys and validates the reused tool trace', () => {
+    const parsed = productSupportStepOutputSchema.safeParse({
+      responseIds: ['resp_1'],
+      toolCalls: 2,
+      toolTrace: [
+        {
+          toolName: 'semantic_search',
+          callId: 'call_1',
+          argumentsPreview: '{"query":"dilution"}',
+          outputPreview: '[{"documentId":"doc-1"}]',
+          ok: true,
+          durationMs: 42,
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.responseIds).toEqual(['resp_1']);
+    expect(parsed.success && parsed.data.toolTrace?.[0]?.toolName).toBe('semantic_search');
+  });
+
+  it('rejects a malformed tool-trace entry', () => {
+    expect(
+      productSupportStepOutputSchema.safeParse({ toolTrace: [{ toolName: 'x' }] }).success,
+    ).toBe(false);
+  });
+
+  it('carries a prompt record on step input alongside existing keys', () => {
+    const parsed = productSupportStepInputSchema.safeParse({
+      model: 'gpt-5',
+      hasPreviousResponse: true,
+      prompt: {
+        stage: 'openai_responses_agent',
+        instructions: 'You are a Betco product-support specialist.',
+        model: 'gpt-5',
+        runtime: 'responses',
+      },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.prompt?.stage).toBe('openai_responses_agent');
+    expect(parsed.success && parsed.data.model).toBe('gpt-5');
+  });
+});
+
+describe('step gate records (B0-391)', () => {
+  const usageSafety = {
+    gate: 'usage_safety_coverage' as const,
+    inputs: { hasUsageEvidence: true, hasSafetyEvidence: false },
+    thresholds: { confidenceCap: 0.55 },
+    verdict: 'capped',
+    effect: 'Confidence capped at 0.55.',
+  };
+  const recommendation = {
+    gate: 'recommendation_confidence' as const,
+    inputs: { baseConfidence: 0.9, topSimilarity: 0.5 },
+    thresholds: { lowSimilarityThreshold: 0.6 },
+    verdict: 'capped',
+    effect: 'Confidence 0.9 → 0.75.',
+  };
+
+  it('carries several records on one step row, in evaluation order', () => {
+    const parsed = productSupportStepOutputSchema.safeParse({
+      approved: false,
+      gates: [usageSafety, recommendation],
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.gates?.map((record) => record.gate)).toEqual([
+      'usage_safety_coverage',
+      'recommendation_confidence',
+    ]);
+  });
+
+  it('reads either spelling, and yields nothing for a row with no gates', () => {
+    expect(readStepGateRecords({ gates: [usageSafety, recommendation] })).toHaveLength(2);
+    expect(readStepGateRecords({ gate: usageSafety })).toEqual([usageSafety]);
+    expect(readStepGateRecords({ responseIds: ['resp_1'] })).toEqual([]);
+    expect(readStepGateRecords(null)).toEqual([]);
+    // Malformed rows degrade to "no records" rather than throwing at a read site.
+    expect(readStepGateRecords({ gates: [{ gate: 'not-a-gate' }] })).toEqual([]);
+  });
+});

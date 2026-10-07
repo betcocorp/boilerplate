@@ -1,0 +1,519 @@
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { connection } from 'next/server';
+
+import { AiSuggestionCards } from '~/components/admin/tests/AiSuggestionCards';
+import { ItemAIReviewButton } from '~/components/admin/tests/ItemAIReviewButton';
+import { ItemAtAGlanceCharts } from '~/components/admin/tests/ItemAtAGlanceCharts';
+import { MultiTurnScenarioCard } from '~/components/admin/tests/MultiTurnScenarioCard';
+import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
+import { Button } from '~/components/ui/button';
+import {
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '~/components/ui/table';
+import { listAiSuggestions } from '~/lib/ai-suggestions/repository';
+import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
+import { resolveModel } from '~/lib/llm/resolve-model';
+import {
+  formatYesNoLabel,
+  formatSimilarityValue,
+} from '~/lib/tests/format';
+import {
+  getTestById,
+  getTestItemById,
+  listAgentStepOutputsByWorkflowRunIds,
+  listResultItemsByTestItemId,
+  listTestResultsByTestId,
+} from '~/lib/tests/repository';
+import { loadDocumentTitlesByIds } from '~/lib/tests/report/expected-sources-repository';
+import {
+  extractAgentStepModel,
+  extractDraftAnswer,
+  extractModelTag,
+  extractRagSearchMs,
+  extractSimilarityStats,
+  extractWorkflowRunId,
+} from '~/lib/tests/response-payload';
+import {
+  formatDurationSeconds,
+  formatRunChartAxisLabel,
+} from '~/lib/utils/time';
+
+export const metadata = {
+  title: 'Item History | Betco BEX',
+  description: 'View historical item outcomes across all runs.',
+};
+
+/**
+ * B0-933 — concept/criteria columns are `text[]`. Phrases are printed verbatim, one per line: they
+ * carry regulated figures (oz/gal, mL/L, ppm, contact times, CAS and EPA numbers) that must never
+ * be rounded, converted, re-cased or string-truncated.
+ */
+function PhraseList({ phrases }: { phrases: string[] }) {
+  if (phrases.length === 0) {
+    return <p className="mt-1 text-slate-400">—</p>;
+  }
+  return (
+    <ul className="mt-1 flex flex-col gap-1">
+      {phrases.map((phrase, index) => (
+        <li className="whitespace-pre-wrap" key={`${index}-${phrase}`}>
+          {phrase}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+type PageProps = {
+  params: Promise<{ testId: string; itemId: string }>;
+};
+
+export default async function AdminTestItemHistoryPage({ params }: PageProps) {
+  await connection();
+  const { testId, itemId } = await params;
+
+  const [test, item] = await Promise.all([
+    getTestById(testId).catch(() => null),
+    getTestItemById(itemId).catch(() => null),
+  ]);
+
+  if (!test || !item || item.test_id !== test.id) {
+    notFound();
+  }
+
+  const [runs, itemRunResults, existingSuggestions, documentTitlesById] =
+    await Promise.all([
+      listTestResultsByTestId(test.id, 200),
+      listResultItemsByTestItemId(item.id, 500),
+      listAiSuggestions('item', item.id).catch(() => []),
+      loadDocumentTitlesByIds(item.expected_sources ?? []),
+    ]);
+
+  const runById = new Map(runs.map((run) => [run.id, run]));
+  const historyRows = itemRunResults
+    .map((result) => ({
+      result,
+      run: runById.get(result.test_result_id) || null,
+    }))
+    .filter(
+      (
+        row,
+      ): row is {
+        result: (typeof itemRunResults)[number];
+        run: (typeof runs)[number];
+      } => !!row.run,
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.run.started_at).getTime() -
+        new Date(a.run.started_at).getTime(),
+    );
+  /**
+   * B0-419 — prefer the real `workflow_run_id` column (B0-416) over re-extracting it from
+   * `response_payload`, which stays only as a fallback for rows the backfill could not reach.
+   * Drives both the Model lookup and the per-row Trace link.
+   */
+  const workflowRunIdByResultItemId = new Map(
+    historyRows.map(
+      ({ result }) =>
+        [
+          result.id,
+          result.workflow_run_id ??
+            extractWorkflowRunId(result.response_payload),
+        ] as const,
+    ),
+  );
+  const workflowRunIds = Array.from(
+    new Set(
+      Array.from(workflowRunIdByResultItemId.values()).filter(
+        (value): value is string => Boolean(value),
+      ),
+    ),
+  );
+  const [workflowRuns, agentStepOutputs] = await Promise.all([
+    listWorkflowRunsByIds(workflowRunIds),
+    listAgentStepOutputsByWorkflowRunIds(workflowRunIds),
+  ]);
+  // B0-757 — ground truth for what actually ran (stamped at run time, B0-563), keyed by run id.
+  const persistedModelByWorkflowRunId = new Map(
+    agentStepOutputs
+      .map((row) => [row.workflow_run_id, extractAgentStepModel(row.output)] as const)
+      .filter((entry): entry is [string, string] => entry[1] !== null),
+  );
+  const modelByWorkflowRunId = new Map(
+    await Promise.all(
+      workflowRuns.map(async (workflowRun) => {
+        const persisted = persistedModelByWorkflowRunId.get(workflowRun.id);
+        if (persisted) {
+          return [workflowRun.id, persisted] as const;
+        }
+        // Legacy fallback: no B0-563 stamped model for this run (predates it, or the agent step
+        // never completed) — re-resolve from the tag, which may not match what actually executed
+        // if the per-vendor default the preview tag reads has since changed (B0-899).
+        const modelTag = extractModelTag(workflowRun.user_input);
+        return [workflowRun.id, await resolveModel(modelTag)] as const;
+      }),
+    ),
+  );
+
+  /* Aggregates + trend data for the at-a-glance charts. Only `completed` /
+     `failed` statuses count as a real attempt at the prompt — queued/cancelled
+     rows would otherwise distort pass-rate denominators and pull trend lines
+     to zero. Trend arrays are built newest-first (matching `historyRows`) and
+     reversed below so the charts render oldest → newest left to right. */
+  let aggregatedRunCount = 0;
+  let aggregatedPassCount = 0;
+  let aggregatedFailCount = 0;
+  let similarityMinSum = 0;
+  let similarityMaxSum = 0;
+  let similarityAvgSum = 0;
+  let similaritySampleSize = 0;
+  let ragSearchSumMs = 0;
+  let ragSearchSampleSize = 0;
+  let promptElapsedSumMs = 0;
+  let promptElapsedSampleSize = 0;
+  const similarityTrendNewestFirst: Array<{
+    label: string;
+    runId: string;
+    min: number | null;
+    max: number | null;
+    avg: number | null;
+  }> = [];
+  const elapsedTrendNewestFirst: Array<{
+    label: string;
+    runId: string;
+    ragSeconds: number | null;
+    promptSeconds: number | null;
+    ttftSeconds: number | null;
+  }> = [];
+
+  for (const { result, run } of historyRows) {
+    if (result.status !== 'completed' && result.status !== 'failed') {
+      continue;
+    }
+    aggregatedRunCount += 1;
+    if (result.passed) {
+      aggregatedPassCount += 1;
+    } else {
+      aggregatedFailCount += 1;
+    }
+
+    const similarityStats = extractSimilarityStats(result.response_payload);
+    if (similarityStats) {
+      similarityMinSum += similarityStats.min;
+      similarityMaxSum += similarityStats.max;
+      similarityAvgSum += similarityStats.avg;
+      similaritySampleSize += 1;
+    }
+
+    const ragSearchMs = extractRagSearchMs(result.response_payload);
+    if (typeof ragSearchMs === 'number') {
+      ragSearchSumMs += ragSearchMs;
+      ragSearchSampleSize += 1;
+    }
+
+    const promptElapsedMs =
+      typeof result.elapsed_ms === 'number' &&
+      Number.isFinite(result.elapsed_ms)
+        ? result.elapsed_ms
+        : null;
+    if (promptElapsedMs !== null) {
+      promptElapsedSumMs += promptElapsedMs;
+      promptElapsedSampleSize += 1;
+    }
+
+    const ttftMs =
+      typeof result.ttft_ms === 'number' && Number.isFinite(result.ttft_ms)
+        ? result.ttft_ms
+        : null;
+
+    const axisLabel = run.started_at
+      ? formatRunChartAxisLabel(run.started_at)
+      : run.id.slice(0, 8);
+
+    similarityTrendNewestFirst.push({
+      label: axisLabel,
+      runId: run.id,
+      min: similarityStats?.min ?? null,
+      max: similarityStats?.max ?? null,
+      avg: similarityStats?.avg ?? null,
+    });
+    elapsedTrendNewestFirst.push({
+      label: axisLabel,
+      runId: run.id,
+      ragSeconds:
+        typeof ragSearchMs === 'number'
+          ? Number((ragSearchMs / 1000).toFixed(3))
+          : null,
+      promptSeconds:
+        promptElapsedMs !== null
+          ? Number((promptElapsedMs / 1000).toFixed(3))
+          : null,
+      ttftSeconds:
+        ttftMs !== null ? Number((ttftMs / 1000).toFixed(3)) : null,
+    });
+  }
+
+  const similarityTrend = [...similarityTrendNewestFirst].reverse();
+  const elapsedTrend = [...elapsedTrendNewestFirst].reverse();
+
+  const similarityAverages =
+    similaritySampleSize > 0
+      ? {
+          avgMin: similarityMinSum / similaritySampleSize,
+          avgMax: similarityMaxSum / similaritySampleSize,
+          avgAvg: similarityAvgSum / similaritySampleSize,
+          sampleSize: similaritySampleSize,
+        }
+      : null;
+  const avgRagSearchMs =
+    ragSearchSampleSize > 0 ? ragSearchSumMs / ragSearchSampleSize : null;
+  const avgPromptElapsedMs =
+    promptElapsedSampleSize > 0
+      ? promptElapsedSumMs / promptElapsedSampleSize
+      : null;
+
+  const aiPayload = {
+    itemId: item.id,
+    testName: test.name,
+    prompt: item.prompt,
+    historyRows: historyRows.map(({ result }) => {
+      const similarityStats = extractSimilarityStats(result.response_payload);
+      const ragSearchMs = extractRagSearchMs(result.response_payload);
+      return {
+        passed: result.passed ?? false,
+        status: result.status ?? '',
+        errorMessage: result.error_message ?? null,
+        responseText: result.response_text ?? null,
+        elapsedMs: result.elapsed_ms ?? null,
+        similarityMin: similarityStats?.min ?? null,
+        similarityMax: similarityStats?.max ?? null,
+        similarityAvg: similarityStats?.avg ?? null,
+        ragSearchMs: ragSearchMs ?? null,
+      };
+    }),
+  };
+
+  return (
+    <div className="flex flex-1 bg-slate-50">
+      <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+                Item history
+              </p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+                {test.name}
+              </h1>
+              <p className="mt-3 text-sm text-slate-600">
+                Row {item.row_index}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button asChild size="sm" variant="outline">
+                <Link href={`/admin/tests/${test.id}`}>Back to dataset</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/admin/tests">Back to tests</Link>
+              </Button>
+              <ItemAIReviewButton payload={aiPayload} />
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+            <div>
+              <p className="font-semibold text-slate-900">Prompt</p>
+              <p className="mt-1 whitespace-pre-wrap">{item.prompt}</p>
+            </div>
+            <div className="shrink-0 border-l border-slate-200 pl-4 text-right">
+              <p className="font-semibold text-slate-900">Priority</p>
+              <p className="mt-1 text-slate-800">
+                {item.priority === null ? (
+                  <span className="text-slate-400">—</span>
+                ) : (
+                  item.priority
+                )}
+              </p>
+            </div>
+            <div className="col-span-2 border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Ideal response</p>
+              {item.ideal_response ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.ideal_response}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            {/* Rendered verbatim — these carry regulated figures (oz/gal, mL/L, ppm, contact times). */}
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Expected concepts</p>
+              <PhraseList phrases={item.expected_concepts} />
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Minimum concepts</p>
+              <PhraseList phrases={item.minimum_concepts} />
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Expected sources</p>
+              {item.expected_sources.length > 0 ? (
+                <ul className="mt-1 flex flex-col gap-1">
+                  {item.expected_sources.map((documentId) => (
+                    <li key={documentId} title={documentId}>
+                      {documentTitlesById[documentId] ?? (
+                        <span className="text-amber-700">
+                          Unresolved document ({documentId})
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Should cite sources</p>
+              <p className="mt-1 text-slate-800">
+                {formatYesNoLabel(item.should_cite)}
+              </p>
+            </div>
+          </div>
+
+          <AiSuggestionCards
+            generatedAt={existingSuggestions[0]?.created_at ?? null}
+            suggestions={existingSuggestions}
+          />
+        </section>
+
+        {/* B0-537 — renders nothing for a single-turn row. */}
+        <MultiTurnScenarioCard inputPayload={item.input_payload} />
+
+        <ItemAtAGlanceCharts
+          avgPromptElapsedMs={avgPromptElapsedMs}
+          avgRagSearchMs={avgRagSearchMs}
+          elapsedTrend={elapsedTrend}
+          failCount={aggregatedFailCount}
+          passCount={aggregatedPassCount}
+          promptSampleSize={promptElapsedSampleSize}
+          ragSampleSize={ragSearchSampleSize}
+          runCount={aggregatedRunCount}
+          similarityAverages={similarityAverages}
+          similarityTrend={similarityTrend}
+        />
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Historical outcomes ({historyRows.length})
+          </h2>
+          <div className="relative mt-4 max-h-[min(70vh,48rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
+            <table className="w-full min-w-[1200px] caption-bottom text-sm">
+              <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
+                <TableRow>
+                  <TableHead>Run</TableHead>
+                  <TableHead
+                    className="whitespace-nowrap"
+                    title="Per-source similarity min / max / avg for this item run"
+                  >
+                    Sim min/max/avg
+                  </TableHead>
+                  <TableHead
+                    className="whitespace-nowrap"
+                    title="Total rag search time"
+                  >
+                    RAG
+                  </TableHead>
+                  <TableHead
+                    className="whitespace-nowrap"
+                    title="Total time prompt took end-to-end"
+                  >
+                    Prompt
+                  </TableHead>
+                  <TableHead>Model</TableHead>
+                  <TableHead>Message</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {historyRows.length === 0 ? (
+                  <TableRow>
+                    <TableCell className="text-slate-500" colSpan={6}>
+                      This item has no completed results yet.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  historyRows.map(({ result, run }) => {
+                    const similarityStats = extractSimilarityStats(
+                      result.response_payload,
+                    );
+                    const ragSearchMs = extractRagSearchMs(
+                      result.response_payload,
+                    );
+                    const rowWorkflowRunId =
+                      workflowRunIdByResultItemId.get(result.id) ?? null;
+                    return (
+                      <TableRow key={result.id}>
+                        {/* B0-419 — "View run" is the run axis (every prompt in that run);
+                            "Trace" is this one execution. When no workflow run was recorded the
+                            Trace affordance is omitted entirely: this page *is* the fallback, so a
+                            self-link would be a no-op. */}
+                        <TableCell className="whitespace-nowrap font-mono text-xs">
+                          <Link
+                            className="text-sky-700 underline-offset-2 hover:underline"
+                            href={`/admin/tests/${test.id}/runs/${run.id}`}
+                            title="Every prompt in this test run"
+                          >
+                            View run
+                          </Link>
+                          {rowWorkflowRunId ? (
+                            <>
+                              <span className="mx-1.5 text-slate-300">·</span>
+                              <Link
+                                className="text-sky-700 underline-offset-2 hover:underline"
+                                href={`/admin/observability/${rowWorkflowRunId}`}
+                                title="Full trace for this execution"
+                              >
+                                Trace
+                              </Link>
+                            </>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {formatSimilarityValue(similarityStats?.min)}/
+                          {formatSimilarityValue(similarityStats?.max)}/
+                          {formatSimilarityValue(similarityStats?.avg)}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {ragSearchMs === null
+                            ? 'n/a'
+                            : formatDurationSeconds(ragSearchMs)}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {formatDurationSeconds(result.elapsed_ms)}
+                        </TableCell>
+                        <TableCell>
+                          {modelByWorkflowRunId.get(rowWorkflowRunId || '') ||
+                            'n/a'}
+                        </TableCell>
+                        <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
+                          <ResultItemMessageCell
+                            errorMessage={result.error_message}
+                            responseText={result.response_text}
+                            draftAnswer={extractDraftAnswer(result.response_payload)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}

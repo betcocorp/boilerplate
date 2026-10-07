@@ -1,0 +1,747 @@
+[
+  {
+    "id": "product-001",
+    "message": "What's the shelf life of Betco's all-purpose degreaser once opened?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Asks a factual, catalog-style attribute about a named Betco product category.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-002",
+    "message": "Do you carry a fragrance-free version of your glass cleaner?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Catalog/variant question about an existing product line.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-003",
+    "message": "What size containers does your floor stripper come in?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "medium",
+    "reason": "Packaging/SKU question; mentions 'floor stripper' but asks about container sizes, a catalog attribute, not a stripping procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Near-miss with floor — kept product because the ask is about packaging, not procedure."
+  },
+  {
+    "id": "product-004",
+    "message": "Is there a Betco cleaner that's certified Green Seal?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Product certification/attribute lookup across the catalog.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-005",
+    "message": "What's the difference between your neutral cleaner and your heavy-duty degreaser?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Product comparison question, classic catalog specialist territory.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-006",
+    "message": "Where can I find the SDS for your bathroom disinfectant?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "SDS lookup is routed to the product specialist even when the product is used in a restroom; 'bathroom' here modifies the product, not the procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Deliberately worded close to a bathroom-agent question to test the SDS/product override."
+  },
+  {
+    "id": "product-007",
+    "message": "What PPE is recommended when handling your industrial degreaser?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Safety/PPE guidance tied to a specific product is a product-specialist (SDS-grounded) question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-008",
+    "message": "Does Betco make a low-VOC carpet spotter?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Catalog existence question for a product attribute.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-009",
+    "message": "What's the EPA registration number for your disinfectant cleaner?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Regulated-fact lookup (EPA reg number) on a named product — product specialist, exact-lookup tool territory.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Question only asks for the value; no number is asserted here, consistent with the regulated-data transcription rule."
+  },
+  {
+    "id": "product-010",
+    "message": "Can I get a sample of your new odor control product before ordering a case?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "medium",
+    "reason": "Sample/ordering request tied to a specific product line.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-011",
+    "message": "What's the case pack size for the gallon jugs of glass cleaner?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Packaging/logistics attribute of a named product.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-012",
+    "message": "Is your floor stripper compatible with vinyl composition tile?",
+    "intended_agent": "product",
+    "plausible_agents": ["product", "floor_vct"],
+    "confidence": "medium",
+    "reason": "Compatibility question about a product (not a stripping procedure), but close enough to floor-care that either specialist could plausibly take it.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Kept as product per sme-routing.ts precedent: compatibility questions route to product even when a dispenser/floor noun is present."
+  },
+  {
+    "id": "product-013",
+    "message": "Do you have a warranty on your auto-scrubber machines?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Equipment warranty/spec question, catalog territory.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "product-014",
+    "message": "What's the part number for the trigger sprayer that fits your RTU bottles?",
+    "intended_agent": "product",
+    "plausible_agents": ["product"],
+    "confidence": "high",
+    "reason": "Part-number/accessory lookup, catalog specialist.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+
+  {
+    "id": "bathroom-001",
+    "message": "What's the best way to remove hard water stains from urinals?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Restroom fixture cleaning procedure, core bathroom specialist territory.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "bathroom-002",
+    "message": "How often should restroom floors be disinfected in a high-traffic building?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Restroom cleaning cadence/procedure; the floor mention is scoped to the restroom, not general floor-care.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Near-miss with floor — kept bathroom because the whole question is scoped to a restroom, matching the BATHROOM_SIGNALS 'restroom' precedent."
+  },
+  {
+    "id": "bathroom-003",
+    "message": "What product do you recommend for eliminating recurring bathroom odors?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "medium",
+    "reason": "Odor control in a restroom context; uses 'recommend' but is scoped to the bathroom specialist's remit, not a competitor cross-reference.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Guards against the generic 'recommend' signal pulling this onto the recommendations route (see boundary-recommend-floor-procedure precedent)."
+  },
+  {
+    "id": "bathroom-004",
+    "message": "Should I clean the sink or the toilet first in a restroom cleaning routine?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Restroom cleaning sequence/SOP question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "bathroom-005",
+    "message": "What's a good process for cleaning grout in a shared shower room?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Shower/tile/grout cleaning procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "bathroom-006",
+    "message": "Do you have a disinfectant safe for use on stainless steel bathroom fixtures?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom", "product"],
+    "confidence": "medium",
+    "reason": "Fixture-safe disinfectant question scoped to the restroom, though it could also be read as a plain product-compatibility question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "bathroom-007",
+    "message": "How do I keep mold from coming back on shower tile?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Recurring mold/mildew procedure question for a bathroom surface.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "bathroom-008",
+    "message": "What's the recommended dwell time for disinfecting a toilet bowl?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom", "product"],
+    "confidence": "medium",
+    "reason": "Dwell/contact time is technically a label-defined product attribute, but phrased as a restroom procedure question — plausible either way.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Question asks for the dwell time; no value is asserted, consistent with the regulated-data transcription rule."
+  },
+  {
+    "id": "bathroom-009",
+    "message": "Is there a touchless dispenser option for restroom soap?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom", "product"],
+    "confidence": "medium",
+    "reason": "Restroom fixture/equipment question; could plausibly be read as a straight product-catalog ask.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Not a dilution-dispenser question — 'dispenser' here means a soap dispenser, not a chemical dilution dispenser."
+  },
+  {
+    "id": "bathroom-010",
+    "message": "What should be included on a daily restroom cleaning checklist?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Restroom SOP/checklist question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "bathroom-011",
+    "message": "How do I deal with graffiti on a bathroom stall door?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Restroom fixture maintenance/vandalism-removal procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "bathroom-012",
+    "message": "What's the best approach for cleaning a locker room shower area?",
+    "intended_agent": "bathroom",
+    "plausible_agents": ["bathroom"],
+    "confidence": "high",
+    "reason": "Shower/restroom-adjacent cleaning procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+
+  {
+    "id": "dilution-001",
+    "message": "How do I calibrate our wall-mounted dispenser after a cartridge change?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Dispenser calibration is the dilution specialist's core remit.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-002",
+    "message": "What metering tip should I use for our degreaser in the FastDraw system?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Metering tip selection for a named dilution control system.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-003",
+    "message": "Our proportioner seems to be over-diluting — what should I check first?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Proportioner troubleshooting, dilution specialist territory.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-004",
+    "message": "How do I set up a new dilution control station in the janitor's closet?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Dispenser/station setup procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-005",
+    "message": "Can the chemical management system handle both a cleaner and a disinfectant on the same unit?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution", "product"],
+    "confidence": "medium",
+    "reason": "Chemical management system capability question; scoped to the dispensing hardware rather than the chemicals themselves, but could be read as a product-compatibility question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-006",
+    "message": "What's the process for replacing a worn metering tip on our dispenser?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Dispenser hardware maintenance procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-007",
+    "message": "How do I verify our on-site mixing system is dosing correctly?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Dosing verification on a named dilution system.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-008",
+    "message": "What tools do I need to calibrate a proportioner in the field?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Proportioner calibration procedure/equipment question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-009",
+    "message": "Our dispenser is leaking at the connection — is that a calibration issue?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "medium",
+    "reason": "Dispenser hardware fault/troubleshooting question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-010",
+    "message": "How do I switch our dispenser over to a different chemical without cross-contamination?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Dispenser changeover procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-011",
+    "message": "What's the setup procedure for a new chemical management system install?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "System install/setup procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "dilution-012",
+    "message": "How do I read the tip chart to pick the right dilution rate?",
+    "intended_agent": "dilution",
+    "plausible_agents": ["dilution"],
+    "confidence": "high",
+    "reason": "Tip chart interpretation is dispenser-hardware guidance, not a label dilution-ratio fact lookup.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Distinguish from a product question like 'what's the dilution ratio for X', which routes to product."
+  },
+
+  {
+    "id": "floor-001",
+    "message": "What's the recommended process for stripping and refinishing VCT flooring?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Strip-and-refinish procedure, core floor specialist territory.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-002",
+    "message": "How many coats of finish should we apply after a strip in a busy hallway?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Floor finish application procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-003",
+    "message": "What's the best burnishing speed for a high-gloss floor finish?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Burnishing procedure/technique question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-004",
+    "message": "How often should we do a scrub-and-recoat versus a full strip?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Floor maintenance program cadence question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-005",
+    "message": "What's the right approach for maintaining a gym floor with Basic Coatings finish?",
+    "intended_agent": "floor_wood_sport",
+    "plausible_agents": ["floor_wood_sport"],
+    "confidence": "high",
+    "reason": "Wood gym floor maintenance procedure naming the Basic Coatings brand.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Uses the real Basic Coatings brand (wood floor coatings) rather than an invented sub-brand."
+  },
+  {
+    "id": "floor-006",
+    "message": "How long should floor finish cure before allowing foot traffic?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct", "product"],
+    "confidence": "medium",
+    "reason": "Cure-time question is technically a label attribute, but phrased as a procedural floor-care question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "No cure time is asserted; only requested."
+  },
+  {
+    "id": "floor-007",
+    "message": "What's causing our floor finish to look hazy after burnishing?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Floor-finish troubleshooting tied to a procedure (burnishing).",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-008",
+    "message": "How do I set up a floor maintenance program for a school with VCT throughout?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Floor maintenance program design, core floor specialist territory.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-009",
+    "message": "What's the difference between a top-scrub and a full strip-and-wax?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Floor-care procedure comparison.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-010",
+    "message": "Can Basic Coatings gym finish be applied over an existing coat, or does it need a full strip first?",
+    "intended_agent": "floor_wood_sport",
+    "plausible_agents": ["floor_wood_sport"],
+    "confidence": "high",
+    "reason": "Wood floor recoat-vs-strip procedure question naming Basic Coatings.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-011",
+    "message": "What equipment do I need to burnish a large lobby floor efficiently?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Burnishing equipment/procedure question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "floor-012",
+    "message": "How do I remove black scuff marks without damaging the finish?",
+    "intended_agent": "floor_vct",
+    "plausible_agents": ["floor_vct"],
+    "confidence": "high",
+    "reason": "Floor-finish care/spot-treatment procedure.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+
+  {
+    "id": "recommendations-001",
+    "message": "What's the Betco equivalent of Diversey Virex II 256?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "Canonical 'Betco equivalent of [competitor product]' cross-reference phrasing.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-002",
+    "message": "We currently use Ecolab Oasis 146 — what should we switch to?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "Named competitor product plus 'switch to' — cross-reference intent.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-003",
+    "message": "Is there a Betco alternative to Spartan Chemical's HDQ Neutral?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "'Betco alternative to [competitor]' phrasing.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-004",
+    "message": "What can replace our current Zep Big Orange degreaser?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "Substitution intent for a named competitor product.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-005",
+    "message": "Which Betco product is comparable to Simple Green Pro HD?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "'Comparable to [competitor]' cross-reference phrasing.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-006",
+    "message": "We want to switch from Hillyard Green Solutions to something else — what do you suggest?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "'Switch from' plus a named competitor line — cross-reference intent.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-007",
+    "message": "What's a good substitute for Clorox Total 360 in our facility?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "Substitute-for phrasing naming a competitor product.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-008",
+    "message": "Can you recommend a Betco cleaner that's like Fabuloso but for industrial use?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "Explicit competitor-name comparison request.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-009",
+    "message": "We're looking to replace our current floor finish supplier — what would you suggest?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations", "floor_vct"],
+    "confidence": "medium",
+    "reason": "Supplier-replacement intent without a named competitor product; plausibly a cross-reference ask, but could also be read as a floor-program consult.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "No specific competitor brand/product named, unlike the sharper recommendations examples above."
+  },
+  {
+    "id": "recommendations-010",
+    "message": "What's the closest match to Coastwide Professional's all-purpose cleaner?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "'Closest match to [competitor]' cross-reference phrasing.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-011",
+    "message": "Do you have something equivalent to P&G Professional's Mr. Clean concentrate?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations"],
+    "confidence": "high",
+    "reason": "Equivalent-to phrasing naming a competitor product.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "recommendations-012",
+    "message": "We need an alternative to our current supplier's odor eliminator — any suggestions?",
+    "intended_agent": "recommendations",
+    "plausible_agents": ["recommendations", "bathroom"],
+    "confidence": "medium",
+    "reason": "Alternative-to intent without a named competitor brand; odor control also touches the bathroom specialist's remit.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "No competitor brand named — weaker cross-reference signal than the sharper examples above."
+  },
+
+  {
+    "id": "ambiguous-001",
+    "message": "What cleaning products do you recommend for a new building?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["product", "bathroom", "floor_vct"],
+    "confidence": "low",
+    "reason": "No named area, product, or procedure — could reasonably start with the product catalog, restroom care, or floor care.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "No signals fire; matches the sme-routing.ts 'no signal' fallthrough case."
+  },
+  {
+    "id": "ambiguous-002",
+    "message": "Can you help me put together a full facility cleaning program?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["product", "bathroom", "dilution", "floor_vct"],
+    "confidence": "low",
+    "reason": "Spans catalog selection, restroom care, dispenser setup, and floor maintenance at once; no single SME owns 'a full facility program'.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "ambiguous-003",
+    "message": "What's the best way to clean everything in our restrooms and hallways?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["bathroom", "floor_vct"],
+    "confidence": "medium",
+    "reason": "Explicitly spans two specialist domains (restrooms and hallway floors) in one ask.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "ambiguous-004",
+    "message": "We're setting up a new janitorial closet — what do we need?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["dilution", "product"],
+    "confidence": "medium",
+    "reason": "Could mean dispenser/station setup (dilution) or simply which chemicals/equipment to stock (product).",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "ambiguous-005",
+    "message": "What should I order for our monthly cleaning supply restock?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["product"],
+    "confidence": "low",
+    "reason": "Generic restock request with no product, area, or procedure named — technically closest to product, but too vague to answer without a clarifying question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Borderline: leans product but deliberately included as a low-confidence case since a real router may reasonably decline to guess."
+  },
+  {
+    "id": "ambiguous-006",
+    "message": "Can you help us reduce cleaning costs across the building?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["product", "dilution", "floor_vct", "bathroom"],
+    "confidence": "low",
+    "reason": "A cost/efficiency question that could touch any specialist's domain (concentrate dilution, product selection, floor program cadence, restroom consumables) with no way to pick one from the text alone.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "ambiguous-007",
+    "message": "What's better for our floors?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["floor_vct", "product"],
+    "confidence": "low",
+    "reason": "No prior context given — 'better' than what is undefined, and it's unclear whether this is a product pick or a procedure question.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Realistic truncated follow-up message with no antecedent."
+  },
+  {
+    "id": "ambiguous-008",
+    "message": "How do I get my team trained on your products?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["product"],
+    "confidence": "low",
+    "reason": "Training-request framing doesn't map cleanly onto any SME's remit (none of the five specialists own 'training my team'); closest lean is product, but genuinely outside the current agent set.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Good case for testing whether the classifier over-forces a low-fit label instead of returning ambiguous."
+  },
+  {
+    "id": "ambiguous-009",
+    "message": "Is there anything you'd recommend changing about our current setup?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["recommendations", "dilution", "floor_vct"],
+    "confidence": "low",
+    "reason": "'Recommend' plus 'setup' could mean a competitor cross-reference, a dispenser/system setup review, or a floor program review — no named product, brand, or procedure to disambiguate.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": "Tests whether the generic 'recommend' token over-triggers the recommendations route, mirroring the boundary-recommend-floor-procedure precedent in routing-golden-set.ts."
+  },
+  {
+    "id": "ambiguous-010",
+    "message": "What do most of your customers use in schools?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["product", "floor_vct", "bathroom"],
+    "confidence": "low",
+    "reason": "Framed around an industry vertical (schools) rather than a product, procedure, or competitor — spans catalog, floor, and restroom territory equally.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "ambiguous-011",
+    "message": "We're not happy with our current chemical program — what should we do?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["recommendations", "dilution", "product"],
+    "confidence": "low",
+    "reason": "Dissatisfaction with 'our chemical program' could mean switching suppliers (recommendations), fixing dispensing (dilution), or picking different products (product).",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  },
+  {
+    "id": "ambiguous-012",
+    "message": "Can someone walk me through everything we'd need for a full building clean?",
+    "intended_agent": "ambiguous",
+    "plausible_agents": ["product", "bathroom", "dilution", "floor_vct"],
+    "confidence": "low",
+    "reason": "'Everything for a full building clean' spans all four operational specialists at once.",
+    "source_style": "synthetic_realistic_b0499",
+    "notes": ""
+  }
+]

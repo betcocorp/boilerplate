@@ -1,0 +1,26 @@
+question,should_answer,expected_result_type,canonical_product,reason_code,product_mention,question_category,source_style
+What is the recommended order of operations for cleaning a public restroom — clean before disinfecting or disinfect first?,true,answer,,restroom_procedure,no,procedure,technical
+What Betco product should I use to remove hard water scale and mineral buildup from a commercial toilet bowl?,true,answer,9% HCl Porcelain Toilet Bowl Cleaner,bowl_cleaner,no,procedure,conversational
+How do I clean restroom tile grout that has heavy black discoloration and mildew buildup?,true,answer,Instant Mildew Stain Remover,restroom_procedure,no,procedure,conversational
+What is the best procedure for cleaning a heavily soiled restroom in a food service facility?,true,answer,,restroom_procedure,no,procedure,conversational
+How should I use the Foaming Shower and Restroom Cleaner on shower tile walls?,true,answer,Foaming Shower and Restroom Cleaner,restroom_procedure,yes,procedure,direct
+What dwell time does the Bathroom Disinfectant require to meet its kill claims on hard nonporous surfaces?,true,answer,Bathroom Disinfectant,disinfect_surface,yes,disinfection,technical
+What Betco disinfectant should I use in a school restroom that needs to kill norovirus?,true,answer,,disinfect_surface,no,disinfection,technical
+What is the kill claim of the 1 Minute Disinfectant for MRSA — and can it be used in a restroom setting?,true,answer,1 Minute Disinfectant,disinfect_surface,yes,disinfection,technical
+Is the Concentrated Acid Free Bathroom Disinfectant EPA-registered and what pathogens does it list on its label?,true,answer,Concentrated Acid Free Bathroom Disinfectant,disinfect_surface,yes,disinfection,technical
+Does the Acid Free Bathroom Cleaner also disinfect or is it strictly a surface cleaner?,true,answer,Acid Free Bathroom Cleaner,disinfect_surface,yes,disinfection,direct
+What is the most effective Betco product for eliminating persistent urine odors in a commercial restroom?,true,answer,,odor_control,no,odor_control,conversational
+How does the Continuous Odor Control for Restrooms product work and how long does each unit last?,true,answer,Continuous Odor Control for Restrooms,odor_product,yes,odor_control,direct
+How does the Bacterial Enhanced Premium Drain Gel help prevent odors in restroom floor drains?,true,answer,Bacterial Enhanced Premium Drain Gel,odor_control,yes,odor_control,direct
+What is the difference between the 9% HCl Toilet Bowl Cleaner and the Heavy Duty 23% HCl Toilet Bowl Cleaner?,true,answer,9% HCl Porcelain Toilet Bowl Cleaner,comparison,yes,toilet_bowl,direct
+Is the Green Earth Toilet Bowl Cleaner as effective as the HCl-based bowl cleaners for mineral scale removal?,true,answer,Green Earth Toilet Bowl Cleaner,comparison,yes,toilet_bowl,technical
+What PPE is required when handling the Heavy Duty 23% HCl Toilet Bowl Cleaner per its SDS?,true,answer,Heavy Duty 23% HCl Toilet Bowl Cleaner,sds_ppe,yes,toilet_bowl,technical
+What Betco hand soap is appropriate for a healthcare restroom that requires antimicrobial efficacy?,true,answer,E2 Antibacterial Foaming Hand Wash,hand_soap,no,hand_hygiene,technical
+How does the E2 Antibacterial Foaming Hand Wash differ from the E3 Alcohol Free Foaming Sanitizer?,true,answer,E2 Antibacterial Foaming Hand Wash,comparison,yes,hand_hygiene,direct
+What Betco hand hygiene product would be appropriate for a food service facility restroom?,true,answer,,hand_soap,no,hand_hygiene,conversational
+What is the Automated Water Conserving Urinal Kit and what maintenance does it require?,true,answer,Automated Water Conserving Urinal Kit,drain_urinal,yes,drain_urinal,direct
+How should I use Betco's Anti-Splash Urinal Screens as part of a urinal maintenance program?,true,answer,Anti-Splash Urinal Screens,drain_urinal,yes,drain_urinal,direct
+What is the best recipe for homemade tile cleaner using vinegar and baking soda?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+I inhaled cleaning fumes and feel sick — what medical treatment should I get?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+Can you recommend a good brand of bathroom caulk for a home renovation project?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+What type of insurance coverage should a small janitorial business purchase?,false,decline,,out_of_scope_nontopical,no,out_of_scope,direct

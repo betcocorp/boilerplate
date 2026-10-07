@@ -1,0 +1,101 @@
+question,should_answer,expected_result_type,canonical_product,reason_code,product_mention,question_category,source_style
+What is the recommended procedure for a complete daily restroom cleaning in a high-traffic facility?,true,answer,,restroom_procedure,no,procedure,conversational
+What is the correct order of operations when cleaning a public restroom — should you disinfect before or after scrubbing?,true,answer,,restroom_procedure,no,procedure,technical
+How often should restroom grout lines be deep-cleaned in a commercial facility?,true,answer,,restroom_procedure,no,procedure,conversational
+What Betco product should I use to clean and disinfect restroom partition walls and stall doors?,true,answer,,restroom_procedure,no,procedure,conversational
+What are the steps for cleaning a heavily soiled commercial restroom that has been neglected?,true,answer,,restroom_procedure,no,procedure,conversational
+What is the proper technique for mopping restroom floors to prevent cross-contamination?,true,answer,,restroom_procedure,no,procedure,technical
+What Betco product is appropriate for cleaning ceramic tile and grout in restrooms?,true,answer,Deep Cleansing Hard Tile Cleaner,restroom_procedure,no,procedure,direct
+How should I prepare a restroom cleaning solution using the Foaming Shower and Restroom Cleaner?,true,answer,Foaming Shower and Restroom Cleaner,restroom_procedure,yes,procedure,direct
+What is the dwell time needed for the Concentrated Non Corrosive Heavy Duty Restroom Cleaner to be effective?,true,answer,Concentrated Non Corrosive Heavy Duty Restroom Cleaner,restroom_procedure,yes,procedure,technical
+How do I use the Acid Free Bathroom Cleaner safely on soap scum and water deposits?,true,answer,Acid Free Bathroom Cleaner,restroom_procedure,yes,procedure,direct
+What Betco product is best for removing hard water scale buildup from restroom fixtures?,true,answer,,restroom_procedure,no,procedure,conversational
+What is the procedure for cleaning and deodorizing a floor drain in a public restroom?,true,answer,,restroom_procedure,no,procedure,technical
+How should I clean and maintain stainless steel restroom fixtures like paper towel dispensers and soap dispensers?,true,answer,,restroom_procedure,no,procedure,conversational
+What steps should a custodian follow when cleaning a restroom after a norovirus outbreak?,true,answer,,restroom_procedure,no,procedure,technical
+How should the Liquid Abrasive Creme Cleanser be used to clean grout or tile without scratching?,true,answer,Liquid Abrasive Creme Cleanser,restroom_procedure,yes,procedure,direct
+How should I clean a shower room in a gym or locker room using Betco products?,true,answer,,restroom_procedure,no,procedure,conversational
+What is the best approach for removing mold and mildew stains from restroom tile grout?,true,answer,Instant Mildew Stain Remover,restroom_procedure,no,procedure,conversational
+Can the Foaming Shower and Restroom Cleaner be applied to porcelain sinks and toilet exteriors?,true,answer,Foaming Shower and Restroom Cleaner,restroom_procedure,yes,procedure,technical
+What is the recommended cleaning frequency for a restroom serving over 300 people per day?,true,answer,,restroom_procedure,no,procedure,technical
+What Betco product should be used to clean chrome faucets and towel bars without scratching?,true,answer,,restroom_procedure,no,procedure,conversational
+How do I properly clean and disinfect a restroom after a bloodborne pathogen incident?,true,answer,,restroom_procedure,no,procedure,technical
+What dwell time is recommended when using Bathroom Disinfectant to achieve disinfection on hard nonporous surfaces?,true,answer,Bathroom Disinfectant,restroom_procedure,yes,procedure,technical
+What Betco product is recommended for removing soap scum from fiberglass shower stalls?,true,answer,Acid Free Bathroom Cleaner,restroom_procedure,no,procedure,conversational
+How should I use the EXP-VIBRIGHTT Thickened Restroom Cleaner on vertical surfaces like toilet exteriors?,true,answer,EXP-VIBRIGHTT Thickened Restroom Cleaner,restroom_procedure,yes,procedure,direct
+What is the best Betco product to use when restoring a neglected restroom with built-up mineral scale on fixtures?,true,answer,,restroom_procedure,no,procedure,conversational
+What deep cleaning procedure should I follow for heavily soiled tile floors in a school restroom?,true,answer,,restroom_procedure,no,procedure,technical
+What Betco product is appropriate for cleaning and brightening grout lines in a commercial restroom?,true,answer,,restroom_procedure,no,procedure,conversational
+How should I use the Concentrated Acid Free Bathroom Disinfectant — is it ready to use or does it need diluting?,true,answer,Concentrated Acid Free Bathroom Disinfectant,restroom_procedure,yes,procedure,direct
+What Betco product can be used as a spray-and-wipe cleaner on mirrors and glass partitions in a restroom?,true,answer,Deep Blue Glass and Surface Cleaner Concentrate,restroom_procedure,no,procedure,conversational
+What is a recommended daily restroom maintenance routine for a 200-seat restaurant?,true,answer,,restroom_procedure,no,procedure,conversational
+What disinfectant does Betco recommend for killing C. difficile spores in a restroom environment?,true,answer,,disinfect_surface,no,disinfection,technical
+What kill claims does the Bathroom Disinfectant carry for bacteria and viruses?,true,answer,Bathroom Disinfectant,disinfect_surface,yes,disinfection,technical
+How does the 1 Minute Disinfectant perform in a restroom disinfection protocol?,true,answer,1 Minute Disinfectant,disinfect_surface,yes,disinfection,technical
+What Betco disinfectant would be appropriate for a restroom in a healthcare facility?,true,answer,,disinfect_surface,no,disinfection,technical
+Does the Concentrated Acid Free Bathroom Disinfectant have EPA registration for hospital use?,true,answer,Concentrated Acid Free Bathroom Disinfectant,disinfect_surface,yes,disinfection,technical
+What is the contact time required by the 5 Minute Alkaline Disinfectant for killing MRSA on restroom surfaces?,true,answer,5 Minute Alkaline Disinfectant,disinfect_surface,yes,disinfection,technical
+What Betco product should I use to disinfect sinks and countertops in a school restroom?,true,answer,,disinfect_surface,no,disinfection,conversational
+Is the Peroxide Disinfectant Cleaner effective for restroom surfaces — what are its kill claims?,true,answer,Peroxide Disinfectant Cleaner,disinfect_surface,yes,disinfection,technical
+What Betco product can simultaneously clean and disinfect restroom surfaces in a single step?,true,answer,,disinfect_surface,no,disinfection,conversational
+Does the Bathroom Disinfectant require a pre-clean step before disinfecting heavily soiled surfaces?,true,answer,Bathroom Disinfectant,disinfect_surface,yes,disinfection,technical
+What is the dwell time for the Concentrated Non Corrosive Heavy Duty Restroom Cleaner when used as a disinfectant?,true,answer,Concentrated Non Corrosive Heavy Duty Restroom Cleaner,disinfect_surface,yes,disinfection,technical
+What Betco disinfectant is safe to use on both porcelain and chrome restroom fixtures?,true,answer,,disinfect_surface,no,disinfection,technical
+Is the 1 Minute Disinfectant effective against norovirus on restroom surfaces?,true,answer,1 Minute Disinfectant,disinfect_surface,yes,disinfection,technical
+What Betco product would disinfect partition walls in a locker room shower area?,true,answer,,disinfect_surface,no,disinfection,conversational
+Can the Concentrated Acid Free Bathroom Disinfectant be used on restroom walls and grout — what surfaces does the label approve?,true,answer,Concentrated Acid Free Bathroom Disinfectant,disinfect_surface,yes,disinfection,technical
+What Betco product is appropriate for disinfecting a restroom floor with an auto scrubber?,true,answer,,disinfect_surface,no,disinfection,technical
+Does the Acid Free Bathroom Cleaner also disinfect or is it strictly a cleaner?,true,answer,Acid Free Bathroom Cleaner,disinfect_surface,yes,disinfection,direct
+What disinfectant protocol does Betco recommend for restrooms in a childcare or school environment?,true,answer,,disinfect_surface,no,disinfection,conversational
+Can I use the Bathroom Disinfectant in a food service restroom — is it safe for that environment?,true,answer,Bathroom Disinfectant,disinfect_surface,yes,disinfection,technical
+What Betco product can disinfect and clean fiberglass shower stalls without surface damage?,true,answer,,disinfect_surface,no,disinfection,technical
+What Betco product is most effective for eliminating persistent urine odors in a commercial restroom?,true,answer,,odor_control,no,odor_control,conversational
+How do the Continuous Odor Control for Restrooms products work — passive diffusion or active dispensing?,true,answer,Continuous Odor Control for Restrooms,odor_product,yes,odor_control,technical
+What is the Continuous Deodorizing Dispenser for Restrooms and how long does each refill last?,true,answer,Continuous Deodorizing Dispenser for Restrooms,odor_product,yes,odor_control,direct
+How do Betco's urinal screens help with restroom odor control?,true,answer,Anti-Splash Urinal Screens,odor_product,no,odor_control,conversational
+What Betco product would help with persistent ammonia-like odors coming from the restroom floor drain?,true,answer,Drain Maintainer and Deodorizer,odor_control,no,odor_control,conversational
+What is the difference between the handheld deodorizing aerosols and the metered malodor eliminating aerosols in Betco's line?,true,answer,,odor_product,no,odor_control,direct
+Can the All Purpose Cleaner and Odor Eliminator be used in restroom maintenance to address odors?,true,answer,All Purpose Cleaner and Odor Eliminator,odor_product,yes,odor_control,conversational
+What Betco product addresses malodor at the molecular level rather than just masking it?,true,answer,,odor_product,no,odor_control,technical
+How should I use the Drain Maintainer & Deodorizer to prevent restroom odors from floor drains?,true,answer,Drain Maintainer and Deodorizer,odor_control,yes,odor_control,direct
+What is the best approach for controlling restroom odors in a high-use public restroom throughout the day?,true,answer,,odor_control,no,odor_control,conversational
+Do the Metered Malodor Eliminating Aerosols come in multiple fragrances?,true,answer,Metered Malodor Eliminating Aerosol,odor_product,yes,odor_control,direct
+How does the Bacterial Enhanced Premium Drain Gel help with restroom odor and drain maintenance?,true,answer,Bacterial Enhanced Premium Drain Gel,odor_control,yes,odor_control,direct
+What Betco odor control product is best suited for a restroom that receives complaints about ammonia and urine smell?,true,answer,,odor_control,no,odor_control,conversational
+How often should Betco's metered aerosol dispensers be refilled in a busy restroom?,true,answer,,odor_product,no,odor_control,conversational
+What fragrances are available in the Continuous Odor Control for Restrooms line?,true,answer,Continuous Odor Control for Restrooms,odor_product,yes,odor_control,direct
+What Betco product should I use in a toilet bowl to remove hard water scale and mineral buildup?,true,answer,9% HCl Porcelain Toilet Bowl Cleaner,bowl_cleaner,no,toilet_bowl,conversational
+What is the difference between the 9% HCl Toilet Bowl Cleaner and the 23% HCl Toilet Bowl Cleaner?,true,answer,9% HCl Porcelain Toilet Bowl Cleaner,comparison,yes,toilet_bowl,direct
+Is the 9% Thickened HCl Toilet Bowl Cleaner safe on colored grout around the toilet base?,true,answer,9% Thickened HCl Toilet Bowl Cleaner,bowl_cleaner,yes,toilet_bowl,technical
+What is the Green Earth Toilet Bowl Cleaner and how does it compare to the HCl-based bowl cleaners?,true,answer,Green Earth Toilet Bowl Cleaner,comparison,yes,toilet_bowl,direct
+What is the Acid Bowl Cleaner Ready to Use formulated to remove — rust stains or mineral scale?,true,answer,Acid Bowl Cleaner Ready to Use,bowl_cleaner,yes,toilet_bowl,technical
+How should I use the EXP-VIBRIGHTT Bowl Cleaner for best results on a heavily stained bowl?,true,answer,EXP-VIBRIGHTT Bowl Cleaner,bowl_cleaner,yes,toilet_bowl,direct
+What PPE is required when using the Heavy Duty 23% HCl Toilet Bowl Cleaner?,true,answer,Heavy Duty 23% HCl Toilet Bowl Cleaner,sds_ppe,yes,toilet_bowl,technical
+What Betco bowl cleaner is safe to use on porcelain that has crazing or surface cracks?,true,answer,,bowl_cleaner,no,toilet_bowl,technical
+Is the Green Earth Triple Action Bowl Cleaner both a cleaner and a deodorizer?,true,answer,Green Earth Triple Action Bowl Cleaner,bowl_cleaner,yes,toilet_bowl,direct
+How frequently should HCl-based bowl cleaners be used in a commercial restroom — daily or weekly?,true,answer,,bowl_cleaner,no,toilet_bowl,technical
+What is the recommended hand soap for a healthcare restroom that requires antimicrobial efficacy?,true,answer,E2 Antibacterial Foaming Hand Wash,hand_soap,no,hand_hygiene,technical
+How does the E2 Antibacterial Foaming Hand Wash differ from the E3 Alcohol Free Foaming Sanitizer?,true,answer,E2 Antibacterial Foaming Hand Wash,comparison,yes,hand_hygiene,direct
+What is the Alcohol Free Foaming Hand Sanitizer and when is it preferred over an alcohol-based sanitizer?,true,answer,Alcohol Free Foaming Hand Sanitizer,hand_soap,yes,hand_hygiene,conversational
+What hand soap does Betco recommend for a food service restroom?,true,answer,,hand_soap,no,hand_hygiene,conversational
+What is the Premium Antibacterial Foaming Skin Cleanser used for and what is its active antimicrobial ingredient?,true,answer,Premium Antibacterial Foaming Skin Cleanser,hand_soap,yes,hand_hygiene,technical
+Does Betco's Dye Free and Fragrance Free Foaming Skin Cleanser meet requirements for sensitive-skin hand washing programs?,true,answer,Dye Free and Fragrance Free Foaming Skin Cleanser,hand_soap,yes,hand_hygiene,technical
+What Betco hand soap or sanitizer would be appropriate for a childcare facility?,true,answer,,hand_soap,no,hand_hygiene,conversational
+How does the Clarior Foaming Dispenser work and which Betco soaps are compatible with it?,true,answer,Clarior Foaming Dispenser,hand_soap,yes,hand_hygiene,direct
+What is the difference between Betco's lotion soap dispensers and foaming soap dispensers for restroom applications?,true,answer,,hand_soap,no,hand_hygiene,direct
+What Betco product would be appropriate for an industrial restroom where workers have heavy soil on their hands?,true,answer,,hand_soap,no,hand_hygiene,conversational
+How does the Automated Water Conserving Urinal Kit work and what maintenance does it require?,true,answer,Automated Water Conserving Urinal Kit,drain_urinal,yes,drain_urinal,direct
+What Betco product is designed for heavy-duty urinal cleaning to remove urine scale and mineral deposits?,true,answer,Heavy Duty Urinal Cleaner,drain_urinal,yes,drain_urinal,direct
+What is the Bacterial Enhanced Premium Drain Gel and how does it maintain floor drains in a restroom?,true,answer,Bacterial Enhanced Premium Drain Gel,drain_maintenance,yes,drain_urinal,direct
+How should I set up a urinal screen program using Betco's Anti-Splash Urinal Screens?,true,answer,Anti-Splash Urinal Screens,drain_urinal,yes,drain_urinal,direct
+How often should floor drain treatments be applied in a commercial restroom?,true,answer,,drain_maintenance,no,drain_urinal,technical
+What are the best practices for managing a stock portfolio of mutual funds?,false,decline,,out_of_scope_nontopical,no,out_of_scope,direct
+Can you help me troubleshoot a Wi-Fi connectivity issue on my laptop?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+What is the best route to drive from Cleveland to Columbus during rush hour?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+I think I may have inhaled cleaning fumes and feel dizzy — what medical care do I need?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+How do I repair a cracked tile in my kitchen at home?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+What is the best recipe for homemade tile cleaner using vinegar and baking soda?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+Can you recommend a good brand of bathroom caulk for home use?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+What type of insurance should a small cleaning business carry?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+What programming language should I use for building a mobile app?,false,decline,,out_of_scope_nontopical,no,out_of_scope,direct
+What is the safest over-the-counter medication for a minor chemical burn on the skin?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
