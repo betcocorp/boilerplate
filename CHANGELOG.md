@@ -1,3 +1,34 @@
+# [7.1.0](https://github.com/betcocorp/bex2.0/compare/v7.0.0...v7.1.0) (2026-09-30)
+
+
+### Bug Fixes
+
+* **B0-1097:** truncate reports table labels, reorder Change, drop /100 from Score ([bfd6703](https://github.com/betcocorp/bex2.0/commit/bfd67030790cd7e6cd5517e3986fce6643d0cc5e))
+* **B0-1101:** make the run_mode source guard order-insensitive ([c55e05d](https://github.com/betcocorp/bex2.0/commit/c55e05d342594f7dadb68947a36d2d4813cfcc4a))
+
+
+### Features
+
+* **B0-1072:** let reviewers add or change a recommendation's competitor brand ([2010cf9](https://github.com/betcocorp/bex2.0/commit/2010cf9c559257983a7cf8be72a87949018f3cb6))
+* **B0-1096:** add golden+archived switch to reports table filters ([1183039](https://github.com/betcocorp/bex2.0/commit/1183039364e7df99d53b61fbf7d5f5bd8608f8d3))
+* **B0-1098:** add selected test prompts to an existing test set ([ae3a40c](https://github.com/betcocorp/bex2.0/commit/ae3a40c432904dc578132f641559683b5a5f8ac8))
+* **B0-1100:** add run_mode='partial' tracking columns to test_results ([b6b2b3b](https://github.com/betcocorp/bex2.0/commit/b6b2b3b9fc8881187bd0c7061be47586171558b4))
+* **B0-1101:** resolve each test item's latest score across full and partial runs ([23a2d87](https://github.com/betcocorp/bex2.0/commit/23a2d87fa20b6e5e459942b3679cfbd26e5e517f))
+* **B0-1102:** add score-threshold field to Run Golden and dispatch partial runs ([fe5bf1e](https://github.com/betcocorp/bex2.0/commit/fe5bf1ef28952e17ff24e0e0ad7841fee124b4d3))
+* **B0-1103:** exclude partial runs from score rollups, reports table and trend charts ([c668416](https://github.com/betcocorp/bex2.0/commit/c6684169561343a80241689e3df8c7920cb982ba))
+* **B0-1105:** one run_mode chokepoint for every golden-metric reader ([ce00cad](https://github.com/betcocorp/bex2.0/commit/ce00cad6f9d88f4efa9739ea65d36eeebafc0c5f))
+* **B0-1106:** add run_mode + threshold to the sweep ledger and shared readers ([7365c0a](https://github.com/betcocorp/bex2.0/commit/7365c0a19b66bd2f4df8854af9a8160477573534))
+* **B0-1106:** ledger helper for manual and partial Run Golden fan-outs ([00bcfc7](https://github.com/betcocorp/bex2.0/commit/00bcfc73a6ddd0c878d4e963b6ea0f77e0171a68))
+* **B0-1107:** add Sweeps and Partial sweeps sections below Test sets on /admin/tests ([2e1b7f3](https://github.com/betcocorp/bex2.0/commit/2e1b7f393a89dbec84bbee4efff41da4b3d9bd5c))
+* **B0-1108:** add /admin/tests/sweeps/[sweepId] with a live-progress card per test set ([e818c73](https://github.com/betcocorp/bex2.0/commit/e818c738a9004ca200a69043b471bdbbb7924e3f))
+* **B0-1109:** record per-item grading token usage for exact run cost ([bfc9b70](https://github.com/betcocorp/bex2.0/commit/bfc9b701963b8c15ab0b9823e9a6ed8030b6f1f9))
+* **B0-1110:** resolve a run's items from item_scope on every execute/grade path ([ca44a22](https://github.com/betcocorp/bex2.0/commit/ca44a2276bbe768ed693e58c00e492817664ab0a))
+* **B0-1112:** extend test_grading_usage schema for report-generation grading ([8caed2a](https://github.com/betcocorp/bex2.0/commit/8caed2afea2c373a515ecbbc00b4164f46bbf688))
+* **B0-1113:** record token usage for run-insights grading calls ([4b00631](https://github.com/betcocorp/bex2.0/commit/4b00631181cc60fb20760e2b3b325bfb1ef8839b))
+* **B0-1114:** record token usage for run-comparison-analysis grading calls ([6e35772](https://github.com/betcocorp/bex2.0/commit/6e3577224e51cca6a815f12d6c6b9b1a5eb93f8a))
+* **B0-1115:** record token usage for case-scorer grading calls ([d86106d](https://github.com/betcocorp/bex2.0/commit/d86106d978ebc1b14a61a1d4d6dece1535310003))
+* **B0-1116:** record token usage for synthesizer grading calls ([6a3a24d](https://github.com/betcocorp/bex2.0/commit/6a3a24d20f2d839786de33576e761a4592a9a13d))
+
 # [7.0.0](https://github.com/betcocorp/bex2.0/compare/v6.12.0...v7.0.0) (2026-09-28)
 
 
