@@ -99,7 +99,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
 
   // B0-585 — the per-test latest-result and cross-run similarity roll-up that used to fan out
   // over 20 runs per test on every load is decommissioned: run-level figures live on
-  // /admin/tests/[testId], golden-set health on /admin/bex/health.
+  // /admin/tests/[testId], golden-set health on /admin.
   const [
     allTests,
     archivedTests,

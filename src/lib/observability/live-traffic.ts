@@ -4,7 +4,7 @@
  * scan in `~/lib/observability/aggregates.ts` — nothing here fetches).
  *
  * Pure functions, unit-tested in `live-traffic.test.ts`. The component
- * (`~/components/admin/bex-health/LiveTrafficCard.tsx`) only renders these.
+ * (`~/components/admin/dashboard/LiveTrafficCard.tsx`) only renders these.
  */
 
 import {

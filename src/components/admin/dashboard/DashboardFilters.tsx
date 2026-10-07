@@ -32,7 +32,7 @@ import {
  * because the window this writes is a whole EST day (`from === to`), not a rolling 24 hours — the
  * label has to describe what the query actually does.
  *
- * `/admin` opens on the same 7-day default as `/admin/bex/health` (see `resolveHealthSearchParams`):
+ * `/admin` opens on the same 7-day default as the retired Bex health page (see `resolveHealthSearchParams`):
  * golden-set sweeps are started by hand from /admin/tests rather than nightly, so a one-day landing
  * window would leave the health bar's gate verdict empty on most days.
  */

@@ -1,5 +1,5 @@
 /**
- * B0-581 — "Live traffic" card for the Bex Health dashboard: a six-tile grid
+ * B0-581 — "Live traffic" card for the `/admin` Mission Control dashboard (moved from the retired `/admin/bex/health`): a six-tile grid
  * (Runs · Failed · Avg confidence · TTFT/elapsed · Tokens per run · Orphaned)
  * plus the confidence spread bar.
  *

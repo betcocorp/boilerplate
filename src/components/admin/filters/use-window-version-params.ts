@@ -3,12 +3,8 @@
 /**
  * B0-629 — the shared window/version searchParams logic behind the admin dashboards' filters.
  *
- * Two surfaces now offer the same pair of controls — `/admin/bex/health` (B0-578) and `/admin`
- * Mission Control — with deliberately different presentation: stacked labelled selects on the
- * health page, compact chips on the dashboard. Their MARKUP differing is fine; their URL
- * semantics differing is not. If one wrote `?from`/`?to`/`?version` even slightly differently,
- * the two dashboards would silently disagree about what window they are showing, and a URL
- * copied between them would not reproduce the same view.
+ * The `/admin` Mission Control filter chips write `?from`/`?to`/`?version`. If that writing ever
+ * differed between components, a copied URL would not reproduce the same view.
  *
  * So the writing lives here, exactly once, and each component keeps its own markup and its own
  * preset labels. This hook holds no filter state — the URL is the state — beyond the router

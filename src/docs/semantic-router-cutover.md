@@ -129,7 +129,7 @@ semantic path is healthy (the classifier is not called) and it *is* the fallback
 ## 4. Monitoring queries
 
 All queries below were executed against the live database on 2026-08-25 and run clean. Windows are
-`interval '48 hours'`; widen as needed. `/admin/observability` and `/admin/bex/health` render the
+`interval '48 hours'`; widen as needed. `/admin/observability` and `/admin` render the
 same numbers via the `routing-health.ts` reducers — the SQL is here so an operator can read them
 without the UI.
 

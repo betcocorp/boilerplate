@@ -3,7 +3,7 @@
 /**
  * B0-761 — the dashboard's two controls: the day range and the group multi-select.
  *
- * Both live ENTIRELY in searchParams (`?days=`, `?groups=a,b`), the same contract `/admin/bex/health`
+ * Both live ENTIRELY in searchParams (`?days=`, `?groups=a,b`), the same contract `/admin`
  * and `/admin/projects/analytics` use, so a pasted URL reproduces the exact view and browser
  * back/forward works. This component therefore holds no filter state beyond the popover's open flag
  * and the router transition's pending flag — `days` and `selectedGroups` are props read back off the

@@ -1,7 +1,7 @@
 /**
  * B0-761 — `/admin/analytics`, the Bex port of c360's event-analytics dashboard.
  *
- * Thin by convention, in the shape of `/admin/bex/health`: `searchParams` fully determine the view
+ * Thin by convention, in the shape of `/admin`: `searchParams` fully determine the view
  * (`?days=`, `?groups=`) so the page is linkable and bookmarkable, and every piece of feature UI
  * lives under `~/components/admin/analytics/*`. `clampDays` / `parseGroupFilter` are the single
  * readers of those params — the dashboard's filter bar writes them back through the router, and the

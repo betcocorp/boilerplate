@@ -1,5 +1,5 @@
 /**
- * B0-584 — per-panel provenance footer for the Bex Health dashboard (epic B0-569).
+ * B0-584 — per-panel provenance footer for the `/admin` dashboard panels (epic B0-569).
  *
  * Names the tables/views/RPCs the panel's reader ACTUALLY queries, so every figure on the
  * page is arguable back to its source. Always rendered — there is deliberately no toggle.

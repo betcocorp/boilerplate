@@ -1,5 +1,5 @@
 /**
- * B0-577 / B0-578 — searchParams resolution for `/admin/bex/health` (epic B0-569).
+ * B0-577 / B0-578 — searchParams resolution for `/admin` (epic B0-569).
  *
  * Mirrors the day handling established on `/admin/observability`: `YYYY-MM-DD` params validated
  * against a strict pattern, UTC day bounds, and an inverted range clamped to a single day rather

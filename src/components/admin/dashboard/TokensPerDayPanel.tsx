@@ -1,5 +1,5 @@
 /**
- * B0-583 — "Tokens per day" panel for `/admin/bex/health` (epic B0-569).
+ * B0-583 — "Tokens per day" panel for `/admin` (epic B0-569; moved from the retired `/admin/bex/health`).
  *
  * Async server component. All bars come from the `cost_by_model_per_day` view (B0-565) via the
  * additive `fetchDailyCostPoints` export in `~/lib/observability/cost-metrics` — no new scan of

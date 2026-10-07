@@ -4,15 +4,18 @@
  * Replaces the previous landing page, which rendered shadcn demo boilerplate (hardcoded document
  * rows, invented reviewer names, dead "Quick Create" / Outline controls) around two real metrics.
  *
- * Server component, searchParams-driven like `/admin/bex/health` and `/admin/observability`, so
+ * Server component, searchParams-driven like `/admin/observability`, so
  * the window AND version selection are linkable and a pasted URL fully determines the view. Thin
  * by convention: composition only — every panel, and the filter row, lives under
  * `~/components/admin/dashboard/*` and fetches its own data from a canonical reader.
  *
+ * This page is also the home of what used to be `/admin/bex/health`, which now redirects here
+ * (`next.config.ts`): the golden-set verdict, live traffic and tokens-per-day panels live below.
+ *
  * The window default is `resolveHealthSearchParams`' own 7 days rather than the mockup's
  * "Last 24 hours": golden-set sweeps are started by hand from /admin/tests rather than nightly, so
  * a one-day landing window would leave the health bar's gate verdict — the page's headline — empty
- * on most days. Sharing the health page's default also means the two surfaces reconcile.
+ * on most days.
  *
  * The previous page's permissions shortcut card is gone with the rest of the layout. That is not an
  * access-control change: `admin.card.permissions` still gates the account menu's Access control
@@ -26,9 +29,11 @@ import { AdminAccessDeniedToast } from '~/components/admin/AdminAccessDeniedToas
 import { DashboardHeader } from '~/components/admin/dashboard/DashboardHeader';
 import { HealthBar } from '~/components/admin/dashboard/HealthBar';
 import { KpiRow } from '~/components/admin/dashboard/KpiRow';
+import { LiveTrafficCard } from '~/components/admin/dashboard/LiveTrafficCard';
 import { PipelinePanel } from '~/components/admin/dashboard/PipelinePanel';
 import { ReportScoreTrendPanel } from '~/components/admin/dashboard/ReportScoreTrendPanel';
 import { RoutingPanel } from '~/components/admin/dashboard/RoutingPanel';
+import { TokensPerDayPanel } from '~/components/admin/dashboard/TokensPerDayPanel';
 import { ToolHealthPanel } from '~/components/admin/dashboard/ToolHealthPanel';
 import { resolveHealthSearchParams } from '~/lib/bex-health/search-params';
 
@@ -57,7 +62,9 @@ export default async function AdminDashboardPage({ searchParams }: PageProps) {
       <DashboardHeader version={version} window={window} />
       <ReportScoreTrendPanel version={version} window={window} />
       <KpiRow version={version} window={window} />
+      <LiveTrafficCard version={version} window={window} />
       <PipelinePanel version={version} window={window} />
+      <TokensPerDayPanel version={version} window={window} />
 
       {/* Routing and Tool health are peers: side by side on wide screens, stacked below. */}
       <div className="grid items-start gap-4 xl:grid-cols-2">

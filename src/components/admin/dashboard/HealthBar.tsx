@@ -2,8 +2,8 @@
  * B0-629 — the Mission Control health bar: one dense dark card carrying the golden-set verdict
  * and the per-tier gate figures that justify it.
  *
- * A compression of the Bex Health dashboard's `VerdictStrip` (B0-579) + `TierCards` (B0-580) into
- * a single row, and deliberately NOT a re-derivation of them: the verdict is still
+ * The successor to the retired Bex Health dashboard's `VerdictStrip` (B0-579) + `TierCards` (B0-580),
+ * compressed into a single row, and deliberately NOT a re-derivation of them: the verdict is still
  * `deriveHealthVerdict` over the two canonical readers (`getGoldenSetTierRollup` scoped to the
  * page's version + window, and `getTierTargets`), and every percentage still goes through
  * `formatPassRatePercent`. No target literal and no threshold appears in this file.
@@ -103,7 +103,7 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
     ]),
   ].sort((a, b) => a - b);
 
-  // Same wording as `TierCards`' empty state: an absent sweep is said out loud, never shown as 0%.
+  // Same empty-state wording the retired `TierCards` used: an absent sweep is said out loud, never shown as 0%.
   const emptyStateText =
     rollup.kind === 'no_golden_sets'
       ? 'No golden sets configured — mark a test as golden on /admin/tests.'

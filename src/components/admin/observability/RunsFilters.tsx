@@ -5,7 +5,7 @@
  *
  * Client component so the "Filters" section can start collapsed to just its
  * title (the aggregate dashboard this originally matched was retired to
- * `/admin/bex/health` in B0-585). The form itself still submits as a plain
+ * `/admin` in B0-585). The form itself still submits as a plain
  * GET (see `RunsTable.tsx`'s doc comment) — this component only adds the
  * show/hide affordance around it.
  */

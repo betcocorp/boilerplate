@@ -84,11 +84,6 @@ const sidebarSections: NavSectionModel[] = [
         icon: ChartScatter,
         items: [
           {
-            label: 'Bex health',
-            href: '/admin/bex/health',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
-          },
-          {
             label: 'Test runner',
             href: '/admin/tests',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
@@ -292,13 +287,11 @@ function isActivePath(pathname: string, href: string) {
   }
 
   // "Bex chat" links to `/admin/bex`; without this carve-out it would also light up for the
-  // `/admin/bex/health` dashboard, which has its own sidebar entry. B0-533 — same for the
-  // `/admin/bex/conversations` turn-by-turn viewer.
+  // `/admin/bex/conversations` turn-by-turn viewer (B0-533).
   if (href === '/admin/bex') {
     return (
       pathname === '/admin/bex' ||
       (pathname.startsWith('/admin/bex/') &&
-        !pathname.startsWith('/admin/bex/health') &&
         !pathname.startsWith('/admin/bex/conversations'))
     );
   }

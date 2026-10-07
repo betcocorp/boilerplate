@@ -5,7 +5,7 @@
  * linkable/bookmarkable and the filter bar can stay a plain GET form.
  *
  * B0-585 — the B0-336 aggregate dashboard that used to render above the runs
- * table is decommissioned: its figures live on `/admin/bex/health` now.
+ * table is decommissioned: its figures live on `/admin` now.
  */
 
 import Link from 'next/link';
@@ -230,9 +230,9 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
             It moved to{' '}
             <Link
               className="font-medium text-sky-700 underline-offset-2 hover:underline"
-              href="/admin/bex/health"
+              href="/admin"
             >
-              Bex health
+              the dashboard
             </Link>
             .
           </p>

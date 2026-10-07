@@ -54,9 +54,6 @@ export function inferPageViewFromPath(pathname: string): PageViewInference | nul
     if (parts.length === 2) {
       return { event: 'analytics.page.view.bex.chat', meta: baseMeta(path) };
     }
-    if (parts.length === 3 && parts[2] === 'health') {
-      return { event: 'analytics.page.view.bex.health', meta: baseMeta(path) };
-    }
     if (parts.length === 3 && parts[2] === 'compare') {
       return { event: 'analytics.page.view.bex.compare', meta: baseMeta(path) };
     }

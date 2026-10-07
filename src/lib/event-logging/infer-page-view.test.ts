@@ -39,7 +39,6 @@ describe('inferPageViewFromPath — admin shell and Bex', () => {
   it.each([
     ['/admin', 'analytics.page.view.admin'],
     ['/admin/bex', 'analytics.page.view.bex.chat'],
-    ['/admin/bex/health', 'analytics.page.view.bex.health'],
     ['/admin/bex/compare', 'analytics.page.view.bex.compare'],
     ['/admin/analytics', 'analytics.page.view.admin.analytics'],
   ])('maps %s to %s', (path, event) => {

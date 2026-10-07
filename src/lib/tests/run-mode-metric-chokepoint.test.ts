@@ -208,14 +208,14 @@ describe('metric readers apply the run_mode chokepoint (B0-1105 / B0-1103)', () 
     expectEveryMetricQueryScoped(1);
   });
 
-  // --- Transitive consumers: /admin/tests cards, /admin/bex/health rollups, alerts ----------
+  // --- Transitive consumers: /admin/tests cards, /admin rollups, alerts ----------
 
   it('calculateGoldenSetMetrics (golden cards on /admin/tests) is scoped end to end', async () => {
     await calculateGoldenSetMetrics();
     expectEveryMetricQueryScoped(4);
   });
 
-  it('getGoldenSetTierRollup (/admin/bex/health tier rollup) is scoped end to end', async () => {
+  it('getGoldenSetTierRollup (/admin tier rollup) is scoped end to end', async () => {
     await getGoldenSetTierRollup({ window: WINDOW });
     expectEveryMetricQueryScoped(1);
   });

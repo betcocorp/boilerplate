@@ -9,6 +9,12 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
+  async redirects() {
+    return [
+      // The Bex health dashboard was folded into /admin; keep bookmarks and ?window=/?version= links working.
+      { source: '/admin/bex/health', destination: '/admin', permanent: true },
+    ];
+  },
   serverExternalPackages: ["@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner", "pdfjs-dist"],
 };
 
