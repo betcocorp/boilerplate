@@ -22,6 +22,8 @@ import {
 import { logInfo, logWarn } from '~/lib/observability/logger';
 import {
   reconcileScheduledTests,
+  reconcilerSweepRunSchema,
+  reconcilerTestRunSchema,
   type ReconcileScheduledTestsInput,
   type ReconcileScheduledTestsResult,
   type ReconcilerSweepRun,
@@ -59,6 +61,8 @@ interface ScheduledQuery extends PromiseLike<QueryResult> {
   select(columns: string): ScheduledQuery;
   eq(column: string, value: string): ScheduledQuery;
   in(column: string, values: readonly string[]): ScheduledQuery;
+  is(column: string, value: null): ScheduledQuery;
+  gte(column: string, value: string): ScheduledQuery;
   order(column: string, options: { ascending: boolean }): ScheduledQuery;
   limit(count: number): ScheduledQuery;
   single(): PromiseLike<QueryResult>;
@@ -211,6 +215,27 @@ export async function listNonTerminalScheduledTestItems(
     .parse(unwrap(result, 'select scheduled_test_items') ?? []);
 }
 
+/**
+ * B0-1169 — `completed` children with no `grade` yet, completed at/after `sinceIso`, oldest first.
+ * The reconciler's revisit pass reads these until the run's report (and so its grade) exists.
+ */
+export async function listCompletedUngradedScheduledTestItems(
+  sinceIso: string,
+  limit: number,
+): Promise<ScheduledTestItem[]> {
+  const result = await scheduledTable('scheduled_test_items')
+    .select('*')
+    .eq('status', 'completed')
+    .is('grade', null)
+    .gte('completed_at', sinceIso)
+    .order('completed_at', { ascending: true })
+    .limit(limit);
+
+  return z
+    .array(scheduledTestItemSchema)
+    .parse(unwrap(result, 'select scheduled_test_items (ungraded)') ?? []);
+}
+
 export async function listScheduledTestItemsForRuns(
   scheduledRunIds: string[],
 ): Promise<ScheduledTestItem[]> {
@@ -309,6 +334,15 @@ export async function getScheduledTestRunWithItems(
  * Reads against the test harness's own tables (these ARE in the generated types)
  * -------------------------------------------------------------------------- */
 
+/**
+ * `report_overall_grade` (B0-1169) is a stored generated column (migration 20260924200444) that the
+ * generated Supabase types do not carry, so the rows are validated with the reconciler's Zod
+ * contract rather than trusted from the select's inferred type — the same "one validated seam"
+ * rule `scheduledTable()` applies to the ledger tables.
+ */
+const RECONCILER_TEST_RUN_COLUMNS =
+  'id,status,started_at,completed_at,elapsed_ms,report_overall_grade';
+
 export async function listTestRunsForReconciliation(
   testRunIds: string[],
 ): Promise<ReconcilerTestRun[]> {
@@ -319,14 +353,14 @@ export async function listTestRunsForReconciliation(
   const supabase = getSupabaseServiceRoleClient();
   const { data, error } = await supabase
     .from('test_results')
-    .select('id,status,started_at,completed_at,elapsed_ms')
+    .select(RECONCILER_TEST_RUN_COLUMNS)
     .in('id', testRunIds);
 
   if (error) {
     throw new Error(`select test_results: ${error.message}`);
   }
 
-  return data ?? [];
+  return z.array(reconcilerTestRunSchema).parse(data ?? []);
 }
 
 /**
@@ -346,7 +380,7 @@ export async function listSweepTestRunsForTests(
   const supabase = getSupabaseServiceRoleClient();
   const { data, error } = await supabase
     .from('test_results')
-    .select('id,test_id,status,started_at,completed_at,elapsed_ms,created_at')
+    .select(`${RECONCILER_TEST_RUN_COLUMNS},test_id,created_at`)
     .in('test_id', testIds)
     .eq('triggered_by', 'api-client')
     .gte('created_at', sinceIso)
@@ -356,7 +390,7 @@ export async function listSweepTestRunsForTests(
     throw new Error(`select test_results (sweep backfill): ${error.message}`);
   }
 
-  return data ?? [];
+  return z.array(reconcilerSweepRunSchema).parse(data ?? []);
 }
 
 /**
@@ -454,6 +488,7 @@ export async function listScheduledItemTallies(
 export function createSupabaseScheduledTestReconcilerPort(): ScheduledTestReconcilerPort {
   return {
     listNonTerminalItems: listNonTerminalScheduledTestItems,
+    listCompletedUngradedItems: listCompletedUngradedScheduledTestItems,
     listTestRuns: listTestRunsForReconciliation,
     listSweepTestRunsForTests,
     listItemTallies: listScheduledItemTallies,

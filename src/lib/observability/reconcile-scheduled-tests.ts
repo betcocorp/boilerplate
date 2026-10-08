@@ -97,6 +97,19 @@ export const ORPHAN_BACKFILL_WINDOW_MS = 15 * 60 * 1000;
 /** Clock skew tolerance in the other direction (`started_at` is Postgres `now()`, the run's `created_at` too, but written by a different statement). */
 export const ORPHAN_BACKFILL_SKEW_MS = 60 * 1000;
 
+/**
+ * B0-1169 — how far back the grade back-fill looks for `completed` children still carrying
+ * `grade = null`: 7 days.
+ *
+ * A child closes the hour its run ends, but the run's report (and so
+ * `test_results.report_overall_grade`) is generated asynchronously afterwards by the
+ * `sweep-pending-reports` cron — minutes to hours later, so on the first pass the grade almost never
+ * exists yet. The revisit re-reads recently closed children until the grade appears. A report is
+ * normally there within hours; 7 days keeps the hourly scan cheap while still covering a multi-day
+ * report-sweeper outage. Anything older is left to the one-time SQL back-fill.
+ */
+export const GRADE_BACKFILL_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 /* -------------------------------------------------------------------------- *
  * Contracts (Zod first, per AGENTS.md)
  * -------------------------------------------------------------------------- */
@@ -132,6 +145,10 @@ export const reconcileScheduledTestsResultSchema = z.object({
   itemsPending: z.number().int().nonnegative(),
   /** Children whose write failed; they stay non-terminal and are retried next hour. */
   itemsWriteFailed: z.number().int().nonnegative(),
+  /** B0-1169 — `completed` children with no grade yet that the revisit pass re-read this time. */
+  gradeBackfillExamined: z.number().int().nonnegative().default(0),
+  /** B0-1169 — children whose `grade` was copied from `test_results.report_overall_grade` this pass. */
+  itemsGraded: z.number().int().nonnegative().default(0),
   runsUpdated: z.number().int().nonnegative(),
   runsCompleted: z.number().int().nonnegative(),
   runIds: z.array(z.string()),
@@ -143,24 +160,39 @@ export type ReconcileScheduledTestsResult = z.output<typeof reconcileScheduledTe
  * Data-access port
  * -------------------------------------------------------------------------- */
 
-/** Minimal projection of the `test_results` row a child points at. */
-export type ReconcilerTestRun = {
-  id: string;
-  status: string;
-  started_at: string | null;
-  completed_at: string | null;
-  elapsed_ms: number | null;
-};
+/**
+ * Minimal projection of the `test_results` row a child points at.
+ *
+ * A Zod contract rather than a plain type because `report_overall_grade` (B0-1169) is a stored
+ * generated column that the generated Supabase types do not carry, so the repository validates the
+ * raw PostgREST rows against this instead of trusting a widened select.
+ */
+export const reconcilerTestRunSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  elapsed_ms: z.number().nullable(),
+  /**
+   * B0-1169 — `test_results.report_overall_grade`, i.e. `report_state.overall.grade`. Null until
+   * the report sweeper has generated the run's report, which is usually AFTER the child closes.
+   */
+  report_overall_grade: z.string().nullable(),
+});
+
+export type ReconcilerTestRun = z.infer<typeof reconcilerTestRunSchema>;
 
 /**
  * B0-989 — a `test_results` row the sweep created, as needed to re-link an orphaned child. Only
  * rows with `triggered_by = 'api-client'` qualify (the repository filters), so a human's run started
  * in the same minute can never be mistaken for the sweep's.
  */
-export type ReconcilerSweepRun = ReconcilerTestRun & {
-  test_id: string;
-  created_at: string;
-};
+export const reconcilerSweepRunSchema = reconcilerTestRunSchema.extend({
+  test_id: z.string(),
+  created_at: z.string(),
+});
+
+export type ReconcilerSweepRun = z.infer<typeof reconcilerSweepRunSchema>;
 
 /** Pass/fail counts for one `test_results` row, tallied from its `test_result_items`. */
 export type ScheduledItemTally = {
@@ -184,6 +216,12 @@ export type ScheduledItemTally = {
 
 export type ScheduledTestReconcilerPort = {
   listNonTerminalItems(limit: number): Promise<ScheduledTestItem[]>;
+  /**
+   * B0-1169 — `completed` children with `grade IS NULL` whose `completed_at` is at/after
+   * `sinceIso`, oldest first. A sibling of `listNonTerminalItems` rather than a widening of it: the
+   * non-terminal pass must keep its "already reconciled is never a candidate" invariant.
+   */
+  listCompletedUngradedItems(sinceIso: string, limit: number): Promise<ScheduledTestItem[]>;
   listTestRuns(testRunIds: string[]): Promise<ReconcilerTestRun[]>;
   /** B0-989 — sweep-created runs for these tests created at/after `sinceIso`, oldest first. */
   listSweepTestRunsForTests(testIds: string[], sinceIso: string): Promise<ReconcilerSweepRun[]>;
@@ -289,11 +327,15 @@ export function resolveScheduledItemPatch(input: {
         };
       }
 
+      // B0-1169 — the grade is a straight copy of the run's report grade, never derived from the
+      // counts. The report usually does not exist yet at this point; the key is left out (not
+      // written null) so the revisit pass can fill it in later without touching anything else.
       return {
         ...counts,
         status: 'completed',
         completed_at: completedAt,
         elapsed_ms: measured ?? run.elapsed_ms,
+        ...(run.report_overall_grade !== null ? { grade: run.report_overall_grade } : {}),
       };
     }
 
@@ -403,11 +445,13 @@ export function buildScheduledRunPatch(
 
 /**
  * Fold terminal `test_results` state back onto every non-terminal `scheduled_test_items` row, then
- * recompute each touched parent.
+ * recompute each touched parent. Then (B0-1169) revisit recently `completed` children that still
+ * have no `grade` and copy the run's report grade in once the report exists.
  *
- * Idempotent: selection is on non-terminal statuses, so a child that has already been reconciled is
- * never a candidate again. A per-row write failure is counted and skipped rather than aborting the
- * whole reconciliation — the child simply stays non-terminal and is retried next hour.
+ * Idempotent: the first pass selects on non-terminal statuses, so a child that has already been
+ * reconciled is never a candidate again; the revisit selects on `grade IS NULL`, so a graded child
+ * drops out the moment it is written. A per-row write failure is counted and skipped rather than
+ * aborting the whole reconciliation — the child simply stays as it was and is retried next hour.
  */
 export async function reconcileScheduledTests(
   deps: ReconcileScheduledTestsDeps,
@@ -416,7 +460,6 @@ export async function reconcileScheduledTests(
   const options = reconcileScheduledTestsInputSchema.parse(input);
   const nowMs = deps.now();
   const reconciledAt = new Date(nowMs).toISOString();
-  const log = deps.log;
 
   const result: ReconcileScheduledTestsResult = {
     reconciledAt,
@@ -429,17 +472,48 @@ export async function reconcileScheduledTests(
     itemsTimedOut: 0,
     itemsPending: 0,
     itemsWriteFailed: 0,
+    gradeBackfillExamined: 0,
+    itemsGraded: 0,
     runsUpdated: 0,
     runsCompleted: 0,
     runIds: [],
   };
 
+  await foldTerminalState(deps, options, nowMs, result);
+  await backfillGrades(deps, options, nowMs, result);
+
+  deps.log?.('scheduled_test_reconcile_completed', {
+    items_examined: result.itemsExamined,
+    items_backfilled: result.itemsBackfilled,
+    items_completed: result.itemsCompleted,
+    items_failed: result.itemsFailed,
+    items_timed_out: result.itemsTimedOut,
+    items_pending: result.itemsPending,
+    items_write_failed: result.itemsWriteFailed,
+    grade_backfill_examined: result.gradeBackfillExamined,
+    items_graded: result.itemsGraded,
+    runs_updated: result.runsUpdated,
+    runs_completed: result.runsCompleted,
+    dry_run: result.dryRun,
+  });
+
+  return result;
+}
+
+/** The original B0-941 pass: close non-terminal children and recompute their parents. */
+async function foldTerminalState(
+  deps: ReconcileScheduledTestsDeps,
+  options: ReconcileScheduledTestsOptions,
+  nowMs: number,
+  result: ReconcileScheduledTestsResult,
+): Promise<void> {
+  const log = deps.log;
+
   const items = await deps.port.listNonTerminalItems(options.limit);
   result.itemsExamined = items.length;
 
   if (items.length === 0) {
-    log?.('scheduled_test_reconcile_completed', { items_examined: 0 });
-    return result;
+    return;
   }
 
   /**
@@ -551,11 +625,7 @@ export async function reconcileScheduledTests(
   }
 
   if (touchedParentIds.size === 0) {
-    log?.('scheduled_test_reconcile_completed', {
-      items_examined: result.itemsExamined,
-      items_pending: result.itemsPending,
-    });
-    return result;
+    return;
   }
 
   const parentIds = Array.from(touchedParentIds);
@@ -601,19 +671,67 @@ export async function reconcileScheduledTests(
       result.runsCompleted += 1;
     }
   }
+}
 
-  log?.('scheduled_test_reconcile_completed', {
-    items_examined: result.itemsExamined,
-    items_backfilled: result.itemsBackfilled,
-    items_completed: result.itemsCompleted,
-    items_failed: result.itemsFailed,
-    items_timed_out: result.itemsTimedOut,
-    items_pending: result.itemsPending,
-    items_write_failed: result.itemsWriteFailed,
-    runs_updated: result.runsUpdated,
-    runs_completed: result.runsCompleted,
-    dry_run: result.dryRun,
-  });
+/**
+ * B0-1169 — the revisit pass. Every child the first pass closes `completed` does so before its
+ * run's report exists (reports are generated by the `sweep-pending-reports` cron after the run
+ * ends), so `grade` is almost always still null on the hour the child closes. This re-reads
+ * `completed` children inside `GRADE_BACKFILL_WINDOW_MS` with no grade and copies the run's
+ * `report_overall_grade` in once it is there.
+ *
+ * Writes `grade` and nothing else: no status, no `completed_at`, no parent recompute — the parent's
+ * aggregates do not include grade, and the child's terminal state was already correct. A run whose
+ * report still has no grade is simply skipped and re-examined next hour.
+ */
+async function backfillGrades(
+  deps: ReconcileScheduledTestsDeps,
+  options: ReconcileScheduledTestsOptions,
+  nowMs: number,
+  result: ReconcileScheduledTestsResult,
+): Promise<void> {
+  const sinceIso = new Date(nowMs - GRADE_BACKFILL_WINDOW_MS).toISOString();
+  const items = await deps.port.listCompletedUngradedItems(sinceIso, options.limit);
+  result.gradeBackfillExamined = items.length;
 
-  return result;
+  const testRunIds = Array.from(
+    new Set(
+      items
+        .map((item) => item.test_run_id)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ),
+  );
+  if (testRunIds.length === 0) {
+    return;
+  }
+
+  const runs = await deps.port.listTestRuns(testRunIds);
+  const gradeByRunId = new Map(
+    runs
+      .filter((run) => run.report_overall_grade !== null)
+      .map((run) => [run.id, run.report_overall_grade as string]),
+  );
+
+  for (const item of items) {
+    const grade = item.test_run_id ? gradeByRunId.get(item.test_run_id) : undefined;
+    if (grade === undefined) {
+      continue;
+    }
+
+    if (!options.dryRun) {
+      try {
+        await deps.port.updateItem(item.id, { grade });
+      } catch (error) {
+        result.itemsWriteFailed += 1;
+        deps.log?.('scheduled_test_item_grade_backfill_failed', {
+          scheduled_test_item_id: item.id,
+          test_run_id: item.test_run_id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+    }
+
+    result.itemsGraded += 1;
+  }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  GRADE_BACKFILL_WINDOW_MS,
   SCHEDULED_ITEM_PROVIDER_FAULT_ERROR,
   SCHEDULED_ITEM_PROVIDER_FAULT_RATE_THRESHOLD,
   SCHEDULED_ITEM_STALE_AFTER_MS,
@@ -95,6 +96,7 @@ function testRun(overrides: Partial<ReconcilerTestRun> = {}): ReconcilerTestRun 
     started_at: isoAgo(10 * 60 * 1000),
     completed_at: isoAgo(4 * 60 * 1000),
     elapsed_ms: 360_000,
+    report_overall_grade: null,
     ...overrides,
   };
 }
@@ -124,10 +126,14 @@ type Recorded = {
   itemUpdates: { id: string; patch: ScheduledTestItemPatch }[];
   runUpdates: { id: string; patch: ScheduledTestRunPatch }[];
   backfillQueries: { testIds: string[]; sinceIso: string }[];
+  /** B0-1169 — every call to the revisit reader. */
+  ungradedQueries: { sinceIso: string; limit: number }[];
 };
 
 function stubPort(options: {
   items?: ScheduledTestItem[];
+  /** B0-1169 — already-`completed` children with no grade that the revisit pass should see. */
+  ungraded?: ScheduledTestItem[];
   runs?: ReconcilerTestRun[];
   sweepRuns?: ReconcilerSweepRun[];
   tallies?: ScheduledItemTally[];
@@ -136,12 +142,21 @@ function stubPort(options: {
   siblings?: ScheduledTestItem[];
   failItemIds?: Set<string>;
 }): { port: ScheduledTestReconcilerPort; recorded: Recorded } {
-  const recorded: Recorded = { itemUpdates: [], runUpdates: [], backfillQueries: [] };
+  const recorded: Recorded = {
+    itemUpdates: [],
+    runUpdates: [],
+    backfillQueries: [],
+    ungradedQueries: [],
+  };
   const items = options.items ?? [];
 
   const port: ScheduledTestReconcilerPort = {
     async listNonTerminalItems() {
       return items;
+    },
+    async listCompletedUngradedItems(sinceIso, limit) {
+      recorded.ungradedQueries.push({ sinceIso, limit });
+      return options.ungraded ?? [];
     },
     async listTestRuns(testRunIds) {
       // Backfilled ids are only known to the sweep-run list; serve those rows here too so a
@@ -683,5 +698,174 @@ describe('matchOrphanToSweepRun (B0-989)', () => {
     expect(result.itemsCompleted).toBe(1);
     expect(recorded.itemUpdates).toHaveLength(0);
     expect(recorded.runUpdates).toHaveLength(0);
+  });
+});
+
+// B0-1169 — every one of the 240 sweep-linked children had `grade = null`: nothing copied the
+// run's report grade in, and the child closes the hour its run ends, which is before the report
+// sweeper has generated `test_results.report_overall_grade` (190/190 graded children had
+// `completed_at < report_generated_at`).
+describe('grade denormalization (B0-1169)', () => {
+  describe('resolveScheduledItemPatch', () => {
+    it('copies the report grade onto a completed child when the report already exists', () => {
+      const patch = resolveScheduledItemPatch({
+        item: item(),
+        run: testRun({ status: 'completed', report_overall_grade: 'B' }),
+        tally: tally(),
+        nowMs: NOW_MS,
+        staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
+      });
+
+      expect(patch).toMatchObject({ status: 'completed', grade: 'B' });
+    });
+
+    it('leaves `grade` out of the patch (not null) when the run has no report yet', () => {
+      const patch = resolveScheduledItemPatch({
+        item: item(),
+        run: testRun({ status: 'completed', report_overall_grade: null }),
+        tally: tally(),
+        nowMs: NOW_MS,
+        staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
+      });
+
+      expect(patch?.status).toBe('completed');
+      expect(patch).not.toHaveProperty('grade');
+    });
+
+    it('never grades a provider-faulted child, even when its report carries a grade', () => {
+      const patch = resolveScheduledItemPatch({
+        item: item(),
+        run: testRun({ status: 'completed', report_overall_grade: 'F' }),
+        tally: tally({
+          items_total: 20,
+          items_passed: 0,
+          items_failed: 20,
+          items_provider_faulted: 20,
+          provider_fault_kind: 'insufficient_quota',
+        }),
+        nowMs: NOW_MS,
+        staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
+      });
+
+      expect(patch).toMatchObject({ status: 'failed', error_code: SCHEDULED_ITEM_PROVIDER_FAULT_ERROR });
+      expect(patch).not.toHaveProperty('grade');
+    });
+
+    it('never grades a child whose run failed', () => {
+      const patch = resolveScheduledItemPatch({
+        item: item(),
+        run: testRun({ status: 'failed', report_overall_grade: 'F' }),
+        tally: null,
+        nowMs: NOW_MS,
+        staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
+      });
+
+      expect(patch).toMatchObject({ status: 'failed', error_code: 'run_failed' });
+      expect(patch).not.toHaveProperty('grade');
+    });
+  });
+
+  describe('revisit pass', () => {
+    const closedUngraded = item({
+      id: 'closed',
+      status: 'completed',
+      test_run_id: 'run-closed',
+      completed_at: isoAgo(3 * 60 * 60 * 1000),
+      pass_rate: 0.9,
+      grade: null,
+    });
+
+    it('grades a previously closed child once its report exists, touching nothing else', async () => {
+      const { port, recorded } = stubPort({
+        ungraded: [closedUngraded],
+        runs: [testRun({ id: 'run-closed', status: 'completed', report_overall_grade: 'A' })],
+      });
+
+      const result = await reconcileScheduledTests(deps(port));
+
+      expect(reconcileScheduledTestsResultSchema.parse(result)).toBeTruthy();
+      expect(result.gradeBackfillExamined).toBe(1);
+      expect(result.itemsGraded).toBe(1);
+      // Exactly the grade: no status, no completed_at, nothing the parent aggregates read.
+      expect(recorded.itemUpdates).toEqual([{ id: 'closed', patch: { grade: 'A' } }]);
+      expect(recorded.runUpdates).toHaveLength(0);
+      expect(result.runIds).toEqual([]);
+      // The first pass had nothing to do and must not have double-counted the revisit.
+      expect(result.itemsExamined).toBe(0);
+      expect(result.itemsCompleted).toBe(0);
+    });
+
+    it('looks back exactly GRADE_BACKFILL_WINDOW_MS, bounded by the invocation limit', async () => {
+      const { port, recorded } = stubPort({});
+
+      await reconcileScheduledTests(deps(port), { limit: 50 });
+
+      expect(GRADE_BACKFILL_WINDOW_MS).toBe(7 * 24 * 60 * 60 * 1000);
+      expect(recorded.ungradedQueries).toEqual([
+        { sinceIso: isoAgo(GRADE_BACKFILL_WINDOW_MS), limit: 50 },
+      ]);
+    });
+
+    it('skips a child whose run still has no report and re-examines it next hour', async () => {
+      const { port, recorded } = stubPort({
+        ungraded: [closedUngraded],
+        runs: [testRun({ id: 'run-closed', status: 'completed', report_overall_grade: null })],
+      });
+
+      const result = await reconcileScheduledTests(deps(port));
+
+      expect(result.gradeBackfillExamined).toBe(1);
+      expect(result.itemsGraded).toBe(0);
+      expect(recorded.itemUpdates).toHaveLength(0);
+    });
+
+    it('runs after the non-terminal pass in the same invocation', async () => {
+      const { port, recorded } = stubPort({
+        items: [item({ id: 'open', test_run_id: 'run-open' })],
+        ungraded: [closedUngraded],
+        runs: [
+          testRun({ id: 'run-open', status: 'completed', report_overall_grade: null }),
+          testRun({ id: 'run-closed', status: 'completed', report_overall_grade: 'A' }),
+        ],
+        tallies: [tally({ test_run_id: 'run-open' })],
+      });
+
+      const result = await reconcileScheduledTests(deps(port));
+
+      expect(result.itemsCompleted).toBe(1);
+      expect(result.itemsGraded).toBe(1);
+      expect(recorded.itemUpdates.map((entry) => entry.id)).toEqual(['open', 'closed']);
+      expect(recorded.itemUpdates[0]?.patch).not.toHaveProperty('grade');
+      expect(recorded.itemUpdates[1]?.patch).toEqual({ grade: 'A' });
+      // Only the open child's parent is recomputed; the revisit never touches a parent.
+      expect(recorded.runUpdates).toHaveLength(1);
+    });
+
+    it('writes nothing on a dry run but still reports what it would grade', async () => {
+      const { port, recorded } = stubPort({
+        ungraded: [closedUngraded],
+        runs: [testRun({ id: 'run-closed', status: 'completed', report_overall_grade: 'A' })],
+      });
+
+      const result = await reconcileScheduledTests(deps(port), { dryRun: true });
+
+      expect(result.itemsGraded).toBe(1);
+      expect(recorded.itemUpdates).toHaveLength(0);
+    });
+
+    it('counts a failed grade write into itemsWriteFailed and leaves the child for next hour', async () => {
+      const { port, recorded } = stubPort({
+        ungraded: [closedUngraded],
+        runs: [testRun({ id: 'run-closed', status: 'completed', report_overall_grade: 'A' })],
+        failItemIds: new Set(['closed']),
+      });
+
+      const result = await reconcileScheduledTests(deps(port));
+
+      expect(result.itemsWriteFailed).toBe(1);
+      expect(result.itemsGraded).toBe(0);
+      expect(recorded.itemUpdates).toHaveLength(0);
+      expect(recorded.runUpdates).toHaveLength(0);
+    });
   });
 });

@@ -101,7 +101,16 @@ export const scheduledTestItemSchema = z.object({
   items_passed: z.number().nullable(),
   items_failed: z.number().nullable(),
   pass_rate: z.number().nullable(),
+  /**
+   * B0-1169 — copy of `test_results.report_overall_grade`, written by the reconciler once the
+   * run's report exists (usually a later pass than the one that closed the child). Never derived
+   * from `pass_rate`.
+   */
   grade: z.string().nullable(),
+  /**
+   * Reserved for `test_results.avg_confidence`, which has no writer today — NULL by design until
+   * it does (B0-1169). Not computed from per-item confidence here.
+   */
   confidence: z.number().nullable(),
   /** Machine-readable failure class, e.g. `dispatch_create`, `dispatch_execute`, `timed_out`. */
   error_code: z.string().nullable(),
