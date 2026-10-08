@@ -85,3 +85,48 @@ export function formatDurationMs(value: number): string {
   }
   return `${Math.round(value)}ms`;
 }
+
+/* -------------------------------------------------------------------------- *
+ * Eastern calendar helpers (B0-1166) — the nightly cron fires at 00:00 UTC, which is the
+ * PREVIOUS evening in America/New_York and a different calendar day. Anything that asks "which
+ * weekday did this sweep run on" must ask in Eastern, never from the UTC date.
+ * -------------------------------------------------------------------------- */
+
+const EASTERN_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+/** `YYYY-MM-DD` of the instant in America/New_York (EST and EDT alike). */
+export function easternDateKey(value: number | string): string {
+  const p = easternParts(value);
+  return `${getPart(p, 'year')}-${getPart(p, 'month')}-${getPart(p, 'day')}`;
+}
+
+/** Weekday of the instant in America/New_York: 0 = Sunday … 4 = Thursday … 6 = Saturday. */
+export function easternWeekday(value: number | string): number {
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+  }).format(new Date(value));
+  return EASTERN_WEEKDAYS.indexOf(weekday as (typeof EASTERN_WEEKDAYS)[number]);
+}
+
+/** `Thu Sep 24, 2026 · 8:00 PM ET` — the sweep picker / export label, in Eastern. */
+export function formatEasternSweepLabel(value: number | string): string {
+  const date = new Date(value);
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+  }).format(date);
+  // Weekday formatted separately: combined with the date Intl inserts a comma after it.
+  const day = `${weekday} ${new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(date)}`;
+  const time = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+  return `${day} · ${time} ET`;
+}

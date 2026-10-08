@@ -833,6 +833,7 @@ export type ReportRunRow = {
 
 const REPORT_RUNS_PAGE_SIZE = 500;
 const REPORT_RUN_ITEM_METRICS_PAGE_SIZE = 1000;
+const REPORT_RUN_ITEM_METRICS_ID_CHUNK = 100;
 
 /**
  * B0-687 — every run that has an eval report, across all datasets, newest run first.
@@ -853,89 +854,89 @@ const REPORT_RUN_ITEM_METRICS_PAGE_SIZE = 1000;
  * archived ones, so a golden set that was later archived stays reachable. This is a separate
  * Postgres predicate on the same join, not a post-fetch filter, for the same paging reason above.
  */
-export async function listAllReportRuns(options?: { onlyGolden?: boolean }): Promise<ReportRunRow[]> {
+/** The embedded `tests` row a report-run reader selects alongside each `test_results` row. */
+type ReportRunEmbeddedTest = { id: string; name: string; is_archived: boolean; is_golden: boolean };
+
+/** One raw `test_results` row as the report-run readers select it, before mapping to `ReportRunRow`. */
+type ReportRunRawRow = {
+  id: string;
+  test_id: string;
+  started_at: string;
+  report_generated_at: string | null;
+  report_state: unknown;
+  triggered_by: string | null;
+  run_options: unknown;
+  app_version: string | null;
+  /** Harness-computed failing-prompt count for this run (same field the "Fails" column on
+   * `/admin/tests` reads for a test's latest run — B0-585/B0-630). */
+  failed_items: number | null;
+  tests: ReportRunEmbeddedTest | ReportRunEmbeddedTest[] | null;
+};
+
+const REPORT_RUN_SELECT =
+  'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items';
+
+type ReportRunItemMetrics = {
+  ttftSum: number;
+  ttftCount: number;
+  elapsedSum: number;
+  elapsedCount: number;
+};
+
+/**
+ * Per-run TTFT/elapsed averages, straight from test_result_items — same source columns as
+ * GoldenSetMetrics, but folded across every reported run rather than only each dataset's latest.
+ */
+async function loadReportRunItemMetrics(
+  runIds: string[],
+): Promise<Map<string, ReportRunItemMetrics>> {
+  const itemMetricsByRun = new Map<string, ReportRunItemMetrics>();
+  if (runIds.length === 0) {
+    return itemMetricsByRun;
+  }
   const supabase = getSupabaseServiceRoleClient();
-  const onlyGolden = options?.onlyGolden ?? false;
-
-  type EmbeddedTest = { id: string; name: string; is_archived: boolean; is_golden: boolean };
-  type RawRow = {
-    id: string;
-    test_id: string;
-    started_at: string;
-    report_generated_at: string | null;
-    report_state: unknown;
-    triggered_by: string | null;
-    run_options: unknown;
-    app_version: string | null;
-    /** Harness-computed failing-prompt count for this run (same field the "Fails" column on
-     * `/admin/tests` reads for a test's latest run — B0-585/B0-630). */
-    failed_items: number | null;
-    tests: EmbeddedTest | EmbeddedTest[] | null;
-  };
-
-  // Paged rather than a bare select so a growing history can never be silently truncated at
-  // PostgREST's 1000-row cap (there are ~40 reported runs today).
-  //
-  // B0-1103 — scoped by `onlyMetricEligibleRuns`: a `partial` run's report must never appear in
-  // this index or in the score/fail/metric trend charts folded from it.
-  const rows = await fetchAllPages<RawRow>(REPORT_RUNS_PAGE_SIZE, async (from, to) => {
-    let query = onlyMetricEligibleRuns(
-      supabase
-        .from('test_results')
-        .select(
-          'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived, is_golden)',
-        ),
-    ).not('report_state', 'is', null);
-
-    query = onlyGolden ? query.eq('tests.is_golden', true) : query.eq('tests.is_archived', false);
-
-    const result = await query.order('started_at', { ascending: false }).range(from, to);
-
-    return (assertNoError(result) || []) as unknown as RawRow[];
-  });
-
-  // Per-run TTFT/elapsed averages, straight from test_result_items — same source columns as
-  // GoldenSetMetrics, but folded across every reported run rather than only each dataset's latest.
-  const runIds = rows.map((row) => row.id);
-  const itemMetricsByRun = new Map<
-    string,
-    { ttftSum: number; ttftCount: number; elapsedSum: number; elapsedCount: number }
-  >();
-  if (runIds.length > 0) {
-    const itemMetrics = await fetchAllPages<{
-      test_result_id: string;
-      ttft_ms: number | null;
-      elapsed_ms: number | null;
-    }>(REPORT_RUN_ITEM_METRICS_PAGE_SIZE, async (from, to) => {
-      const result = await supabase
-        .from('test_result_items')
-        .select('test_result_id, ttft_ms, elapsed_ms')
-        .in('test_result_id', runIds)
-        .range(from, to);
-      return (assertNoError(result) || []) as unknown as Array<{
-        test_result_id: string;
-        ttft_ms: number | null;
-        elapsed_ms: number | null;
-      }>;
-    });
-
-    for (const item of itemMetrics) {
-      let bucket = itemMetricsByRun.get(item.test_result_id);
-      if (!bucket) {
-        bucket = { ttftSum: 0, ttftCount: 0, elapsedSum: 0, elapsedCount: 0 };
-        itemMetricsByRun.set(item.test_result_id, bucket);
-      }
-      if (typeof item.ttft_ms === 'number') {
-        bucket.ttftSum += item.ttft_ms;
-        bucket.ttftCount += 1;
-      }
-      if (typeof item.elapsed_ms === 'number') {
-        bucket.elapsedSum += item.elapsed_ms;
-        bucket.elapsedCount += 1;
-      }
-    }
+  type ItemMetricRow = { test_result_id: string; ttft_ms: number | null; elapsed_ms: number | null };
+  // The ids ride in the query string, and PostgREST rejects the request outright past roughly
+  // 400 uuids (the golden-incl-archived index tripped it with 405). Chunk the IN list; each
+  // chunk is still paged so no run's items can be truncated.
+  const itemMetrics: ItemMetricRow[] = [];
+  for (let start = 0; start < runIds.length; start += REPORT_RUN_ITEM_METRICS_ID_CHUNK) {
+    const chunk = runIds.slice(start, start + REPORT_RUN_ITEM_METRICS_ID_CHUNK);
+    itemMetrics.push(
+      ...(await fetchAllPages<ItemMetricRow>(REPORT_RUN_ITEM_METRICS_PAGE_SIZE, async (from, to) => {
+        const result = await supabase
+          .from('test_result_items')
+          .select('test_result_id, ttft_ms, elapsed_ms')
+          .in('test_result_id', chunk)
+          .range(from, to);
+        return (assertNoError(result) || []) as unknown as ItemMetricRow[];
+      })),
+    );
   }
 
+  for (const item of itemMetrics) {
+    let bucket = itemMetricsByRun.get(item.test_result_id);
+    if (!bucket) {
+      bucket = { ttftSum: 0, ttftCount: 0, elapsedSum: 0, elapsedCount: 0 };
+      itemMetricsByRun.set(item.test_result_id, bucket);
+    }
+    if (typeof item.ttft_ms === 'number') {
+      bucket.ttftSum += item.ttft_ms;
+      bucket.ttftCount += 1;
+    }
+    if (typeof item.elapsed_ms === 'number') {
+      bucket.elapsedSum += item.elapsed_ms;
+      bucket.elapsedCount += 1;
+    }
+  }
+  return itemMetricsByRun;
+}
+
+/** Raw rows → `ReportRunRow`, preserving input order. Score/grade only once the report completed. */
+function mapReportRunRows(
+  rows: ReportRunRawRow[],
+  itemMetricsByRun: Map<string, ReportRunItemMetrics>,
+): ReportRunRow[] {
   return rows.map((row) => {
     const test = Array.isArray(row.tests) ? row.tests[0] : row.tests;
     const state = parseReportState(row.report_state);
@@ -972,6 +973,93 @@ export async function listAllReportRuns(options?: { onlyGolden?: boolean }): Pro
       reportState: state ?? null,
     };
   });
+}
+
+/**
+ * B0-687 — every run that has an eval report, across all datasets, newest run first.
+ *
+ * Reports were previously reachable only by drilling into one dataset at a time. The filter is
+ * "has a `report_state`" rather than "has a `report_generated_at`" on purpose: a report that is
+ * still scoring or that failed is exactly the one an admin needs to find, and dropping those rows
+ * would hide them entirely. Score/grade come from the persisted `report_state.overall` (B0-609),
+ * never recomputed from per-item data, so this page and `/admin/tests/[testId]` can't disagree.
+ *
+ * B0-688 — archived datasets are EXCLUDED by default: an archived test set disappears from this
+ * index the same way it disappears from `/admin/tests`. The filter rides on the existing
+ * `tests!inner` embed, so it is a join predicate applied in Postgres rather than a post-fetch
+ * filter in JS — which also keeps the paging honest (a client-side filter would make each page's
+ * row count mean something different from the rows returned).
+ *
+ * B0-1096 — `options.onlyGolden` switches to the opposite mode: golden test sets only, INCLUDING
+ * archived ones, so a golden set that was later archived stays reachable. This is a separate
+ * Postgres predicate on the same join, not a post-fetch filter, for the same paging reason above.
+ */
+export async function listAllReportRuns(options?: { onlyGolden?: boolean }): Promise<ReportRunRow[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const onlyGolden = options?.onlyGolden ?? false;
+
+  // Paged rather than a bare select so a growing history can never be silently truncated at
+  // PostgREST's 1000-row cap (there are ~40 reported runs today).
+  //
+  // B0-1103 — scoped by `onlyMetricEligibleRuns`: a `partial` run's report must never appear in
+  // this index or in the score/fail/metric trend charts folded from it.
+  const rows = await fetchAllPages<ReportRunRawRow>(REPORT_RUNS_PAGE_SIZE, async (from, to) => {
+    let query = onlyMetricEligibleRuns(
+      supabase
+        .from('test_results')
+        .select(`${REPORT_RUN_SELECT}, tests!inner(id, name, is_archived, is_golden)`),
+    ).not('report_state', 'is', null);
+
+    query = onlyGolden ? query.eq('tests.is_golden', true) : query.eq('tests.is_archived', false);
+
+    const result = await query.order('started_at', { ascending: false }).range(from, to);
+
+    return (assertNoError(result) || []) as unknown as ReportRunRawRow[];
+  });
+
+  const itemMetricsByRun = await loadReportRunItemMetrics(rows.map((row) => row.id));
+  return mapReportRunRows(rows, itemMetricsByRun);
+}
+
+/**
+ * B0-1166 — the same `ReportRunRow` mapping as `listAllReportRuns`, for an explicit set of run
+ * ids (the Thursday scorecard's sweep children). Differences, both deliberate:
+ * - NO `tests.is_archived` filter and a LEFT embed on `tests`: the sweep's children are the
+ *   roster of record for that night, and the 2026-09-27 golden reseed archived the sets the
+ *   earlier Thursdays ran against. A row must still come back for an archived (or deleted) set.
+ * - NO `report_state IS NOT NULL` filter: a child whose run was created but never graded still
+ *   has a model tag, version and timings worth showing; its `reportStatus` is simply `null`.
+ * Still scoped by `onlyMetricEligibleRuns` (B0-1103/B0-1105) — a partial run never feeds a metric.
+ * Callers pass a handful of ids (one per sweep child), so a single page suffices.
+ */
+export async function listReportRunRowsByIds(runIds: string[]): Promise<ReportRunRow[]> {
+  if (runIds.length === 0) {
+    return [];
+  }
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await onlyMetricEligibleRuns(
+    supabase
+      .from('test_results')
+      .select(`${REPORT_RUN_SELECT}, tests(id, name, is_archived, is_golden)`),
+  )
+    .in('id', runIds)
+    .order('started_at', { ascending: false });
+  const rows = (assertNoError(result) || []) as unknown as ReportRunRawRow[];
+
+  const itemMetricsByRun = await loadReportRunItemMetrics(rows.map((row) => row.id));
+  return mapReportRunRows(rows, itemMetricsByRun);
+}
+
+/** B0-1166 — `tests.intended_agent` for a set of ids; the scorecard's agent-label source. */
+export async function listTestAgentsByIds(
+  testIds: string[],
+): Promise<{ id: string; intended_agent: string | null }[]> {
+  if (testIds.length === 0) {
+    return [];
+  }
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase.from('tests').select('id, intended_agent').in('id', testIds);
+  return (assertNoError(result) || []) as { id: string; intended_agent: string | null }[];
 }
 
 const RESULT_ITEMS_PAGE_SIZE = 500;

@@ -109,6 +109,7 @@ import { getGoldenSetTrendForWindow } from './golden-set-trend';
 import {
   getPreviousCompletedTestResult,
   listAllReportRuns,
+  listReportRunRowsByIds,
   listSearchResultsByTestId,
   listTestResultsByTestId,
   listTests,
@@ -182,6 +183,11 @@ describe('metric readers apply the run_mode chokepoint (B0-1105 / B0-1103)', () 
 
   it('listAllReportRuns keeps the predicate under the only-golden toggle', async () => {
     await listAllReportRuns({ onlyGolden: true });
+    expectEveryMetricQueryScoped(1);
+  });
+
+  it('listReportRunRowsByIds (Thursday scorecard rows, B0-1166) is scoped', async () => {
+    await listReportRunRowsByIds([CURRENT_RUN_ID]);
     expectEveryMetricQueryScoped(1);
   });
 

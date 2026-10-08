@@ -25,7 +25,7 @@ import type { ReportRunRow } from '~/lib/tests/repository';
 /** Real minus sign (U+2212) — renders as a proper minus next to `+` rather than a hyphen. */
 const MINUS = '−';
 
-function roundToTenth(value: number): number {
+export function roundToTenth(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
