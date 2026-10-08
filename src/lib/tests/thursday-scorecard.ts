@@ -7,6 +7,7 @@ import {
   type ScheduledTestItem,
   type ScheduledTestRunWithItems,
 } from '~/lib/observability/scheduled-test-types';
+import { listGoldenTests } from '~/lib/tests/golden-set';
 import { loadReportData } from '~/lib/tests/report/assemble';
 import {
   calculateConceptPercentage,
@@ -577,6 +578,12 @@ export type BuildThursdayScorecardHistoryInput = {
   reportRowsByRunId: Map<string, ReportRunRow>;
   /** `tests.intended_agent` keyed by `test_id`; a missing key reads as `null`. */
   intendedAgentByTestId: Map<string, string | null>;
+  /**
+   * Golden, non-archived `tests.id`s. When given, only those sets become cells/columns and a
+   * Thursday with none of them is dropped — archived pre-reseed sets would otherwise add their own
+   * columns (retired `floor` id) or fold into an active set's column under a different dataset.
+   */
+  activeGoldenTestIds?: ReadonlySet<string>;
 };
 
 /**
@@ -589,18 +596,20 @@ export type BuildThursdayScorecardHistoryInput = {
 export function buildThursdayScorecardHistory(
   input: BuildThursdayScorecardHistoryInput,
 ): ThursdayScorecardHistory {
-  const { sweeps, reportRowsByRunId, intendedAgentByTestId } = input;
+  const { sweeps, reportRowsByRunId, intendedAgentByTestId, activeGoldenTestIds } = input;
   const columns = new Map<string, string>();
 
-  const rows: ThursdayScorecardHistoryRow[] = sweeps.map((sweep, index) => {
+  const rows: ThursdayScorecardHistoryRow[] = sweeps.flatMap((sweep, index) => {
     const previousSweep = sweeps[index + 1] ?? null;
-    const cells: ThursdayScorecardHistoryCell[] = foldSweepChildren({
+    const folds = foldSweepChildren({
       sweep,
       previousSweep,
       reportRowsByRunId,
       previousReportRowsByRunId: reportRowsByRunId,
       intendedAgentByTestId,
-    }).map((folded) => {
+    }).filter((folded) => !activeGoldenTestIds || activeGoldenTestIds.has(folded.item.test_id));
+    if (activeGoldenTestIds && folds.length === 0) return [];
+    const cells: ThursdayScorecardHistoryCell[] = folds.map((folded) => {
       const agentKey = isRegistryAgentId(folded.intendedAgent)
         ? folded.intendedAgent
         : folded.item.test_name;
@@ -618,12 +627,14 @@ export function buildThursdayScorecardHistory(
         change: folded.change,
       };
     });
-    return {
-      sweep: toScorecardSweep(sweep),
-      previousSweep: toPreviousSweepRef(previousSweep),
-      scoredCount: cells.filter((cell) => cell.score !== null).length,
-      cells,
-    };
+    return [
+      {
+        sweep: toScorecardSweep(sweep),
+        previousSweep: toPreviousSweepRef(previousSweep),
+        scoredCount: cells.filter((cell) => cell.score !== null).length,
+        cells,
+      },
+    ];
   });
 
   return thursdayScorecardHistorySchema.parse({
@@ -775,14 +786,16 @@ export async function loadThursdayScorecardHistory(): Promise<ThursdayScorecardH
   });
   const sweeps = selectThursdayNightSweeps(runs);
 
-  const [reportRows, testAgents] = await Promise.all([
+  const [reportRows, testAgents, activeGolden] = await Promise.all([
     listReportRunRowsByIds(childRunIds(sweeps)),
     listTestAgentsByIds(childTestIds(sweeps)),
+    listGoldenTests({ includeArchived: false }),
   ]);
 
   return buildThursdayScorecardHistory({
     sweeps,
     reportRowsByRunId: new Map(reportRows.map((row) => [row.runId, row])),
     intendedAgentByTestId: new Map(testAgents.map((test) => [test.id, test.intended_agent])),
+    activeGoldenTestIds: new Set(activeGolden.map((test) => test.id)),
   });
 }

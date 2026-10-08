@@ -1183,6 +1183,20 @@ describe('buildThursdayScorecardHistory', () => {
     ]);
   });
 
+  it('keeps only active golden sets when given, dropping a Thursday that ran none of them', () => {
+    const active = buildThursdayScorecardHistory({
+      sweeps: [newest, middle, oldest],
+      reportRowsByRunId,
+      intendedAgentByTestId,
+      activeGoldenTestIds: new Set(['cur-product', 'cur-dilution']),
+    });
+    expect(thursdayScorecardHistorySchema.safeParse(active).success).toBe(true);
+    expect(active.rows.map((row) => row.sweep.id)).toEqual(['thu-1001', 'thu-0924']);
+    expect(active.rows[0].cells.map((cell) => cell.testId)).toEqual(['cur-product', 'cur-dilution']);
+    expect(active.rows.map((row) => row.scoredCount)).toEqual([2, 1]);
+    expect(active.agentColumns.map((column) => column.key)).toEqual(['product', 'dilution']);
+  });
+
   it('is empty, and still valid, with no sweeps', () => {
     const empty = buildThursdayScorecardHistory({
       sweeps: [],
