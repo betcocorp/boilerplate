@@ -2,6 +2,7 @@ import { XIcon } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { GoldenReportScoreTrendChart } from '~/components/admin/dashboard/GoldenReportScoreTrendChart';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { DeleteTestReportDialog } from '~/components/admin/tests/DeleteTestReportDialog';
 import { ReportChangeCell } from '~/components/admin/tests/ReportChangeCell';
@@ -26,7 +27,6 @@ import {
 import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrendChart';
 import { ThursdayScorecardExports } from '~/components/admin/tests/ThursdayScorecardExports';
 import { ThursdayScorecardSection } from '~/components/admin/tests/ThursdayScorecardSection';
-import { GoldenReportScoreTrendChart } from '~/components/admin/dashboard/GoldenReportScoreTrendChart';
 import { Button } from '~/components/ui/button';
 import { Separator } from '~/components/ui/separator';
 import {
@@ -38,8 +38,8 @@ import {
 } from '~/components/ui/table';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
-import { buildReportFailTrend } from '~/lib/tests/report-fail-trend';
 import { getGoldenReportScoreTrendForWindow } from '~/lib/tests/golden-report-score-trend';
+import { buildReportFailTrend } from '~/lib/tests/report-fail-trend';
 import { buildReportMetricTrend } from '~/lib/tests/report-metric-trend';
 import {
   calculateConceptPercentage,
@@ -213,10 +213,14 @@ export default async function AdminTestReportsPage({
   // golden-only, cross-dataset aggregate on the page, matching `ReportScoreTrendPanel` on
   // Mission Control (`~/lib/tests/golden-report-score-trend.ts`).
   const goldenTrendTo = new Date();
-  const goldenTrendFrom = new Date(goldenTrendTo.getTime() - 29 * 24 * 60 * 60 * 1000);
+  const goldenTrendFrom = new Date(
+    goldenTrendTo.getTime() - 29 * 24 * 60 * 60 * 1000,
+  );
   // B0-1164 — the Thursday scorecard; an unknown/malformed `scorecardSweep` degrades to the
   // newest Thursday-night sweep inside the loader.
-  const scorecardSweepParam = readSearchParam(params[SCORECARD_SWEEP_PARAM]).trim();
+  const scorecardSweepParam = readSearchParam(
+    params[SCORECARD_SWEEP_PARAM],
+  ).trim();
   const [goldenTrend, scorecard] = await Promise.all([
     getGoldenReportScoreTrendForWindow({
       window: {
@@ -246,19 +250,27 @@ export default async function AdminTestReportsPage({
               <h1 className="mt-2 text-4xl font-semibold tracking-tight text-slate-950">
                 Every generated eval report
               </h1>
-              <p className="mt-4 max-w-4xl text-base leading-7 text-slate-600">
-                Each LLM-graded report from every run of an active test set,
-                newest first, so scores can be compared across datasets without
-                opening one test set at a time, charted over time with each
-                run&rsquo;s change from that dataset&rsquo;s previous scored
-                run. Archiving a dataset removes its reports from this list.
-              </p>
             </div>
             <Button asChild variant="outline">
               <Link href="/admin/tests">Back to test runner</Link>
             </Button>
           </div>
         </section>
+
+        <ThursdayScorecardSection
+          data={scorecard}
+          exportsSlot={
+            <ThursdayScorecardExports
+              captureTargetId="thursday-scorecard-capture"
+              hasRows={(scorecard.snapshot?.agents.length ?? 0) > 0}
+              sweepId={scorecard.snapshot?.sweep.id ?? null}
+              sweepTriggeredAt={
+                scorecard.snapshot?.sweep.sweepTriggeredAt ?? null
+              }
+            />
+          }
+          selectedSweepId={scorecard.snapshot?.sweep.id ?? null}
+        />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-3 overflow-x-auto">
@@ -345,106 +357,110 @@ export default async function AdminTestReportsPage({
                       ? calculateConceptPercentage(row.reportState)
                       : null;
                     return (
-                    <TableRow key={row.runId}>
-                      <TableCell className="whitespace-nowrap text-slate-600">
-                        {index + 1}
-                      </TableCell>
-                      <TableCell className="max-w-[280px] truncate font-medium">
-                        <Link
-                          className="text-sky-700 underline-offset-2 hover:underline"
-                          href={`/admin/tests/${row.testId}/runs/${row.runId}`}
-                          title={row.testName}
+                      <TableRow key={row.runId}>
+                        <TableCell className="whitespace-nowrap text-slate-600">
+                          {index + 1}
+                        </TableCell>
+                        <TableCell className="max-w-[280px] truncate font-medium">
+                          <Link
+                            className="text-sky-700 underline-offset-2 hover:underline"
+                            href={`/admin/tests/${row.testId}/runs/${row.runId}`}
+                            title={row.testName}
+                          >
+                            {truncateLabel(row.testName)}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-slate-600">
+                          {formatDate(row.startedAt)}
+                        </TableCell>
+                        <TableCell
+                          className="whitespace-nowrap tabular-nums text-slate-700"
+                          title={
+                            row.reportGeneratedAt
+                              ? `Report generated ${formatDate(row.reportGeneratedAt)}`
+                              : 'This report has not finished generating'
+                          }
                         >
-                          {truncateLabel(row.testName)}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-slate-600">
-                        {formatDate(row.startedAt)}
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap tabular-nums text-slate-700"
-                        title={
-                          row.reportGeneratedAt
-                            ? `Report generated ${formatDate(row.reportGeneratedAt)}`
-                            : 'This report has not finished generating'
-                        }
-                      >
-                        {describeReportScore(row)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <ReportChangeCell
-                          change={trend.changeByRunId.get(row.runId)}
-                          score={row.score}
-                        />
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap tabular-nums text-slate-700"
-                        title={
-                          row.failCount === null
-                            ? 'Not recorded for this run'
-                            : `${row.failCount} failing prompt${row.failCount === 1 ? '' : 's'} in this run`
-                        }
-                      >
-                        {row.failCount ?? '—'}
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap tabular-nums text-slate-700"
-                        title={
-                          conceptPercentage !== null
-                            ? 'Percentage of mandatory concepts satisfied'
-                            : 'No report data available'
-                        }
-                      >
-                        {conceptPercentage !== null ? conceptPercentage + '%' : '—'}
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap tabular-nums text-slate-600"
-                        title="Average TTFT / average elapsed time across this run's items"
-                      >
-                        {row.averageTtftMs === null
-                          ? '—'
-                          : formatDurationMs(row.averageTtftMs)}
-                        {' / '}
-                        {row.averageElapsedMs === null
-                          ? '—'
-                          : formatDurationMs(row.averageElapsedMs)}
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap text-slate-600"
-                        title={row.modelTag ?? 'Not recorded for this run'}
-                      >
-                        {row.modelTag ?? '—'}
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap text-slate-600"
-                        title={row.appVersion ?? 'Not recorded for this run'}
-                      >
-                        {row.appVersion ?? '—'}
-                      </TableCell>
-                      <TableCell
-                        className="max-w-[220px] truncate text-slate-600"
-                        title={row.triggeredBy ?? 'Not recorded for this run'}
-                      >
-                        {row.triggeredBy ? truncateLabel(row.triggeredBy) : '—'}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Button asChild size="sm" variant="outline">
-                            <Link
-                              href={`/admin/tests/${row.testId}/runs/${row.runId}/report`}
-                            >
-                              View report
-                            </Link>
-                          </Button>
-                          <DeleteTestReportDialog
-                            returnPath="/admin/tests/reports"
-                            runId={row.runId}
-                            testId={row.testId}
-                            testName={row.testName}
+                          {describeReportScore(row)}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          <ReportChangeCell
+                            change={trend.changeByRunId.get(row.runId)}
+                            score={row.score}
                           />
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                        </TableCell>
+                        <TableCell
+                          className="whitespace-nowrap tabular-nums text-slate-700"
+                          title={
+                            row.failCount === null
+                              ? 'Not recorded for this run'
+                              : `${row.failCount} failing prompt${row.failCount === 1 ? '' : 's'} in this run`
+                          }
+                        >
+                          {row.failCount ?? '—'}
+                        </TableCell>
+                        <TableCell
+                          className="whitespace-nowrap tabular-nums text-slate-700"
+                          title={
+                            conceptPercentage !== null
+                              ? 'Percentage of mandatory concepts satisfied'
+                              : 'No report data available'
+                          }
+                        >
+                          {conceptPercentage !== null
+                            ? conceptPercentage + '%'
+                            : '—'}
+                        </TableCell>
+                        <TableCell
+                          className="whitespace-nowrap tabular-nums text-slate-600"
+                          title="Average TTFT / average elapsed time across this run's items"
+                        >
+                          {row.averageTtftMs === null
+                            ? '—'
+                            : formatDurationMs(row.averageTtftMs)}
+                          {' / '}
+                          {row.averageElapsedMs === null
+                            ? '—'
+                            : formatDurationMs(row.averageElapsedMs)}
+                        </TableCell>
+                        <TableCell
+                          className="whitespace-nowrap text-slate-600"
+                          title={row.modelTag ?? 'Not recorded for this run'}
+                        >
+                          {row.modelTag ?? '—'}
+                        </TableCell>
+                        <TableCell
+                          className="whitespace-nowrap text-slate-600"
+                          title={row.appVersion ?? 'Not recorded for this run'}
+                        >
+                          {row.appVersion ?? '—'}
+                        </TableCell>
+                        <TableCell
+                          className="max-w-[220px] truncate text-slate-600"
+                          title={row.triggeredBy ?? 'Not recorded for this run'}
+                        >
+                          {row.triggeredBy
+                            ? truncateLabel(row.triggeredBy)
+                            : '—'}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <Button asChild size="sm" variant="outline">
+                              <Link
+                                href={`/admin/tests/${row.testId}/runs/${row.runId}/report`}
+                              >
+                                View report
+                              </Link>
+                            </Button>
+                            <DeleteTestReportDialog
+                              returnPath="/admin/tests/reports"
+                              runId={row.runId}
+                              testId={row.testId}
+                              testName={row.testName}
+                            />
+                          </div>
+                        </TableCell>
+                      </TableRow>
                     );
                   })
                 )}
@@ -452,19 +468,6 @@ export default async function AdminTestReportsPage({
             </table>
           </div>
         </section>
-
-        <ThursdayScorecardSection
-          data={scorecard}
-          exportsSlot={
-            <ThursdayScorecardExports
-              captureTargetId="thursday-scorecard-capture"
-              hasRows={(scorecard.snapshot?.agents.length ?? 0) > 0}
-              sweepId={scorecard.snapshot?.sweep.id ?? null}
-              sweepTriggeredAt={scorecard.snapshot?.sweep.sweepTriggeredAt ?? null}
-            />
-          }
-          selectedSweepId={scorecard.snapshot?.sweep.id ?? null}
-        />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">
@@ -475,9 +478,9 @@ export default async function AdminTestReportsPage({
             <code className="rounded bg-slate-100 px-1 py-0.5 text-[11px]">
               report_state.overall.avg
             </code>{' '}
-            across every active golden test set&rsquo;s completed runs that
-            day, over the last 30 days. Days with no scored golden run are
-            empty slots, not a zero score.
+            across every active golden test set&rsquo;s completed runs that day,
+            over the last 30 days. Days with no scored golden run are empty
+            slots, not a zero score.
           </p>
           <div className="mt-5">
             <GoldenReportScoreTrendChart points={goldenTrend.points} />

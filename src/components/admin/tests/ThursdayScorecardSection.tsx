@@ -1,4 +1,4 @@
-import { TriangleAlert } from 'lucide-react';
+import { ArrowRight, TriangleAlert } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -51,7 +51,10 @@ const SUPPORTING_CELL_CLASS = 'whitespace-nowrap tabular-nums text-slate-600';
 const CONTENT_DOWN_SPEED_UP_TITLE =
   'Content quality declined while speed improved — this agent is answering faster and less well';
 
-const LEDGER_STATUS_WORDS: Record<ThursdayScorecardAgentRow['ledgerStatus'], string> = {
+const LEDGER_STATUS_WORDS: Record<
+  ThursdayScorecardAgentRow['ledgerStatus'],
+  string
+> = {
   queued: 'queued',
   claimed: 'claimed',
   running: 'running',
@@ -64,7 +67,9 @@ const LEDGER_STATUS_WORDS: Record<ThursdayScorecardAgentRow['ledgerStatus'], str
 function describeScoreTitle(row: ThursdayScorecardAgentRow): string {
   const ledger = `Sweep child ${LEDGER_STATUS_WORDS[row.ledgerStatus]}`;
   const report =
-    row.reportStatus === null ? 'no report state recorded' : `report ${row.reportStatus}`;
+    row.reportStatus === null
+      ? 'no report state recorded'
+      : `report ${row.reportStatus}`;
   return `${ledger} · ${report}`;
 }
 
@@ -86,7 +91,9 @@ export function ThursdayScorecardSection({
   historyHref?: string | null;
 }) {
   const { snapshot } = data;
-  const sweepLabel = snapshot ? formatEasternSweepLabel(snapshot.sweep.sweepTriggeredAt) : null;
+  const sweepLabel = snapshot
+    ? formatEasternSweepLabel(snapshot.sweep.sweepTriggeredAt)
+    : null;
   const previousLabel = snapshot?.previousSweep
     ? formatEasternSweepLabel(snapshot.previousSweep.sweepTriggeredAt)
     : null;
@@ -95,7 +102,9 @@ export function ThursdayScorecardSection({
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3 overflow-x-auto">
         <div className="flex shrink-0 gap-2 items-center">
-          <h2 className="text-lg font-semibold text-slate-900">Thursday scorecard</h2>
+          <h2 className="text-lg font-semibold text-slate-900">
+            Thursday scorecard
+          </h2>
           <span className="text-sm text-slate-600">
             {snapshot
               ? `${snapshot.agents.length} agent${snapshot.agents.length === 1 ? '' : 's'}`
@@ -125,12 +134,11 @@ export function ThursdayScorecardSection({
           <table className="w-full min-w-[1100px] caption-bottom text-sm">
             <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226,232,240)] [&_tr]:border-b-0">
               <TableRow>
-                <TableHead title="Row number — the ledger's dispatch order for this sweep">#</TableHead>
+                <TableHead title="Row number — the ledger's dispatch order for this sweep">
+                  #
+                </TableHead>
                 <TableHead title="Golden agent (registry label for the dataset's intended agent; dataset name when the agent id is retired)">
                   Agent
-                </TableHead>
-                <TableHead title="When the Thursday-night sweep was triggered, in Eastern time">
-                  Date run
                 </TableHead>
                 <TableHead title="Overall score/grade from the auto-generated eval report (B0-609) — the same value the Reports table shows for this run">
                   Score
@@ -147,8 +155,12 @@ export function ThursdayScorecardSection({
                 <TableHead title="Average time-to-first-token / average elapsed time across this run's items">
                   TTFT/ELAP
                 </TableHead>
-                <TableHead title="LLM model used in this run (B0-733)">Model</TableHead>
-                <TableHead title="App version at run time (B0-733)">Version</TableHead>
+                <TableHead title="LLM model used in this run (B0-733)">
+                  Model
+                </TableHead>
+                <TableHead title="App version at run time (B0-733)">
+                  Version
+                </TableHead>
                 <TableHead
                   className={SUPPORTING_HEAD_CLASS}
                   title="Speed Performance Score and rating from the run's report (metrics.speed.avgScore / rating) — reported beside the grade, never part of it"
@@ -229,9 +241,6 @@ export function ThursdayScorecardSection({
                           />
                         ) : null}
                       </TableCell>
-                      <TableCell className="whitespace-nowrap text-slate-600">
-                        {sweepLabel}
-                      </TableCell>
                       <TableCell
                         className="whitespace-nowrap tabular-nums text-slate-700"
                         title={describeScoreTitle(row)}
@@ -295,13 +304,17 @@ export function ThursdayScorecardSection({
                             : 'No report data available'
                         }
                       >
-                        {row.conceptPercent !== null ? row.conceptPercent + '%' : '—'}
+                        {row.conceptPercent !== null
+                          ? row.conceptPercent + '%'
+                          : '—'}
                       </TableCell>
                       <TableCell
                         className="whitespace-nowrap tabular-nums text-slate-600"
                         title="Average TTFT / average elapsed time across this run's items"
                       >
-                        {row.averageTtftMs === null ? '—' : formatDurationMs(row.averageTtftMs)}
+                        {row.averageTtftMs === null
+                          ? '—'
+                          : formatDurationMs(row.averageTtftMs)}
                         {' / '}
                         {row.averageElapsedMs === null
                           ? '—'
@@ -322,14 +335,16 @@ export function ThursdayScorecardSection({
                       <TableCell
                         className={`border-l border-slate-200 ${SUPPORTING_CELL_CLASS}`}
                         title={
-                          row.supporting?.speedScore !== null && row.supporting?.speedScore !== undefined
+                          row.supporting?.speedScore !== null &&
+                          row.supporting?.speedScore !== undefined
                             ? 'Speed Performance Score · rating, as the report states them'
                             : 'No completed report — no speed readout'
                         }
                       >
                         <span className="flex flex-col items-start">
                           <span className="inline-flex items-center gap-1">
-                            {row.supporting?.speedScore !== null && row.supporting?.speedScore !== undefined
+                            {row.supporting?.speedScore !== null &&
+                            row.supporting?.speedScore !== undefined
                               ? `${row.supporting.speedScore} · ${row.supporting.speedRating ?? '—'}`
                               : '—'}
                             {row.flags.includes('content_down_speed_up') ? (
@@ -339,7 +354,10 @@ export function ThursdayScorecardSection({
                                 role="img"
                                 title={CONTENT_DOWN_SPEED_UP_TITLE}
                               >
-                                <TriangleAlert aria-hidden className="size-3.5 text-amber-600" />
+                                <TriangleAlert
+                                  aria-hidden
+                                  className="size-3.5 text-amber-600"
+                                />
                               </span>
                             ) : null}
                           </span>
@@ -355,7 +373,8 @@ export function ThursdayScorecardSection({
                         className={SUPPORTING_CELL_CLASS}
                         title="Average time to first token across the report's evaluated cases"
                       >
-                        {row.supporting?.avgTtftSeconds !== null && row.supporting?.avgTtftSeconds !== undefined
+                        {row.supporting?.avgTtftSeconds !== null &&
+                        row.supporting?.avgTtftSeconds !== undefined
                           ? `${row.supporting.avgTtftSeconds}s`
                           : '—'}
                       </TableCell>
@@ -374,14 +393,16 @@ export function ThursdayScorecardSection({
                       <TableCell
                         className={SUPPORTING_CELL_CLASS}
                         title={
-                          row.supporting?.passMark !== null && row.supporting?.passMark !== undefined
+                          row.supporting?.passMark !== null &&
+                          row.supporting?.passMark !== undefined
                             ? `Cases at or above the pass mark of ${row.supporting.passMark}`
                             : 'No completed report — no pass rate'
                         }
                       >
                         <span className="flex flex-col items-start">
                           <span>
-                            {row.supporting?.passRate !== null && row.supporting?.passRate !== undefined
+                            {row.supporting?.passRate !== null &&
+                            row.supporting?.passRate !== undefined
                               ? `${row.supporting.passRate}%`
                               : '—'}
                           </span>
@@ -397,8 +418,10 @@ export function ThursdayScorecardSection({
                       <TableCell>
                         {row.runId && row.reportStatus === 'completed' ? (
                           <Button asChild size="sm" variant="outline">
-                            <Link href={`/admin/tests/${row.testId}/runs/${row.runId}/report`}>
-                              View report
+                            <Link
+                              href={`/admin/tests/${row.testId}/runs/${row.runId}/report`}
+                            >
+                              View
                             </Link>
                           </Button>
                         ) : (
@@ -421,9 +444,31 @@ export function ThursdayScorecardSection({
             </TableBody>
           </table>
         </div>
-        {snapshot ? (
-          <ThursdayScorecardCards historyHref={historyHref} snapshot={snapshot} />
-        ) : null}
+
+        <p className="mt-4 border-t border-slate-200 pt-3 text-xs italic text-slate-500">
+          Grade, score (out of 100) and failed prompts are the content result;
+          pass rate is the share of prompts at or above the pass mark. Speed
+          score, average time to first token, similarity and evaluator
+          confidence are independent supporting metrics — none contributes to
+          the grade or the score. — means the source evaluation did not report
+          that metric; it is never read as zero.
+        </p>
+
+        {snapshot ? <ThursdayScorecardCards snapshot={snapshot} /> : null}
+
+        <p className="mt-4 border-t border-slate-200 pt-3 text-xs italic text-slate-500">
+          This report card summarizes finalized agent-evaluation reports. It
+          performs no grading, changes no methodology and recalculates no score
+          — every grade, score, failure count and supporting metric is
+          transcribed from the source evaluation, which remains the source of
+          truth.
+        </p>
+        <Link
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sky-700 underline-offset-2 hover:underline"
+          href="/admin/tests/reports/scorecards"
+        >
+          View all Thursday report cards <ArrowRight className="size-3" />
+        </Link>
       </div>
     </section>
   );
