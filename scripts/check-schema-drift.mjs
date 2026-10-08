@@ -66,17 +66,12 @@ const ALLOWLIST = new Set([
  * These are NOT B0-464's to fix. Applying them is a real schema change on someone else's ticket,
  * and B0-283's sibling migration (`purge_out_of_scope_sds_documents_b0283`) deletes ~1,799
  * documents, so applying blind would be destructive. Each entry names its owning ticket.
+ *
+ * Emptied 2026-10-07: the B0-256/258/283 objects were retired by
+ * 20261008015201_retire_unapplied_label_and_corpus_scope_objects.sql (they now report as `retired`),
+ * and the B0-238 columns (rag.document.source_lab / project_number) are live.
  */
-const BASELINE_UNAPPLIED = new Map([
-  ['rag.document.source_lab', 'B0-238'],
-  ['rag.document.project_number', 'B0-238'],
-  ['rag.label', 'B0-256'],
-  ['rag.label_chunk', 'B0-256'],
-  ['rag.update_label_updated_at', 'B0-256'],
-  ['rag.betco_active_products_for_labels', 'B0-258'],
-  ['rag.out_of_scope_documents', 'B0-283'],
-  ['rag.document.corpus_scope', 'B0-283'],
-]);
+const BASELINE_UNAPPLIED = new Map([]);
 
 const argv = new Set(process.argv.slice(2));
 const asJson = argv.has('--json');
