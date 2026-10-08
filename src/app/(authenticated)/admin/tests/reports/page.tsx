@@ -1,9 +1,10 @@
-import { ArrowDown, ArrowUp, Minus, XIcon } from 'lucide-react';
+import { XIcon } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { DeleteTestReportDialog } from '~/components/admin/tests/DeleteTestReportDialog';
+import { ReportChangeCell } from '~/components/admin/tests/ReportChangeCell';
 import {
   ReportDatasetFilter,
   type ReportDatasetOption,
@@ -23,6 +24,8 @@ import {
   type ReportRunByOption,
 } from '~/components/admin/tests/ReportRunByFilter';
 import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrendChart';
+import { ThursdayScorecardExports } from '~/components/admin/tests/ThursdayScorecardExports';
+import { ThursdayScorecardSection } from '~/components/admin/tests/ThursdayScorecardSection';
 import { GoldenReportScoreTrendChart } from '~/components/admin/dashboard/GoldenReportScoreTrendChart';
 import { Button } from '~/components/ui/button';
 import { Separator } from '~/components/ui/separator';
@@ -38,15 +41,16 @@ import { requirePagePermission } from '~/lib/permissions/require-page-permission
 import { buildReportFailTrend } from '~/lib/tests/report-fail-trend';
 import { getGoldenReportScoreTrendForWindow } from '~/lib/tests/golden-report-score-trend';
 import { buildReportMetricTrend } from '~/lib/tests/report-metric-trend';
-import type { ReportScoreChange } from '~/lib/tests/report-trend';
 import {
-  buildReportScoreTrend,
-  formatChangePercent,
-  formatChangePoints,
-} from '~/lib/tests/report-trend';
+  calculateConceptPercentage,
+  describeReportScore,
+  truncateLabel,
+} from '~/lib/tests/report-row-format';
+import { buildReportScoreTrend } from '~/lib/tests/report-trend';
 import type { ReportRunRow } from '~/lib/tests/repository';
 import { listAllReportRuns } from '~/lib/tests/repository';
-import { parseReportState } from '~/lib/tests/report/schemas';
+import { loadThursdayScorecard } from '~/lib/tests/thursday-scorecard';
+import { SCORECARD_SWEEP_PARAM } from '~/lib/tests/thursday-scorecard-schemas';
 import { readSearchParam } from '~/lib/utils/params';
 import { formatDate, formatDurationMs } from '~/lib/utils/time';
 
@@ -135,116 +139,6 @@ function buildModelOptions(rows: readonly ReportRunRow[]): ReportModelOption[] {
   return options;
 }
 
-/** Caps a label at `maxLength` characters, appending a single ellipsis when it overflows. */
-function truncateLabel(value: string, maxLength = 15): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
-}
-
-/**
- * Score cell text. A report that hasn't finished scoring has no score to show, so it shows its
- * state instead of an em-dash that would read as "scored zero" or "never reported". `avg` is
- * rendered exactly as persisted (never re-rounded) so it can't disagree with the stored grade,
- * which was derived from the unrounded value — same as the per-dataset "Recent runs" table.
- */
-function describeScore(row: ReportRunRow): string {
-  if (row.score !== null) {
-    return `${row.score} (${row.grade})`;
-  }
-  switch (row.reportStatus) {
-    case 'scoring':
-      return 'Scoring…';
-    case 'synthesizing':
-      return 'Synthesizing…';
-    case 'failed':
-      return 'Failed';
-    case 'idle':
-      return 'Not started';
-    default:
-      return '—';
-  }
-}
-
-/**
- * Calculate percentage of mandatory concepts satisfied across all evaluated cases.
- * Looks at all mandatory concepts in the report and calculates what percentage are satisfied.
- */
-function calculateConceptPercentage(reportState: ReturnType<typeof parseReportState>): number | null {
-  if (!reportState?.caseScores || Object.keys(reportState.caseScores).length === 0) {
-    return null;
-  }
-
-  let totalRequired = 0;
-  let totalSatisfied = 0;
-
-  for (const caseScore of Object.values(reportState.caseScores)) {
-    if (caseScore.concepts?.mandatory) {
-      const required = caseScore.concepts.mandatory.required || [];
-      const satisfied = caseScore.concepts.mandatory.satisfied || [];
-      totalRequired += required.length;
-      totalSatisfied += satisfied.length;
-    }
-  }
-
-  if (totalRequired === 0) {
-    return null;
-  }
-
-  return Math.round((totalSatisfied / totalRequired) * 100);
-}
-
-/**
- * Run-over-run change (B0-689). An absent change is an em-dash, never `0%`: a dataset's first
- * scored run has nothing to compare against, which is not the same as "no change".
- */
-function ReportChangeCell({
-  change,
-  row,
-}: {
-  change: ReportScoreChange | undefined;
-  row: ReportRunRow;
-}) {
-  if (!change) {
-    return (
-      <span
-        className="text-slate-400"
-        title={
-          row.score === null
-            ? 'This run has no score yet, so there is nothing to compare'
-            : 'First scored run for this dataset — no earlier score to compare against'
-        }
-      >
-        —
-      </span>
-    );
-  }
-
-  const rising = change.deltaPoints > 0;
-  const falling = change.deltaPoints < 0;
-  const Icon = rising ? ArrowUp : falling ? ArrowDown : Minus;
-  const tone = rising
-    ? 'text-emerald-600'
-    : falling
-      ? 'text-rose-600'
-      : 'text-slate-500';
-
-  return (
-    <span
-      className="flex flex-col items-start"
-      title={`Previous scored run: ${change.previousScore}/100`}
-    >
-      <span className="text-xs tabular-nums text-slate-500">
-        {formatChangePoints(change)}
-      </span>
-      <span
-        className={`inline-flex items-center gap-1 font-medium tabular-nums ${tone}`}
-      >
-        <Icon aria-hidden className="size-3.5" />
-        {formatChangePercent(change)}
-      </span>
-    </span>
-  );
-}
-
 export default async function AdminTestReportsPage({
   searchParams,
 }: PageProps) {
@@ -320,12 +214,21 @@ export default async function AdminTestReportsPage({
   // Mission Control (`~/lib/tests/golden-report-score-trend.ts`).
   const goldenTrendTo = new Date();
   const goldenTrendFrom = new Date(goldenTrendTo.getTime() - 29 * 24 * 60 * 60 * 1000);
-  const goldenTrend = await getGoldenReportScoreTrendForWindow({
-    window: {
-      from: goldenTrendFrom.toISOString(),
-      to: goldenTrendTo.toISOString(),
-    },
-  });
+  // B0-1164 — the Thursday scorecard; an unknown/malformed `scorecardSweep` degrades to the
+  // newest Thursday-night sweep inside the loader.
+  const scorecardSweepParam = readSearchParam(params[SCORECARD_SWEEP_PARAM]).trim();
+  const [goldenTrend, scorecard] = await Promise.all([
+    getGoldenReportScoreTrendForWindow({
+      window: {
+        from: goldenTrendFrom.toISOString(),
+        to: goldenTrendTo.toISOString(),
+      },
+    }),
+    loadThursdayScorecard({
+      sweepId: scorecardSweepParam || null,
+      includeSupporting: true,
+    }),
+  ]);
   const goldenScoredDayCount = goldenTrend.points.filter(
     (point) => point.score !== null,
   ).length;
@@ -466,12 +369,12 @@ export default async function AdminTestReportsPage({
                             : 'This report has not finished generating'
                         }
                       >
-                        {describeScore(row)}
+                        {describeReportScore(row)}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         <ReportChangeCell
                           change={trend.changeByRunId.get(row.runId)}
-                          row={row}
+                          score={row.score}
                         />
                       </TableCell>
                       <TableCell
@@ -549,6 +452,19 @@ export default async function AdminTestReportsPage({
             </table>
           </div>
         </section>
+
+        <ThursdayScorecardSection
+          data={scorecard}
+          exportsSlot={
+            <ThursdayScorecardExports
+              captureTargetId="thursday-scorecard-capture"
+              hasRows={(scorecard.snapshot?.agents.length ?? 0) > 0}
+              sweepId={scorecard.snapshot?.sweep.id ?? null}
+              sweepTriggeredAt={scorecard.snapshot?.sweep.sweepTriggeredAt ?? null}
+            />
+          }
+          selectedSweepId={scorecard.snapshot?.sweep.id ?? null}
+        />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">
