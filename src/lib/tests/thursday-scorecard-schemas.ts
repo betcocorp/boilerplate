@@ -67,6 +67,40 @@ export type ThursdayScorecardSupporting = z.infer<typeof thursdayScorecardSuppor
 export const thursdayScorecardGradeSchema = z.enum(['A', 'B', 'C', 'D', 'F', '-']);
 export type ThursdayScorecardGrade = z.infer<typeof thursdayScorecardGradeSchema>;
 
+/**
+ * B0-1170 — the SAME `testId`'s row in the previous Thursday-night sweep, as far as it was
+ * recorded, so every trend indicator (Fails, Speed, grade transition) and every templated
+ * highlight quotes a persisted value. `null` when the agent had no row in the previous sweep.
+ * `speedScore` / `passRate` are `null` unless the previous sweep's supporting metrics were read.
+ */
+export const thursdayScorecardPreviousSchema = z.object({
+  runId: z.string().nullable(),
+  score: z.number().nullable(),
+  grade: z.enum(['A', 'B', 'C', 'D', 'F', '-']).nullable(),
+  failCount: z.number().int().nullable(),
+  speedScore: z.number().nullable(),
+  passRate: z.number().nullable(),
+});
+export type ThursdayScorecardPrevious = z.infer<typeof thursdayScorecardPreviousSchema>;
+
+/**
+ * B0-1170 — review flags derived from the row and its `previous`, rendered as icons/titles in the
+ * table and as sentences in "Data notes & review flags". Deterministic; nothing is authored.
+ * - `content_down_speed_up`: score fell by at least one point vs the previous Thursday while the
+ *   speed score rose — the mock's "faster, not better" warning (threshold:
+ *   `CONTENT_DOWN_MIN_DELTA_POINTS` in `thursday-scorecard.ts`).
+ * - `now_failing`: graded D or F this sweep.
+ * - `not_scored`: no persisted score this sweep (child failed / report failed / pending).
+ * - `metrics_unreported`: scored, but the report carries no speed/judged block.
+ */
+export const thursdayScorecardFlagSchema = z.enum([
+  'content_down_speed_up',
+  'now_failing',
+  'not_scored',
+  'metrics_unreported',
+]);
+export type ThursdayScorecardFlag = z.infer<typeof thursdayScorecardFlagSchema>;
+
 /** One row of the scorecard: one golden agent (one sweep child) in one Thursday-night sweep. */
 export const thursdayScorecardAgentRowSchema = z.object({
   /** `scheduled_test_items.test_id` — the dataset that stood in for this agent that night. */
@@ -100,6 +134,10 @@ export const thursdayScorecardAgentRowSchema = z.object({
   conceptPercent: z.number().int().nullable(),
   /** B0-1167 — `null` when the loader was asked to skip it or the report is not complete. */
   supporting: thursdayScorecardSupportingSchema.nullable(),
+  /** B0-1170 — the previous Thursday-night sweep's values for this `testId`, or `null`. */
+  previous: thursdayScorecardPreviousSchema.nullable(),
+  /** B0-1170 — derived review flags; empty when nothing is worth flagging. */
+  flags: z.array(thursdayScorecardFlagSchema),
 });
 export type ThursdayScorecardAgentRow = z.infer<typeof thursdayScorecardAgentRowSchema>;
 
@@ -123,6 +161,14 @@ export const thursdayScorecardSnapshotSchema = z.object({
   previousSweep: thursdayScorecardSweepSchema.pick({ id: true, sweepTriggeredAt: true }).nullable(),
   /** One row per child of the sweep, in the ledger's child order (dispatch order). */
   agents: z.array(thursdayScorecardAgentRowSchema),
+  /**
+   * B0-1170 — "Executive highlights": deterministic sentences TEMPLATED from `agents` (biggest
+   * drop / gain, agents now failing, divergence, best performer, agents not scored). Bex authors
+   * no prose; every number quoted is a persisted value from a row. Same snapshot → same text.
+   */
+  highlights: z.array(z.string()),
+  /** B0-1170 — "Data notes & review flags": unscored agents and why, unreported metrics, baseline. */
+  notes: z.array(z.string()),
 });
 export type ThursdayScorecardSnapshot = z.infer<typeof thursdayScorecardSnapshotSchema>;
 
@@ -148,3 +194,41 @@ export type ThursdayScorecardPageData = z.infer<typeof thursdayScorecardPageData
 
 /** The `?scorecardSweep=` search param on `/admin/tests/reports` and `?sweepId=` on the export route. */
 export const SCORECARD_SWEEP_PARAM = 'scorecardSweep';
+
+/* -------------------------------------------------------------------------- *
+ * B0-1170 — history: every Thursday report card as one table row
+ * -------------------------------------------------------------------------- */
+
+/** One agent's cell in the history grid — the content result only, no supporting metrics. */
+export const thursdayScorecardHistoryCellSchema = z.object({
+  testId: z.string(),
+  /** Column key: `intendedAgent` when it is a registry id, otherwise the ledger `testName`. */
+  agentKey: z.string(),
+  agentLabel: z.string(),
+  runId: z.string().nullable(),
+  ledgerStatus: z.enum(SCHEDULED_ITEM_STATUSES),
+  reportStatus: z.enum(REPORT_STATUSES).nullable(),
+  score: z.number().nullable(),
+  grade: thursdayScorecardGradeSchema.nullable(),
+  failCount: z.number().int().nullable(),
+  change: thursdayScorecardChangeSchema.nullable(),
+});
+export type ThursdayScorecardHistoryCell = z.infer<typeof thursdayScorecardHistoryCellSchema>;
+
+/** One Thursday-night sweep = one report card = one row of `/admin/tests/reports/scorecards`. */
+export const thursdayScorecardHistoryRowSchema = z.object({
+  sweep: thursdayScorecardSweepSchema,
+  previousSweep: thursdayScorecardSweepSchema.pick({ id: true, sweepTriggeredAt: true }).nullable(),
+  /** Children with a persisted score. */
+  scoredCount: z.number().int(),
+  cells: z.array(thursdayScorecardHistoryCellSchema),
+});
+export type ThursdayScorecardHistoryRow = z.infer<typeof thursdayScorecardHistoryRowSchema>;
+
+export const thursdayScorecardHistorySchema = z.object({
+  /** Newest first. */
+  rows: z.array(thursdayScorecardHistoryRowSchema),
+  /** Distinct `agentKey`s across every row, in first-seen order from the newest sweep down. */
+  agentColumns: z.array(z.object({ key: z.string(), label: z.string() })),
+});
+export type ThursdayScorecardHistory = z.infer<typeof thursdayScorecardHistorySchema>;

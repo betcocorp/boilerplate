@@ -20,6 +20,8 @@ import {
 
 const MINUS = '−';
 const DASH = '—';
+const MARKDOWN_NOTE =
+  'Scores are out of 100. "—" means not recorded. Speed and judged metrics are reported beside the grade and never feed it.';
 
 const SWEEP_ID = 'sweep-2026-09-24';
 const PREVIOUS_SWEEP_ID = 'sweep-2026-09-17';
@@ -52,9 +54,20 @@ function row(overrides: Partial<ThursdayScorecardAgentRow>): ThursdayScorecardAg
       passRate: 87.5,
       passMark: 75,
     },
+    previous: null,
+    flags: [],
     ...overrides,
   };
 }
+
+const HIGHLIGHTS = [
+  'Cross-reference is failing at C/74.9 with 9 failed questions.',
+  'Product Specialist improved 86.4 → 92.7 (B → A), the largest gain this week.',
+];
+const NOTES = [
+  'Change and trend indicators compare against the previous Thursday-night sweep, Thu Sep 17, 2026 · 8:00 PM ET.',
+  'Not scored in this sweep, shown as their state rather than zero: Dilution Specialist (failed), Recommendations (failed).',
+];
 
 /** One of each shape the snapshot can hold, in a deliberate (non-alphabetical) order. */
 const fixture: ThursdayScorecardSnapshot = {
@@ -77,6 +90,15 @@ const fixture: ThursdayScorecardSnapshot = {
         deltaPoints: 6.3,
         changePercent: 7.2,
       },
+      // Grade moved B → A, fails fell 5 → 3, speed rose 76 → 81.
+      previous: {
+        runId: 'run-a-prev',
+        score: 86.4,
+        grade: 'B',
+        failCount: 5,
+        speedScore: 76,
+        passRate: 80,
+      },
     }),
     row({
       testId: 'test-b',
@@ -93,6 +115,15 @@ const fixture: ThursdayScorecardSnapshot = {
         previousScore: 89.3,
         deltaPoints: -1.2,
         changePercent: -1.3,
+      },
+      // Grade unchanged, fails rose 3 → 5, speed unchanged at 81.
+      previous: {
+        runId: 'run-b-prev',
+        score: 89.3,
+        grade: 'B',
+        failCount: 3,
+        speedScore: 81,
+        passRate: null,
       },
     }),
     row({
@@ -112,6 +143,7 @@ const fixture: ThursdayScorecardSnapshot = {
       averageElapsedMs: null,
       conceptPercent: null,
       supporting: null,
+      flags: ['not_scored'],
     }),
     row({
       testId: 'test-d',
@@ -125,6 +157,16 @@ const fixture: ThursdayScorecardSnapshot = {
       failCount: 2,
       conceptPercent: null,
       supporting: null,
+      // Present last week but with no fail count recorded → no trend suffix on Fails.
+      previous: {
+        runId: 'run-d-prev',
+        score: 81,
+        grade: 'B',
+        failCount: null,
+        speedScore: null,
+        passRate: null,
+      },
+      flags: ['not_scored'],
     }),
     row({
       testId: 'test-e',
@@ -136,8 +178,20 @@ const fixture: ThursdayScorecardSnapshot = {
       grade: 'C',
       failCount: 9,
       supporting: null,
+      // Same fails as last week; no speed on either side.
+      previous: {
+        runId: 'run-e-prev',
+        score: 70,
+        grade: 'C',
+        failCount: 9,
+        speedScore: null,
+        passRate: null,
+      },
+      flags: ['metrics_unreported'],
     }),
   ],
+  highlights: HIGHLIGHTS,
+  notes: NOTES,
 };
 
 function markdownTableRows(markdown: string): string[][] {
@@ -203,26 +257,62 @@ describe('renderThursdayScorecardMarkdown', () => {
     const change = (i: number) => body[i][3];
     const fails = (i: number) => body[i][4];
 
-    expect(score(0)).toBe('92.7 (A)');
-    expect(score(0)).toBe(describeThursdayScorecardScore(fixture.agents[0]));
+    // B0-1170: the grade transition rides on the Score cell when the grade moved.
+    expect(score(0)).toBe('92.7 (A) (B → A)');
+    expect(score(0).startsWith(describeThursdayScorecardScore(fixture.agents[0]))).toBe(true);
     expect(change(0)).toBe('+6.3 pts (+7.2%)');
     expect(change(0)).toBe(
       `${formatChangePoints(fixture.agents[0].change!)} (${formatChangePercent(fixture.agents[0].change!)})`,
     );
-    expect(fails(0)).toBe('3');
+    expect(fails(0)).toBe('3 (↓ from 5)');
 
+    expect(score(1)).toBe('88.1 (B)'); // grade unchanged → no transition
     expect(change(1)).toBe(`${MINUS}1.2 pts (${MINUS}1.3%)`);
     expect(change(1)).not.toContain('-1.2');
+    expect(fails(1)).toBe('5 (↑ from 3)');
 
     expect(score(2)).toBe('Failed');
     expect(change(2)).toBe(DASH);
     expect(fails(2)).toBe(DASH);
 
-    expect(score(3)).toBe('Failed');
-    expect(fails(3)).toBe('2');
+    expect(score(3)).toBe('Failed'); // unscored → no transition even though previous had a grade
+    expect(fails(3)).toBe('2'); // previous fail count null → no suffix
 
     expect(score(4)).toBe('74.9 (C)');
     expect(change(4)).toBe(DASH);
+    expect(fails(4)).toBe('9 (→ 9)');
+  });
+
+  it('B0-1170 — Speed carries its trend only when both speed scores exist', () => {
+    expect(body[0][9]).toBe('81 · Good (↑ from 76)');
+    expect(body[1][9]).toBe('81 · Good (→ 81)');
+    expect(body[4][9]).toBe(DASH);
+    const noPrevSpeed = renderThursdayScorecardMarkdown({
+      ...fixture,
+      agents: [row({ previous: { ...fixture.agents[0].previous!, speedScore: null } })],
+    });
+    expect(markdownTableRows(noPrevSpeed)[2][9]).toBe('81 · Good');
+  });
+
+  it('B0-1170 — highlights and notes follow the table as bullet sections; the note line stays last', () => {
+    const lines = markdown.split('\n');
+    const tableEnd = lines.findIndex((line, i) => i > 4 && !line.startsWith('|'));
+    const highlightsAt = lines.indexOf('## Executive highlights');
+    const notesAt = lines.indexOf('## Data notes & review flags');
+    expect(highlightsAt).toBeGreaterThan(tableEnd);
+    expect(notesAt).toBeGreaterThan(highlightsAt);
+    expect(lines.slice(highlightsAt + 2, highlightsAt + 2 + HIGHLIGHTS.length)).toEqual(
+      HIGHLIGHTS.map((h) => `- ${h}`),
+    );
+    expect(lines.slice(notesAt + 2, notesAt + 2 + NOTES.length)).toEqual(NOTES.map((n) => `- ${n}`));
+    expect(lines.indexOf(MARKDOWN_NOTE)).toBeGreaterThan(notesAt);
+    expect(lines.indexOf(MARKDOWN_NOTE)).toBe(lines.length - 2); // followed by the trailing newline only
+  });
+
+  it('B0-1170 — an empty highlights array drops its section; notes stay', () => {
+    const md = renderThursdayScorecardMarkdown({ ...fixture, highlights: [] });
+    expect(md).not.toContain('## Executive highlights');
+    expect(md).toContain('## Data notes & review flags');
   });
 
   it('transcribes the remaining cells, with — for every unrecorded value', () => {
@@ -231,7 +321,7 @@ describe('renderThursdayScorecardMarkdown', () => {
       '1.23s / 8.77s',
       'gpt-4.1',
       '8.0.0',
-      '81 · Good',
+      '81 · Good (↑ from 76)',
       '1.23s',
       '0.84',
       '91.5',
@@ -297,10 +387,33 @@ describe('buildThursdayScorecardJson', () => {
 
   it('keeps null for unrecorded values — never a placeholder', () => {
     const text = JSON.stringify(document);
-    expect(text).not.toContain(DASH);
+    expect(text).not.toContain(`"${DASH}"`);
     expect(text).not.toContain('"n/a"');
     expect(document.agents[2].score).toBeNull();
     expect(document.agents[2].supporting).toBeNull();
+    expect(document.agents[2].previous).toBeNull();
+  });
+
+  it('B0-1170 — previous, flags, highlights and notes round-trip through the document schema', () => {
+    const parsed = thursdayScorecardJsonDocumentSchema.parse(JSON.parse(JSON.stringify(document)));
+    expect(parsed.agents.map((a) => a.previous)).toEqual(fixture.agents.map((a) => a.previous));
+    expect(parsed.agents.map((a) => a.flags)).toEqual([
+      [],
+      [],
+      ['not_scored'],
+      ['not_scored'],
+      ['metrics_unreported'],
+    ]);
+    expect(parsed.agents[0].previous).toEqual({
+      runId: 'run-a-prev',
+      score: 86.4,
+      grade: 'B',
+      failCount: 5,
+      speedScore: 76,
+      passRate: 80,
+    });
+    expect(parsed.highlights).toEqual(HIGHLIGHTS);
+    expect(parsed.notes).toEqual(NOTES);
   });
 });
 

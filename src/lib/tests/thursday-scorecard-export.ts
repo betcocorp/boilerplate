@@ -59,10 +59,39 @@ function changeCell(change: ThursdayScorecardAgentRow['change']): string {
   return `${formatChangePoints(change)} (${formatChangePercent(change)})`;
 }
 
-function speedCell(supporting: ThursdayScorecardAgentRow['supporting']): string {
+/** B0-1170 — `(↑ from 3)` / `(↓ from 7)` / `(→ 1)`: the direction of this value vs last Thursday's. */
+function trendSuffix(current: number, previous: number): string {
+  if (current === previous) return ` (→ ${previous})`;
+  return ` (${current > previous ? '↑' : '↓'} from ${previous})`;
+}
+
+/** `92.7 (A)`, plus ` (B → A)` when the grade moved since the previous Thursday. */
+function scoreCell(row: ThursdayScorecardAgentRow): string {
+  const text = describeThursdayScorecardScore(row);
+  const before = row.previous?.grade ?? null;
+  if (row.score === null || row.grade === null || before === null || before === row.grade) {
+    return text;
+  }
+  return `${text} (${before} → ${row.grade})`;
+}
+
+function failsCell(row: ThursdayScorecardAgentRow): string {
+  if (row.failCount === null) return NOT_RECORDED;
+  const before = row.previous?.failCount ?? null;
+  return `${row.failCount}${before === null ? '' : trendSuffix(row.failCount, before)}`;
+}
+
+function speedCell(row: ThursdayScorecardAgentRow): string {
+  const supporting = row.supporting;
   if (!supporting) return NOT_RECORDED;
   const parts = [supporting.speedScore, supporting.speedRating].filter((v) => v !== null);
-  return parts.length ? parts.join(' · ') : NOT_RECORDED;
+  if (parts.length === 0) return NOT_RECORDED;
+  const before = row.previous?.speedScore ?? null;
+  const trend =
+    supporting.speedScore !== null && before !== null
+      ? trendSuffix(supporting.speedScore, before)
+      : '';
+  return `${parts.join(' · ')}${trend}`;
 }
 
 function agentRowCells(row: ThursdayScorecardAgentRow, index: number): string[] {
@@ -70,14 +99,14 @@ function agentRowCells(row: ThursdayScorecardAgentRow, index: number): string[] 
   return [
     String(index + 1),
     escapeCell(row.agentLabel),
-    describeThursdayScorecardScore(row),
+    scoreCell(row),
     changeCell(row.change),
-    orDash(row.failCount),
+    failsCell(row),
     row.conceptPercent === null ? NOT_RECORDED : `${row.conceptPercent}%`,
     `${durationOrDash(row.averageTtftMs)} / ${durationOrDash(row.averageElapsedMs)}`,
     escapeCell(orDash(row.modelTag)),
     escapeCell(orDash(row.appVersion)),
-    speedCell(s),
+    speedCell(row),
     s === null || s.avgTtftSeconds === null ? NOT_RECORDED : `${s.avgTtftSeconds}s`,
     s === null ? NOT_RECORDED : orDash(s.similarityAvg),
     s === null ? NOT_RECORDED : orDash(s.evalConfidenceAvg),
@@ -89,9 +118,18 @@ function tableRow(cells: readonly string[]): string {
   return `| ${cells.join(' | ')} |`;
 }
 
-/** The scorecard as one Markdown document: heading, preamble, one GFM table, a note line. */
+/** A `## heading` plus one bullet per sentence; nothing when the list is empty. */
+function bulletSection(heading: string, sentences: readonly string[]): string[] {
+  if (sentences.length === 0) return [];
+  return [`## ${heading}`, '', ...sentences.map((sentence) => `- ${sentence}`), ''];
+}
+
+/**
+ * The scorecard as one Markdown document: heading, preamble, one GFM table (trend indicators
+ * inline, B0-1170), the templated highlights and data notes as bullet lists, a note line.
+ */
 export function renderThursdayScorecardMarkdown(snapshot: ThursdayScorecardSnapshot): string {
-  const { sweep, previousSweep, agents } = snapshot;
+  const { sweep, previousSweep, agents, highlights, notes } = snapshot;
   const baseline = previousSweep
     ? `Change is against the previous Thursday-night sweep, ${formatEasternSweepLabel(previousSweep.sweepTriggeredAt)}.`
     : 'No earlier Thursday-night sweep; Change is not available.';
@@ -105,6 +143,8 @@ export function renderThursdayScorecardMarkdown(snapshot: ThursdayScorecardSnaps
     tableRow(MARKDOWN_COLUMNS.map(() => '---')),
     ...agents.map((row, index) => tableRow(agentRowCells(row, index))),
     '',
+    ...bulletSection('Executive highlights', highlights),
+    ...bulletSection('Data notes & review flags', notes),
     MARKDOWN_NOTE,
     '',
   ];
@@ -137,6 +177,8 @@ export function buildThursdayScorecardJson(
     sweep: snapshot.sweep,
     previousSweep: snapshot.previousSweep,
     agents: snapshot.agents,
+    highlights: snapshot.highlights,
+    notes: snapshot.notes,
   };
 }
 

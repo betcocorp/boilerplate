@@ -1,8 +1,11 @@
+import { TriangleAlert } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { ReportChangeCell } from '~/components/admin/tests/ReportChangeCell';
+import { ThursdayScorecardCards } from '~/components/admin/tests/ThursdayScorecardCards';
 import { ThursdayScorecardSweepPicker } from '~/components/admin/tests/ThursdayScorecardSweepPicker';
+import { TrendDelta } from '~/components/admin/tests/TrendDelta';
 import { Button } from '~/components/ui/button';
 import {
   TableBody,
@@ -28,7 +31,9 @@ import { formatDurationMs, formatEasternSweepLabel } from '~/lib/utils/time';
  * snapshot — nothing here re-queries. No week columns, no averages, no aggregate row.
  *
  * `#thursday-scorecard-capture` is the element the PDF export (B0-1168) captures; the sweep
- * picker and `exportsSlot` stay outside it on purpose.
+ * picker and `exportsSlot` stay outside it on purpose. B0-1170 folds the trend indicators
+ * (vs the previous Thursday-night sweep) into the same table and adds the highlights / notes
+ * cards under it, inside the capture root.
  */
 
 /** Column count, for the empty-state `colSpan`. */
@@ -41,6 +46,10 @@ const COLUMN_COUNT = 16;
  */
 const SUPPORTING_HEAD_CLASS = 'border-l border-slate-200 text-slate-500';
 const SUPPORTING_CELL_CLASS = 'whitespace-nowrap tabular-nums text-slate-600';
+
+/** B0-1170 — the mock's "faster, not better" warning, shown beside the Speed value. */
+const CONTENT_DOWN_SPEED_UP_TITLE =
+  'Content quality declined while speed improved — this agent is answering faster and less well';
 
 const LEDGER_STATUS_WORDS: Record<ThursdayScorecardAgentRow['ledgerStatus'], string> = {
   queued: 'queued',
@@ -63,12 +72,18 @@ export function ThursdayScorecardSection({
   data,
   selectedSweepId,
   exportsSlot,
+  hidePicker = false,
+  historyHref = '/admin/tests/reports/scorecards',
 }: {
   data: ThursdayScorecardPageData;
   /** The sweep actually rendered (the loader already degraded an unknown param to the newest). */
   selectedSweepId: string | null;
   /** B0-1168 — export buttons, rendered beside the picker and outside the capture root. */
   exportsSlot?: ReactNode;
+  /** B0-1170 — the standalone card page renders one fixed sweep, so it has no picker. */
+  hidePicker?: boolean;
+  /** B0-1170 — link under the cards to the history view; `null` when this IS a card page. */
+  historyHref?: string | null;
 }) {
   const { snapshot } = data;
   const sweepLabel = snapshot ? formatEasternSweepLabel(snapshot.sweep.sweepTriggeredAt) : null;
@@ -88,7 +103,7 @@ export function ThursdayScorecardSection({
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {snapshot && selectedSweepId ? (
+          {snapshot && selectedSweepId && !hidePicker ? (
             <ThursdayScorecardSweepPicker
               selectedSweepId={selectedSweepId}
               sweeps={data.sweeps}
@@ -205,6 +220,14 @@ export function ThursdayScorecardSection({
                         ) : (
                           <span title={row.testName}>{agentText}</span>
                         )}
+                        {row.flags.includes('now_failing') ? (
+                          <span
+                            aria-label="Graded D or F this sweep"
+                            className="ml-1 inline-block size-2 rounded-full bg-rose-500 align-middle"
+                            role="img"
+                            title="Graded D or F this sweep"
+                          />
+                        ) : null}
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-slate-600">
                         {sweepLabel}
@@ -213,7 +236,20 @@ export function ThursdayScorecardSection({
                         className="whitespace-nowrap tabular-nums text-slate-700"
                         title={describeScoreTitle(row)}
                       >
-                        {describeThursdayScorecardScore(row)}
+                        <span className="flex flex-col items-start">
+                          <span>{describeThursdayScorecardScore(row)}</span>
+                          {row.grade !== null &&
+                          row.previous?.grade !== null &&
+                          row.previous?.grade !== undefined &&
+                          row.previous.grade !== row.grade ? (
+                            <span
+                              className="text-xs text-slate-500"
+                              title={`Grade ${row.previous.grade} in the previous Thursday-night sweep, ${row.grade} now`}
+                            >
+                              {`${row.previous.grade} → ${row.grade}`}
+                            </span>
+                          ) : null}
+                        </span>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         <ReportChangeCell
@@ -241,7 +277,15 @@ export function ThursdayScorecardSection({
                             : `${row.failCount} failing prompt${row.failCount === 1 ? '' : 's'} in this run`
                         }
                       >
-                        {row.failCount ?? '—'}
+                        <span className="flex flex-col items-start">
+                          <span>{row.failCount ?? '—'}</span>
+                          <TrendDelta
+                            betterWhen="lower"
+                            current={row.failCount}
+                            label="Failed prompts"
+                            previous={row.previous?.failCount ?? null}
+                          />
+                        </span>
                       </TableCell>
                       <TableCell
                         className="whitespace-nowrap tabular-nums text-slate-700"
@@ -283,9 +327,29 @@ export function ThursdayScorecardSection({
                             : 'No completed report — no speed readout'
                         }
                       >
-                        {row.supporting?.speedScore !== null && row.supporting?.speedScore !== undefined
-                          ? `${row.supporting.speedScore} · ${row.supporting.speedRating ?? '—'}`
-                          : '—'}
+                        <span className="flex flex-col items-start">
+                          <span className="inline-flex items-center gap-1">
+                            {row.supporting?.speedScore !== null && row.supporting?.speedScore !== undefined
+                              ? `${row.supporting.speedScore} · ${row.supporting.speedRating ?? '—'}`
+                              : '—'}
+                            {row.flags.includes('content_down_speed_up') ? (
+                              <span
+                                aria-label={CONTENT_DOWN_SPEED_UP_TITLE}
+                                className="inline-flex"
+                                role="img"
+                                title={CONTENT_DOWN_SPEED_UP_TITLE}
+                              >
+                                <TriangleAlert aria-hidden className="size-3.5 text-amber-600" />
+                              </span>
+                            ) : null}
+                          </span>
+                          <TrendDelta
+                            betterWhen="higher"
+                            current={row.supporting?.speedScore ?? null}
+                            label="Speed score"
+                            previous={row.previous?.speedScore ?? null}
+                          />
+                        </span>
                       </TableCell>
                       <TableCell
                         className={SUPPORTING_CELL_CLASS}
@@ -315,9 +379,20 @@ export function ThursdayScorecardSection({
                             : 'No completed report — no pass rate'
                         }
                       >
-                        {row.supporting?.passRate !== null && row.supporting?.passRate !== undefined
-                          ? `${row.supporting.passRate}%`
-                          : '—'}
+                        <span className="flex flex-col items-start">
+                          <span>
+                            {row.supporting?.passRate !== null && row.supporting?.passRate !== undefined
+                              ? `${row.supporting.passRate}%`
+                              : '—'}
+                          </span>
+                          <TrendDelta
+                            betterWhen="higher"
+                            current={row.supporting?.passRate ?? null}
+                            format={(n) => `${n}%`}
+                            label="Pass rate"
+                            previous={row.previous?.passRate ?? null}
+                          />
+                        </span>
                       </TableCell>
                       <TableCell>
                         {row.runId && row.reportStatus === 'completed' ? (
@@ -346,6 +421,9 @@ export function ThursdayScorecardSection({
             </TableBody>
           </table>
         </div>
+        {snapshot ? (
+          <ThursdayScorecardCards historyHref={historyHref} snapshot={snapshot} />
+        ) : null}
       </div>
     </section>
   );
