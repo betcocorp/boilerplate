@@ -89,10 +89,9 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
-            // B0-762 — cross-set item browser; same surface family as Test runner.
-            label: 'All test items',
-            href: '/admin/tests/items',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+            label: 'Scheduled',
+            href: '/admin/scheduled',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
             // B0-687 — same surface family as the other test links, so it reuses
@@ -108,9 +107,10 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
-            label: 'Scheduled',
-            href: '/admin/scheduled',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+            // B0-762 — cross-set item browser; same surface family as Test runner.
+            label: 'All test items',
+            href: '/admin/tests/items',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
             // B0-528 — escalation records written by the escalation_specialist tool.
